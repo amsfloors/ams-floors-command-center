@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>AMS Floors Command Center</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.1/dist/tailwind.min.css">
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -27,6 +27,31 @@
 </head>
 <body class="bg-stone-100 min-h-screen">
 <div id="root"></div>
+<div id="gate" style="display:none;position:fixed;inset:0;background:#1c1917;z-index:9999;display:flex;align-items:center;justify-content:center;">
+  <div style="background:#292524;border:1px solid #44403c;padding:40px;width:100%;max-width:360px;text-align:center;">
+    <div style="font-family:'Instrument Serif',Georgia,serif;font-size:28px;color:#fafaf9;margin-bottom:6px;">AMS Floors</div>
+    <div style="font-size:11px;letter-spacing:0.15em;text-transform:uppercase;color:#78716c;margin-bottom:28px;">Command Center</div>
+    <input id="pw-input" type="password" placeholder="Enter password" style="width:100%;padding:10px 14px;font-size:14px;background:#1c1917;border:1px solid #57534e;color:#fafaf9;outline:none;box-sizing:border-box;margin-bottom:10px;" onkeydown="if(event.key==='Enter')checkPW()" />
+    <div id="pw-err" style="color:#f87171;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
+    <button onclick="checkPW()" style="width:100%;padding:10px;background:#9a3412;color:white;border:none;font-size:14px;font-weight:600;cursor:pointer;letter-spacing:0.05em;">Enter</button>
+  </div>
+</div>
+<script>
+  const PW = 'Sailor@22';
+  const SK = 'ams_auth';
+  function checkPW(){
+    const v = document.getElementById('pw-input').value;
+    if(v === PW){ sessionStorage.setItem(SK,'1'); document.getElementById('gate').style.display='none'; }
+    else{ document.getElementById('pw-err').textContent='Incorrect password'; document.getElementById('pw-input').value=''; document.getElementById('pw-input').focus(); }
+  }
+  // Check on load
+  if(sessionStorage.getItem(SK)!=='1'){
+    document.getElementById('gate').style.display='flex';
+    setTimeout(()=>document.getElementById('pw-input').focus(),100);
+  } else {
+    document.getElementById('gate').style.display='none';
+  }
+</script>
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
@@ -60,6 +85,36 @@ const LOST_STATUSES = ALL_STATUSES.filter(s => STATUS_CONFIG[s].pipeline === 'lo
 const MAT_ITEMS = ['LVT (Luxury Vinyl Tile)','LVP (Luxury Vinyl Plank)','Carpet (Broadloom)','Carpet Tile','Hardwood','Engineered Wood','Ceramic Tile','Porcelain Tile','VCT (Vinyl Composition Tile)','Sheet Vinyl','Rubber Flooring','Epoxy Coating','Concrete Polish','Underlayment','Adhesive / Glue','Transition Strips','Reducer / T-Molding','Stair Nosing','Cove Base / Molding','Moisture Barrier','Self-Leveling Compound','Floor Prep / Grinding','Substrate Patching','Demo / Removal'];
 const LAB_ITEMS = ['Installation Labor','Demo / Removal Labor','Floor Prep Labor','Subfloor Repair Labor','Stair Installation','Tile Setting Labor','Carpet Stretching / Seaming','Polish / Finish Labor','Supervision / PM'];
 const OTH_ITEMS = ['Equipment Rental','Delivery / Freight','Disposal / Haul-off','Permits & Fees','Insurance / Bond','Subcontractor','Travel / Mileage','Warranty / Callbacks'];
+
+// CSI sections used in flooring estimates
+const CSI_SECTIONS = [
+  {code:'093000', name:'Ceramic Tile'},
+  {code:'096300', name:'Stone Flooring'},
+  {code:'096400', name:'Wood Flooring'},
+  {code:'096500', name:'Resilient Flooring'},
+  {code:'096600', name:'Terrazzo Flooring'},
+  {code:'096700', name:'Fluid Applied Flooring'},
+  {code:'096800', name:'Carpeting'},
+  {code:'096900', name:'Access Flooring'},
+  {code:'099100', name:'Painting'},
+];
+
+// Unit options
+const UNITS = ['SF','SY','LF','EA','CTN','PC','ROLLS','GAL','BAG','PAIL','BOX','LB','TN','HR'];
+
+// Display modes for proposal output (David's tax control)
+const DISPLAY_MODES = [
+  {value:'full', label:'Full detail', desc:'QTY | UNIT | MATERIAL | LABOR | LINE TOTAL'},
+  {value:'total_only', label:'Total only', desc:'QTY | UNIT | LINE TOTAL (hides material/labor split)'},
+  {value:'lump_sum', label:'Lump sum', desc:'LINE TOTAL only (hides quantities)'},
+];
+
+// Item status options for procurement tracking
+const ITEM_STATUSES = ['Pending','Quoted','Ordered','Delivered','Installed','Issue'];
+
+// Common flooring product manufacturers
+const MANUFACTURERS = ['Daltile','Shaw Contract','Crossville','Mapei','Armstrong','Mohawk','Interface','Tarkett','Johnsonite','Schluter','Static Smart','Roppe','Forbo','Patcraft','Mannington','Bostik','MAPEI','Custom Building Products','LATICRETE','TEC','Ardex'];
+
 
 /* ── Helpers ──────────────────────────────────────────────── */
 const money = (n, compact=false) => {
@@ -603,6 +658,559 @@ const LineItemSection=({title,type,items,onAdd,onUpdate,onDelete})=>{
 };
 
 /* ── Project Drawer ───────────────────────────────────────── */
+/* ════════════════════════════════════════════════════════════════
+   ESTIMATING MODULE — Phase 1 (Bidsheet replacement)
+   ════════════════════════════════════════════════════════════════ */
+
+// Calculation engine — mirrors Peter's Excel formulas exactly
+const calcEstimateItem = (item, taxRate, markupRate) => {
+  const qty = Number(item.qty) || 0;
+  const costPerUnit = Number(item.costPerUnit) || 0;
+  const freight = Number(item.freight) || 0;
+  const laborRate = Number(item.laborRate) || 0;
+  const amount = qty * costPerUnit;
+  const salesTax = amount * (taxRate || 0.07);
+  const amsTotalCost = amount + salesTax + freight;
+  const markup = amount * (markupRate || 0.20);
+  const material = amsTotalCost + markup;
+  const labor = qty * laborRate;
+  const total = material + labor;
+  // Order quantity calculation (cartons or pieces)
+  let orderQty = qty;
+  let orderUnit = item.unit || 'SF';
+  if (item.sfPerCtn && item.sfPerCtn > 0 && qty > 0) {
+    orderQty = Math.ceil(qty / item.sfPerCtn);
+    orderUnit = item.syPerCtn ? 'SY' : 'CTN';
+  }
+  return { amount, salesTax, amsTotalCost, markup, material, labor, total, orderQty, orderUnit };
+};
+
+// Autocomplete input with datalist suggestions
+const ACInput = ({ value, onChange, suggestions, placeholder, className = '', onBlur, type = 'text', listId, style }) => {
+  const id = listId || `ac-${Math.random().toString(36).slice(2, 8)}`;
+  return (
+    <>
+      {suggestions && suggestions.length > 0 && (
+        <datalist id={id}>
+          {suggestions.slice(0, 100).map(s => <option key={s} value={s} />)}
+        </datalist>
+      )}
+      <input
+        list={suggestions && suggestions.length ? id : undefined}
+        type={type}
+        value={value ?? ''}
+        onChange={e => onChange(type === 'number' ? (e.target.value ? Number(e.target.value) : null) : e.target.value)}
+        onBlur={onBlur}
+        placeholder={placeholder}
+        className={`px-2 py-1 text-xs bg-transparent border-0 hover:bg-stone-100 focus:bg-white focus:outline focus:outline-1 focus:outline-stone-400 rounded-sm w-full ${className}`}
+        style={style}
+        step={type === 'number' ? '0.01' : undefined}
+      />
+    </>
+  );
+};
+
+// Single estimate line item row
+const EstimateItemRow = ({ item, onUpdate, onDelete, onAddVE, taxRate, markupRate, suggestions, isChild = false }) => {
+  const calc = calcEstimateItem(item, taxRate, markupRate);
+  const updateField = (field, val) => onUpdate({ ...item, [field]: val });
+
+  const dmConfig = {
+    'full': { color: 'bg-stone-100 text-stone-700', short: 'F' },
+    'total_only': { color: 'bg-sky-100 text-sky-800', short: 'T' },
+    'lump_sum': { color: 'bg-amber-100 text-amber-800', short: 'L' },
+  };
+  const dm = dmConfig[item.displayMode || 'full'];
+
+  return (
+    <tr className={`border-t border-stone-100 hover:bg-stone-50 ${isChild ? 'bg-emerald-50/40' : ''} ${item.isVeAlternative ? 'border-l-2 border-l-emerald-500' : ''}`}>
+      <td className="px-1 py-1 text-center">
+        {isChild && <span className="text-emerald-700 text-[10px] font-bold pl-2">VE↳</span>}
+      </td>
+      <td className="px-1 py-1"><ACInput value={item.itemCode} onChange={v => updateField('itemCode', v)} placeholder="T-1" suggestions={suggestions?.itemCodes} /></td>
+      <td className="px-1 py-1"><ACInput value={item.size} onChange={v => updateField('size', v)} placeholder="8&quot;x8&quot;" suggestions={suggestions?.sizes} /></td>
+      <td className="px-1 py-1"><ACInput value={item.manufacturer} onChange={v => updateField('manufacturer', v)} placeholder="Daltile" suggestions={suggestions?.manufacturers} /></td>
+      <td className="px-1 py-1"><ACInput value={item.description} onChange={v => updateField('description', v)} placeholder="Quarry Naturals" suggestions={suggestions?.descriptions} /></td>
+      <td className="px-1 py-1"><ACInput value={item.color} onChange={v => updateField('color', v)} placeholder="#0N46 Shadow Gray" suggestions={suggestions?.colors} /></td>
+      <td className="px-1 py-1"><ACInput value={item.qty} onChange={v => updateField('qty', v)} type="number" className="text-right font-mono" style={{ minWidth: '55px' }} /></td>
+      <td className="px-1 py-1">
+        <select value={item.unit || 'SF'} onChange={e => updateField('unit', e.target.value)} className="px-1 py-1 text-xs bg-transparent border-0 hover:bg-stone-100 focus:bg-white rounded-sm w-full">
+          {UNITS.map(u => <option key={u}>{u}</option>)}
+        </select>
+      </td>
+      <td className="px-1 py-1"><ACInput value={item.sfPerCtn} onChange={v => updateField('sfPerCtn', v)} type="number" placeholder="SF/CTN" className="text-right font-mono" style={{ minWidth: '50px' }} /></td>
+      <td className="px-1 py-1 text-right font-mono text-stone-600 text-xs" title="Auto-calculated cartons needed">
+        {calc.orderQty > 0 ? `${calc.orderQty} ${calc.orderUnit}` : '—'}
+      </td>
+      <td className="px-1 py-1"><ACInput value={item.costPerUnit} onChange={v => updateField('costPerUnit', v)} type="number" className="text-right font-mono" style={{ minWidth: '60px' }} /></td>
+      <td className="px-1 py-1 text-right font-mono text-xs text-stone-600">{money(calc.amount)}</td>
+      <td className="px-1 py-1 text-right font-mono text-xs text-stone-500" title={`Tax @ ${pct(taxRate)}`}>{money(calc.salesTax)}</td>
+      <td className="px-1 py-1"><ACInput value={item.freight} onChange={v => updateField('freight', v)} type="number" className="text-right font-mono" style={{ minWidth: '50px' }} /></td>
+      <td className="px-1 py-1 text-right font-mono text-xs text-stone-500" title="20% markup on raw amount">{money(calc.markup)}</td>
+      <td className="px-1 py-1 text-right font-mono text-xs font-semibold text-stone-800">{money(calc.material)}</td>
+      <td className="px-1 py-1"><ACInput value={item.laborRate} onChange={v => updateField('laborRate', v)} type="number" className="text-right font-mono" style={{ minWidth: '50px' }} /></td>
+      <td className="px-1 py-1 text-right font-mono text-xs text-stone-700">{money(calc.labor)}</td>
+      <td className="px-1 py-1 text-right font-mono text-sm font-bold text-stone-900 whitespace-nowrap">{money(calc.total)}</td>
+      <td className="px-1 py-1 text-center">
+        <select value={item.displayMode || 'full'} onChange={e => updateField('displayMode', e.target.value)}
+          className={`text-[10px] px-1 py-0.5 rounded-sm border-0 font-bold cursor-pointer ${dm.color}`}
+          title={DISPLAY_MODES.find(d => d.value === (item.displayMode || 'full')).desc}>
+          <option value="full">F</option>
+          <option value="total_only">T</option>
+          <option value="lump_sum">L</option>
+        </select>
+      </td>
+      <td className="px-1 py-1">
+        <div className="flex items-center gap-1">
+          {!isChild && !item.isVeAlternative && (
+            <button onClick={() => onAddVE(item.id)} className="text-emerald-700 hover:bg-emerald-100 rounded-sm p-0.5" title="Add VE alternative for this item">
+              <Ico n="zap" size={12} />
+            </button>
+          )}
+          <button onClick={() => onDelete(item.id)} className="text-stone-400 hover:text-rose-600 p-0.5">
+            <Ico n="trash2" size={12} />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+};
+
+// CSI Section group of items
+const EstimateSection = ({ section, items, onUpdate, onDelete, onAddItem, onAddVE, taxRate, markupRate, suggestions, onUpdateSection, onDeleteSection, allItems }) => {
+  const parentItems = items.filter(i => !i.parentItemId);
+  const childItems = (parentId) => items.filter(i => i.parentItemId === parentId);
+
+  const sectionTotals = items.reduce((acc, item) => {
+    const c = calcEstimateItem(item, taxRate, markupRate);
+    return {
+      amount: acc.amount + c.amount,
+      tax: acc.tax + c.salesTax,
+      freight: acc.freight + (Number(item.freight) || 0),
+      amsTotal: acc.amsTotal + c.amsTotalCost,
+      markup: acc.markup + c.markup,
+      material: acc.material + c.material,
+      labor: acc.labor + c.labor,
+      total: acc.total + c.total,
+    };
+  }, { amount: 0, tax: 0, freight: 0, amsTotal: 0, markup: 0, material: 0, labor: 0, total: 0 });
+
+  return (
+    <div className="border border-stone-200 bg-white mb-3">
+      <div className="px-3 py-2 bg-stone-100 border-b border-stone-200 flex items-center justify-between">
+        <div className="flex items-center gap-2 flex-1">
+          <span className="font-mono text-xs text-stone-500">{section.code}</span>
+          <input
+            value={section.name}
+            onChange={e => onUpdateSection({ ...section, name: e.target.value })}
+            className="font-serif text-sm text-stone-900 bg-transparent border-0 focus:outline focus:outline-1 focus:outline-stone-400 px-1 rounded-sm flex-1 max-w-md"
+          />
+          {section.isAlternate && <span className="text-[10px] px-2 py-0.5 bg-amber-100 text-amber-800 font-semibold rounded-sm">ALTERNATE</span>}
+        </div>
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-stone-600 font-mono font-semibold">Total: {money(sectionTotals.total)}</span>
+          <button onClick={() => onAddItem(section.code, section.name, section.isAlternate)} className="bg-stone-900 text-white px-2 py-1 rounded-sm hover:bg-stone-800 text-[11px] flex items-center gap-1">
+            <Ico n="plus" size={11} />Add line
+          </button>
+          <button onClick={() => onDeleteSection(section)} className="text-stone-400 hover:text-rose-600" title="Delete section and all its items">
+            <Ico n="trash2" size={13} />
+          </button>
+        </div>
+      </div>
+      {items.length === 0 ? (
+        <div className="px-4 py-6 text-center text-sm text-stone-500">
+          No items in this section. Click <strong>+ Add line</strong>.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table style={{ tableLayout: 'fixed', minWidth: '1800px' }} className="text-xs w-full">
+            <colgroup>
+              <col style={{ width: '24px' }} />
+              <col style={{ width: '60px' }} />
+              <col style={{ width: '70px' }} />
+              <col style={{ width: '90px' }} />
+              <col style={{ width: '160px' }} />
+              <col style={{ width: '110px' }} />
+              <col style={{ width: '60px' }} />
+              <col style={{ width: '50px' }} />
+              <col style={{ width: '55px' }} />
+              <col style={{ width: '70px' }} />
+              <col style={{ width: '65px' }} />
+              <col style={{ width: '75px' }} />
+              <col style={{ width: '70px' }} />
+              <col style={{ width: '60px' }} />
+              <col style={{ width: '65px' }} />
+              <col style={{ width: '80px' }} />
+              <col style={{ width: '55px' }} />
+              <col style={{ width: '70px' }} />
+              <col style={{ width: '85px' }} />
+              <col style={{ width: '40px' }} />
+              <col style={{ width: '50px' }} />
+            </colgroup>
+            <thead>
+              <tr className="bg-stone-50 text-[10px] uppercase tracking-wide text-stone-500 font-semibold">
+                <th></th>
+                <th className="px-1 py-1 text-left">Item</th>
+                <th className="px-1 py-1 text-left">Size</th>
+                <th className="px-1 py-1 text-left">MFR</th>
+                <th className="px-1 py-1 text-left">Description</th>
+                <th className="px-1 py-1 text-left">Color</th>
+                <th className="px-1 py-1 text-right">Qty</th>
+                <th className="px-1 py-1 text-left">Unit</th>
+                <th className="px-1 py-1 text-right" title="Square feet per carton">SF/Ctn</th>
+                <th className="px-1 py-1 text-right">Order</th>
+                <th className="px-1 py-1 text-right">Cost</th>
+                <th className="px-1 py-1 text-right">Amount</th>
+                <th className="px-1 py-1 text-right">Tax</th>
+                <th className="px-1 py-1 text-right">Freight</th>
+                <th className="px-1 py-1 text-right">Markup</th>
+                <th className="px-1 py-1 text-right">Material</th>
+                <th className="px-1 py-1 text-right">L.Rate</th>
+                <th className="px-1 py-1 text-right">Labor</th>
+                <th className="px-1 py-1 text-right">TOTAL</th>
+                <th className="px-1 py-1 text-center" title="Display mode in proposal: F=Full, T=Total only, L=Lump sum">DM</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {parentItems.map(item => (
+                <React.Fragment key={item.id}>
+                  <EstimateItemRow
+                    item={item}
+                    onUpdate={onUpdate}
+                    onDelete={onDelete}
+                    onAddVE={onAddVE}
+                    taxRate={taxRate}
+                    markupRate={markupRate}
+                    suggestions={suggestions}
+                  />
+                  {childItems(item.id).map(child => (
+                    <EstimateItemRow
+                      key={child.id}
+                      item={child}
+                      onUpdate={onUpdate}
+                      onDelete={onDelete}
+                      onAddVE={onAddVE}
+                      taxRate={taxRate}
+                      markupRate={markupRate}
+                      suggestions={suggestions}
+                      isChild={true}
+                    />
+                  ))}
+                </React.Fragment>
+              ))}
+              <tr className="bg-stone-900 text-white font-semibold">
+                <td colSpan={11}></td>
+                <td className="px-1 py-1.5 text-right font-mono">{money(sectionTotals.amount)}</td>
+                <td className="px-1 py-1.5 text-right font-mono">{money(sectionTotals.tax)}</td>
+                <td className="px-1 py-1.5 text-right font-mono">{money(sectionTotals.freight)}</td>
+                <td className="px-1 py-1.5 text-right font-mono">{money(sectionTotals.markup)}</td>
+                <td className="px-1 py-1.5 text-right font-mono">{money(sectionTotals.material)}</td>
+                <td></td>
+                <td className="px-1 py-1.5 text-right font-mono">{money(sectionTotals.labor)}</td>
+                <td className="px-1 py-1.5 text-right font-mono">{money(sectionTotals.total)}</td>
+                <td colSpan={2}></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// The main Estimate view inside ProjectDrawer
+const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAddItem, onUpdateItem, onDeleteItem, onAddVE, allEstimateItems, onCloseEstimate, suppliers, installers, allGCs, gcs }) => {
+  const [headerExpanded, setHeaderExpanded] = useState(false);
+  const [editingHeader, setEditingHeader] = useState(false);
+  const [draftHeader, setDraftHeader] = useState(estimate);
+
+  useEffect(() => { setDraftHeader(estimate); setEditingHeader(false); }, [estimate?.id]);
+
+  // Build suggestion pools from all historical estimate items
+  const suggestions = useMemo(() => {
+    const itemCodes = new Set();
+    const sizes = new Set();
+    const manufacturers = new Set(MANUFACTURERS);
+    const descriptions = new Set();
+    const colors = new Set();
+    allEstimateItems.forEach(i => {
+      if (i.itemCode) itemCodes.add(i.itemCode);
+      if (i.size) sizes.add(i.size);
+      if (i.manufacturer) manufacturers.add(i.manufacturer);
+      if (i.description) descriptions.add(i.description);
+      if (i.color) colors.add(i.color);
+    });
+    return {
+      itemCodes: [...itemCodes].sort(),
+      sizes: [...sizes].sort(),
+      manufacturers: [...manufacturers].sort(),
+      descriptions: [...descriptions].sort(),
+      colors: [...colors].sort(),
+    };
+  }, [allEstimateItems]);
+
+  // Group items by section
+  const sections = useMemo(() => {
+    const map = new Map();
+    estimateItems.forEach(item => {
+      const key = `${item.sectionCode || '_'}|${item.isAlternate ? 'A' : 'B'}|${item.alternateGroupName || ''}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          code: item.sectionCode || '',
+          name: item.sectionName || 'Uncategorized',
+          isAlternate: !!item.isAlternate,
+          alternateGroupName: item.alternateGroupName || '',
+          items: [],
+        });
+      }
+      map.get(key).items.push(item);
+    });
+    return Array.from(map.values());
+  }, [estimateItems]);
+
+  // Calculate base bid total (excluding alternates) and alternate totals
+  const totals = useMemo(() => {
+    const tax = estimate?.taxRate || 0.07;
+    const markup = estimate?.markupRate || 0.20;
+    let baseBidTotal = 0;
+    let alternatesTotal = 0;
+    estimateItems.forEach(item => {
+      if (item.isVeAlternative) return;
+      const c = calcEstimateItem(item, tax, markup);
+      if (item.isAlternate) alternatesTotal += c.total;
+      else baseBidTotal += c.total;
+    });
+    return { baseBidTotal, alternatesTotal };
+  }, [estimateItems, estimate?.taxRate, estimate?.markupRate]);
+
+  const addSection = (isAlternate = false) => {
+    const code = window.prompt(`Enter CSI section code (e.g., 093000):${isAlternate ? '\n\n(This will be an ALTERNATE section)' : ''}`);
+    if (!code) return;
+    const csi = CSI_SECTIONS.find(s => s.code === code.trim());
+    const name = csi ? csi.name : (window.prompt('Section name:') || 'Custom Section');
+    onAddItem(code.trim(), name, isAlternate);
+  };
+
+  const saveHeader = () => {
+    onSaveEstimate(draftHeader);
+    setEditingHeader(false);
+  };
+
+  // Auto-populate header from proposal on first creation
+  useEffect(() => {
+    if (estimate && !estimate.projectName && proposal) {
+      const updated = {
+        ...estimate,
+        projectName: proposal.project || '',
+        gcName: proposal.gc || '',
+        gcContactName: proposal.contact || '',
+        gcContactEmail: proposal.email || '',
+        gcContactPhone: proposal.phone || '',
+        proposalNumber: String(proposal.id),
+      };
+      onSaveEstimate(updated);
+    }
+  }, [estimate?.id]);
+
+  if (!estimate) {
+    return (
+      <div className="text-center py-12">
+        <Ico n="loader" size={32} className="mx-auto mb-3 text-stone-400 animate-spin" />
+        <p className="text-sm text-stone-600">Loading estimate…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Header summary */}
+      <div className="bg-white border border-stone-200">
+        <div className="px-4 py-2.5 bg-stone-50 border-b border-stone-200 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <h3 className="font-serif text-base text-stone-800">Estimate Header</h3>
+            <input
+              value={draftHeader.proposalNumber || ''}
+              onChange={e => setDraftHeader({ ...draftHeader, proposalNumber: e.target.value })}
+              onBlur={saveHeader}
+              placeholder="Proposal #"
+              className="px-2 py-0.5 text-xs font-mono bg-white border border-stone-300 rounded-sm w-24"
+              title="Proposal number (editable)"
+            />
+            <span className="text-xs text-stone-500">Tax: {pct(estimate.taxRate || 0.07)} · Markup: {pct(estimate.markupRate || 0.20)}</span>
+          </div>
+          <button onClick={() => setHeaderExpanded(!headerExpanded)} className="text-xs text-stone-600 hover:text-stone-900 flex items-center gap-1">
+            {headerExpanded ? 'Collapse' : 'Expand'} <Ico n={headerExpanded ? 'chevDown' : 'chevRight'} size={12} />
+          </button>
+        </div>
+        {headerExpanded && (
+          <div className="p-4 grid grid-cols-3 gap-x-4 gap-y-2 text-xs bg-stone-50/50">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Project name</div>
+              <input value={draftHeader.projectName || ''} onChange={e => setDraftHeader({ ...draftHeader, projectName: e.target.value })} onBlur={saveHeader} className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Project Address</div>
+              <input value={draftHeader.projectAddressLine1 || ''} onChange={e => setDraftHeader({ ...draftHeader, projectAddressLine1: e.target.value })} onBlur={saveHeader} placeholder="Street" className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
+            </div>
+            <div className="grid grid-cols-3 gap-1">
+              <input value={draftHeader.projectCity || ''} onChange={e => setDraftHeader({ ...draftHeader, projectCity: e.target.value })} onBlur={saveHeader} placeholder="City" className="px-2 py-1 border border-stone-300 rounded-sm" />
+              <input value={draftHeader.projectState || ''} onChange={e => setDraftHeader({ ...draftHeader, projectState: e.target.value })} onBlur={saveHeader} placeholder="ST" className="px-2 py-1 border border-stone-300 rounded-sm" />
+              <input value={draftHeader.projectZip || ''} onChange={e => setDraftHeader({ ...draftHeader, projectZip: e.target.value })} onBlur={saveHeader} placeholder="Zip" className="px-2 py-1 border border-stone-300 rounded-sm" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">GC / Client</div>
+              <input value={draftHeader.gcName || ''} onChange={e => setDraftHeader({ ...draftHeader, gcName: e.target.value })} onBlur={saveHeader} className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">GC Contact</div>
+              <input value={draftHeader.gcContactName || ''} onChange={e => setDraftHeader({ ...draftHeader, gcContactName: e.target.value })} onBlur={saveHeader} className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">GC Email</div>
+              <input value={draftHeader.gcContactEmail || ''} onChange={e => setDraftHeader({ ...draftHeader, gcContactEmail: e.target.value })} onBlur={saveHeader} className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">GC Phone</div>
+              <input value={draftHeader.gcContactPhone || ''} onChange={e => setDraftHeader({ ...draftHeader, gcContactPhone: e.target.value })} onBlur={saveHeader} className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Plans dated</div>
+              <input type="date" value={draftHeader.plansDated || ''} onChange={e => setDraftHeader({ ...draftHeader, plansDated: e.target.value })} onBlur={saveHeader} className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Addendum</div>
+              <input value={draftHeader.addendum || ''} onChange={e => setDraftHeader({ ...draftHeader, addendum: e.target.value })} onBlur={saveHeader} placeholder="Permit Set" className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Architect</div>
+              <input value={draftHeader.architectName || ''} onChange={e => setDraftHeader({ ...draftHeader, architectName: e.target.value })} onBlur={saveHeader} className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Tax Rate</div>
+              <input type="number" step="0.001" value={draftHeader.taxRate || 0.07} onChange={e => setDraftHeader({ ...draftHeader, taxRate: Number(e.target.value) })} onBlur={saveHeader} className="w-full px-2 py-1 border border-stone-300 rounded-sm font-mono" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Markup Rate</div>
+              <input type="number" step="0.01" value={draftHeader.markupRate || 0.20} onChange={e => setDraftHeader({ ...draftHeader, markupRate: Number(e.target.value) })} onBlur={saveHeader} className="w-full px-2 py-1 border border-stone-300 rounded-sm font-mono" />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Sections */}
+      {sections.length === 0 ? (
+        <div className="bg-white border border-stone-200 p-8 text-center">
+          <Ico n="sparkles" size={32} className="mx-auto mb-3 text-stone-300" />
+          <h3 className="font-serif text-xl text-stone-700 mb-1">No estimate yet</h3>
+          <p className="text-sm text-stone-500 mb-4">Start by adding a CSI section. Common sections include Ceramic Tile (093000), Resilient Flooring (096500), Carpeting (096800).</p>
+          <div className="flex items-center gap-2 justify-center">
+            <button onClick={() => addSection(false)} className="bg-stone-900 text-white px-4 py-2 rounded-sm hover:bg-stone-800 text-sm flex items-center gap-2">
+              <Ico n="plus" size={13} />Add CSI Section
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {sections.filter(s => !s.isAlternate).map(section => (
+            <EstimateSection
+              key={`${section.code}-base`}
+              section={section}
+              items={section.items}
+              onUpdate={onUpdateItem}
+              onDelete={onDeleteItem}
+              onAddItem={onAddItem}
+              onAddVE={onAddVE}
+              taxRate={estimate.taxRate || 0.07}
+              markupRate={estimate.markupRate || 0.20}
+              suggestions={suggestions}
+              onUpdateSection={(s) => {
+                section.items.forEach(it => onUpdateItem({ ...it, sectionName: s.name }));
+              }}
+              onDeleteSection={(s) => {
+                if (window.confirm(`Delete section "${s.name}" and all ${section.items.length} items?`)) {
+                  section.items.forEach(it => onDeleteItem(it.id));
+                }
+              }}
+              allItems={estimateItems}
+            />
+          ))}
+          {sections.filter(s => s.isAlternate).length > 0 && (
+            <div className="mt-6 mb-2 px-3 py-2 bg-amber-100 border border-amber-300 text-amber-900 text-sm font-serif">
+              ALTERNATES — Owner picks one or more
+            </div>
+          )}
+          {sections.filter(s => s.isAlternate).map(section => (
+            <EstimateSection
+              key={`${section.code}-alt`}
+              section={section}
+              items={section.items}
+              onUpdate={onUpdateItem}
+              onDelete={onDeleteItem}
+              onAddItem={onAddItem}
+              onAddVE={onAddVE}
+              taxRate={estimate.taxRate || 0.07}
+              markupRate={estimate.markupRate || 0.20}
+              suggestions={suggestions}
+              onUpdateSection={(s) => {
+                section.items.forEach(it => onUpdateItem({ ...it, sectionName: s.name }));
+              }}
+              onDeleteSection={(s) => {
+                if (window.confirm(`Delete alternate "${s.name}" and all ${section.items.length} items?`)) {
+                  section.items.forEach(it => onDeleteItem(it.id));
+                }
+              }}
+              allItems={estimateItems}
+            />
+          ))}
+          <div className="flex items-center gap-2 mt-3">
+            <button onClick={() => addSection(false)} className="bg-stone-900 text-white px-3 py-1.5 rounded-sm hover:bg-stone-800 text-xs flex items-center gap-1">
+              <Ico n="plus" size={11} />Add CSI Section
+            </button>
+            <button onClick={() => addSection(true)} className="bg-amber-700 text-white px-3 py-1.5 rounded-sm hover:bg-amber-800 text-xs flex items-center gap-1">
+              <Ico n="plus" size={11} />Add Alternate
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Grand Total */}
+      <div className="bg-stone-900 text-white p-5 grid grid-cols-3 gap-4 text-center sticky bottom-0 shadow-2xl">
+        <div>
+          <div className="text-[10px] uppercase tracking-widest text-stone-400">Base Bid</div>
+          <div className="font-serif text-3xl mt-1">{money(totals.baseBidTotal, true)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-widest text-stone-400">Alternates</div>
+          <div className="font-serif text-3xl mt-1 text-amber-300">{totals.alternatesTotal ? money(totals.alternatesTotal, true) : '—'}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-widest text-stone-400">Grand Total</div>
+          <div className="font-serif text-3xl mt-1 text-emerald-300">{money(totals.baseBidTotal + totals.alternatesTotal, true)}</div>
+        </div>
+      </div>
+
+      {/* Display mode legend */}
+      <div className="bg-stone-50 border border-stone-200 p-3 text-xs text-stone-600">
+        <div className="font-semibold mb-1">Display Mode (DM) per line — controls what shows on proposal:</div>
+        <div className="grid grid-cols-3 gap-2">
+          {DISPLAY_MODES.map(d => (
+            <div key={d.value} className="flex items-start gap-2">
+              <span className={`text-[10px] px-1 py-0.5 rounded-sm font-bold flex-shrink-0 ${d.value === 'full' ? 'bg-stone-100 text-stone-700' : d.value === 'total_only' ? 'bg-sky-100 text-sky-800' : 'bg-amber-100 text-amber-800'}`}>
+                {d.value === 'full' ? 'F' : d.value === 'total_only' ? 'T' : 'L'}
+              </span>
+              <div>
+                <div className="font-semibold">{d.label}</div>
+                <div className="text-stone-500">{d.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Fld=({label,value,edit,type='text',onChange,render})=>(
   <div><div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">{label}</div>
   {edit?<input type={type} value={value??''} onChange={e=>onChange(e.target.value)} className="w-full px-2 py-1 text-sm border border-stone-300 bg-white rounded-sm focus:outline-none focus:border-stone-600"/>:<div className="text-sm text-stone-900">{render?render(value):(value||'—')}</div>}
@@ -614,11 +1222,12 @@ const FldSel=({label,value,edit,options,onChange,render})=>(
   </div>
 );
 
-const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLineItem,onDeleteLineItem,onAddNote,onSelectGC})=>{
+const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLineItem,onDeleteLineItem,onAddNote,onSelectGC,estimate,estimateItems,onSaveEstimate,onAddEstimateItem,onUpdateEstimateItem,onDeleteEstimateItem,onAddVEAlternative,allEstimateItems,suppliers,installers,allGCs,gcs})=>{
   const [edit,setEdit]=useState(false);
   const [draft,setDraft]=useState(proposal);
   const [noteText,setNoteText]=useState('');
-  useEffect(()=>{setDraft(proposal);setEdit(false);},[proposal]);
+  const [activeTab,setActiveTab]=useState('details');
+  useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('details');},[proposal]);
   if(!proposal) return null;
   const save=()=>{onSave(draft);setEdit(false);};
   const materials=lineItems.filter(l=>l.type==='Material');
@@ -630,6 +1239,13 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
   const contract=draft.contractAmount||draft.bidAmount||0;
   const _em=estTotal>0?(contract-estTotal)/contract:null;
   const _am=actTotal>0?(contract-actTotal)/contract:null;
+  // Calculate estimate total to show on bid card
+  const estimateItemsForThis=estimateItems||[];
+  const estimateBidTotal=estimateItemsForThis.reduce((s,it)=>{
+    if(it.isVeAlternative||it.isAlternate) return s;
+    const c=calcEstimateItem(it,estimate?.taxRate||0.07,estimate?.markupRate||0.20);
+    return s+c.total;
+  },0);
   return (
     <>
       <div className="fixed inset-0 bg-stone-900/30 z-40" onClick={onClose}/>
@@ -645,9 +1261,23 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
             <button onClick={save} className="text-sm bg-emerald-700 text-white px-3 py-1.5 rounded-sm hover:bg-emerald-800 flex items-center gap-1.5"><Ico n="save" size={13}/>Save</button></>}
           </div>
         </div>
+        {/* Tab navigation */}
+        <div className="border-b border-stone-200 bg-white px-3 pt-2 flex items-center gap-1 sticky top-[60px] z-10">
+          <button onClick={()=>setActiveTab('details')} className={`text-xs px-3 py-1.5 rounded-t-sm border-b-2 transition-colors ${activeTab==='details'?'border-stone-900 text-stone-900 font-semibold':'border-transparent text-stone-500 hover:text-stone-800'}`}>
+            <Ico n="building2" size={11} className="inline mr-1"/>Project Details
+          </button>
+          <button onClick={()=>setActiveTab('estimate')} className={`text-xs px-3 py-1.5 rounded-t-sm border-b-2 transition-colors ${activeTab==='estimate'?'border-stone-900 text-stone-900 font-semibold':'border-transparent text-stone-500 hover:text-stone-800'}`}>
+            <Ico n="zap" size={11} className="inline mr-1"/>Estimate / Bidsheet
+            {estimateItemsForThis.length > 0 && <span className="ml-1 text-[10px] bg-stone-200 text-stone-700 px-1.5 py-0.5 rounded-full font-bold">{estimateItemsForThis.length}</span>}
+          </button>
+          <button onClick={()=>setActiveTab('execution')} className={`text-xs px-3 py-1.5 rounded-t-sm border-b-2 transition-colors ${activeTab==='execution'?'border-stone-900 text-stone-900 font-semibold':'border-transparent text-stone-500 hover:text-stone-800'}`}>
+            <Ico n="flame" size={11} className="inline mr-1"/>Execution / Actuals
+          </button>
+        </div>
         <div className="p-5 space-y-5">
-          <div className="grid grid-cols-3 gap-3">
-            {[['Bid / Contract',money(contract,true),null],['Est. Margin',_em!==null?pct(_em,1):'—',_em],['Actual Margin',_am!==null?pct(_am,1):'—',_am]].map(([lbl,val,m])=>(
+          {activeTab==='details' && <>
+          <div className="grid grid-cols-4 gap-3">
+            {[['Bid (Estimate)',money(estimateBidTotal||contract,true),null],['Contract',money(contract,true),null],['Est. Margin',_em!==null?pct(_em,1):'—',_em],['Actual Margin',_am!==null?pct(_am,1):'—',_am]].map(([lbl,val,m])=>(
               <div key={lbl} className="bg-white border border-stone-200 p-3"><div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold">{lbl}</div><div className={`font-serif text-2xl mt-1 ${m===null?'text-stone-400':m<0.05?'text-rose-700':m>=0.18?'text-emerald-700':'text-amber-700'}`}>{val}</div></div>
             ))}
           </div>
@@ -668,14 +1298,6 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
               <Fld label="SharePoint / Folder" value={draft.sharepoint||''} edit={edit} onChange={v=>setDraft({...draft,sharepoint:v})} render={v=>v?<a href={v} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline inline-flex items-center gap-1">Open <Ico n="extLink" size={11}/></a>:'—'}/>
             </div>
           </section>
-          <LineItemSection title="Materials" type="Material" items={materials} onAdd={()=>onAddLineItem(proposal.id,'Material')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
-          <LineItemSection title="Labor" type="Labor" items={labor} onAdd={()=>onAddLineItem(proposal.id,'Labor')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
-          <LineItemSection title="Other costs" type="Other" items={other} onAdd={()=>onAddLineItem(proposal.id,'Other')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
-          {lineItems.length>0&&<div className="bg-stone-900 text-white p-4 grid grid-cols-3 gap-4 text-center">
-            {[['Estimated',estTotal],['Actual',actTotal],['Variance',actTotal>0&&estTotal>0?actTotal-estTotal:null]].map(([lbl,val])=>(
-              <div key={lbl}><div className="text-xs text-stone-400 uppercase tracking-widest">{lbl}</div><div className={`font-serif text-2xl mt-1 ${lbl==='Variance'?val>0?'text-rose-400':val<0?'text-emerald-400':'text-stone-500':''}`}>{val!==null?money(val,true):'—'}</div></div>
-            ))}
-          </div>}
           <section className="bg-white border border-stone-200">
             <div className="px-4 py-2.5 border-b border-stone-200 bg-stone-50"><h3 className="font-serif text-base text-stone-800">Activity & notes</h3></div>
             <div className="p-4 space-y-3">
@@ -686,6 +1308,37 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
               {proposal.notes&&<div className="text-sm bg-stone-50 border border-stone-200 p-3 whitespace-pre-wrap text-stone-700 max-h-60 overflow-auto">{proposal.notes}</div>}
             </div>
           </section>
+          </>}
+          {activeTab==='estimate' && <EstimateView
+            proposal={proposal}
+            estimate={estimate}
+            estimateItems={estimateItemsForThis}
+            allEstimateItems={allEstimateItems||[]}
+            onSaveEstimate={onSaveEstimate}
+            onAddItem={onAddEstimateItem}
+            onUpdateItem={onUpdateEstimateItem}
+            onDeleteItem={onDeleteEstimateItem}
+            onAddVE={onAddVEAlternative}
+            suppliers={suppliers||[]}
+            installers={installers||[]}
+            allGCs={allGCs||[]}
+            gcs={gcs||[]}
+          />}
+          {activeTab==='execution' && <div className="space-y-5">
+            <div className="bg-amber-50 border border-amber-300 px-4 py-3 text-sm text-amber-900">
+              <strong>Execution / Actuals tab</strong> — used after the project is awarded.
+              Track real material costs, real labor costs, and procurement status here.
+              The Estimate tab is the bid; this is what actually happened.
+            </div>
+            <LineItemSection title="Materials" type="Material" items={materials} onAdd={()=>onAddLineItem(proposal.id,'Material')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
+            <LineItemSection title="Labor" type="Labor" items={labor} onAdd={()=>onAddLineItem(proposal.id,'Labor')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
+            <LineItemSection title="Other costs" type="Other" items={other} onAdd={()=>onAddLineItem(proposal.id,'Other')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
+            {lineItems.length>0&&<div className="bg-stone-900 text-white p-4 grid grid-cols-3 gap-4 text-center">
+              {[['Estimated',estTotal],['Actual',actTotal],['Variance',actTotal>0&&estTotal>0?actTotal-estTotal:null]].map(([lbl,val])=>(
+                <div key={lbl}><div className="text-xs text-stone-400 uppercase tracking-widest">{lbl}</div><div className={`font-serif text-2xl mt-1 ${lbl==='Variance'?val>0?'text-rose-400':val<0?'text-emerald-400':'text-stone-500':''}`}>{val!==null?money(val,true):'—'}</div></div>
+              ))}
+            </div>}
+          </div>}
         </div>
       </aside>
     </>
@@ -805,6 +1458,11 @@ function App() {
   const [online, setOnline] = useState(true);
   const [proposals, setProposals] = useState([]);
   const [lineItems, setLineItems] = useState([]);
+  const [estimates, setEstimates] = useState([]);
+  const [estimateItems, setEstimateItems] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [installers, setInstallers] = useState([]);
+  const [gcs, setGcs] = useState([]);
   const [settings, setSettings] = useState({slaSubmitted:14,slaNegotiating:7,targetMargin:0.18,riskMarginFloor:0.05,yearFilter:'All'});
   const [view, setView] = useState('dashboard');
   const [selectedId, setSelectedId] = useState(null);
@@ -833,6 +1491,17 @@ function App() {
         if(li) setLineItems(li);
         const {data:st}=await sb.from('app_settings').select('*').eq('id',1).single();
         if(st) setSettings(prev=>({...prev,...st}));
+        // Phase 1: load estimates and catalog
+        const {data:est}=await sb.from('estimates').select('*');
+        if(est) setEstimates(est);
+        const {data:estIt}=await sb.from('estimate_items').select('*').order('sortOrder',{ascending:true});
+        if(estIt) setEstimateItems(estIt);
+        const {data:sup}=await sb.from('suppliers').select('*').order('name');
+        if(sup) setSuppliers(sup);
+        const {data:ins}=await sb.from('installers').select('*').order('name');
+        if(ins) setInstallers(ins);
+        const {data:gc}=await sb.from('gcs').select('*').order('name');
+        if(gc) setGcs(gc);
       } catch(e){
         console.error('Load error:',e);
         // Fallback to seed data if DB unreachable
@@ -856,6 +1525,26 @@ function App() {
         if(payload.eventType==='INSERT') setLineItems(ls=>{const ex=ls.find(l=>l.id===payload.new.id);return ex?ls:[...ls,payload.new];});
         else if(payload.eventType==='UPDATE') setLineItems(ls=>ls.map(l=>l.id===payload.new.id?payload.new:l));
         else if(payload.eventType==='DELETE') setLineItems(ls=>ls.filter(l=>l.id!==payload.old.id));
+      })
+      .on('postgres_changes',{event:'*',schema:'public',table:'estimates'},payload=>{
+        if(payload.eventType==='INSERT') setEstimates(es=>{const ex=es.find(e=>e.id===payload.new.id);return ex?es:[...es,payload.new];});
+        else if(payload.eventType==='UPDATE') setEstimates(es=>es.map(e=>e.id===payload.new.id?payload.new:e));
+        else if(payload.eventType==='DELETE') setEstimates(es=>es.filter(e=>e.id!==payload.old.id));
+      })
+      .on('postgres_changes',{event:'*',schema:'public',table:'estimate_items'},payload=>{
+        if(payload.eventType==='INSERT') setEstimateItems(eis=>{const ex=eis.find(i=>i.id===payload.new.id);return ex?eis:[...eis,payload.new];});
+        else if(payload.eventType==='UPDATE') setEstimateItems(eis=>eis.map(i=>i.id===payload.new.id?payload.new:i));
+        else if(payload.eventType==='DELETE') setEstimateItems(eis=>eis.filter(i=>i.id!==payload.old.id));
+      })
+      .on('postgres_changes',{event:'*',schema:'public',table:'suppliers'},payload=>{
+        if(payload.eventType==='INSERT') setSuppliers(s=>{const ex=s.find(x=>x.id===payload.new.id);return ex?s:[...s,payload.new];});
+        else if(payload.eventType==='UPDATE') setSuppliers(s=>s.map(x=>x.id===payload.new.id?payload.new:x));
+        else if(payload.eventType==='DELETE') setSuppliers(s=>s.filter(x=>x.id!==payload.old.id));
+      })
+      .on('postgres_changes',{event:'*',schema:'public',table:'gcs'},payload=>{
+        if(payload.eventType==='INSERT') setGcs(s=>{const ex=s.find(x=>x.id===payload.new.id);return ex?s:[...s,payload.new];});
+        else if(payload.eventType==='UPDATE') setGcs(s=>s.map(x=>x.id===payload.new.id?payload.new:x));
+        else if(payload.eventType==='DELETE') setGcs(s=>s.filter(x=>x.id!==payload.old.id));
       })
       .subscribe(status=>{setOnline(status==='SUBSCRIBED');});
     return()=>sb.removeChannel(channel);
@@ -914,6 +1603,148 @@ function App() {
     setSettings(next);
     await sb.from('app_settings').upsert({id:1,...next});
   };
+
+  /* ── Phase 1: Estimate actions ───────────────────────────── */
+  // Get-or-create an estimate for the selected proposal
+  const selectedEstimate = useMemo(() => {
+    if (!selectedId) return null;
+    return estimates.find(e => e.proposalId === selectedId) || null;
+  }, [estimates, selectedId]);
+
+  const selectedEstimateItems = useMemo(() => {
+    if (!selectedEstimate) return [];
+    return estimateItems.filter(i => i.estimateId === selectedEstimate.id);
+  }, [estimateItems, selectedEstimate]);
+
+  // Auto-create estimate when user opens estimate tab and none exists
+  useEffect(() => {
+    if (!selectedId) return;
+    const existing = estimates.find(e => e.proposalId === selectedId);
+    if (existing) return;
+    const p = proposals.find(p => p.id === selectedId);
+    if (!p) return;
+    const newEst = {
+      id: `est_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      proposalId: String(selectedId),
+      proposalNumber: String(selectedId),
+      projectName: p.project || '',
+      projectAddressLine1: p.location || '',
+      gcName: p.gc || '',
+      gcContactName: p.contact || '',
+      gcContactEmail: p.email || '',
+      gcContactPhone: p.phone || '',
+      taxRate: 0.07,
+      markupRate: 0.20,
+      preparedByName: 'Peter Laitres',
+      preparedByEmail: 'peter@amsfloors.com',
+      preparedByPhone: '9417401555',
+    };
+    setEstimates(es => [...es, newEst]);
+    sb.from('estimates').insert(newEst).then(({ error }) => {
+      if (error) console.error('Failed to create estimate:', error);
+    });
+  }, [selectedId, proposals]);
+
+  const saveEstimate = async (next) => {
+    const updated = { ...next, updatedAt: new Date().toISOString() };
+    setEstimates(es => es.map(e => e.id === next.id ? updated : e));
+    await sb.from('estimates').upsert(updated);
+  };
+
+  const addEstimateItem = async (sectionCode, sectionName, isAlternate = false) => {
+    if (!selectedEstimate) return;
+    const newItem = {
+      id: `ei_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      estimateId: selectedEstimate.id,
+      proposalId: String(selectedId),
+      sectionCode: sectionCode || '',
+      sectionName: sectionName || '',
+      isAlternate: isAlternate,
+      sortOrder: estimateItems.filter(i => i.estimateId === selectedEstimate.id).length,
+      itemCode: '',
+      size: '',
+      manufacturer: '',
+      description: '',
+      color: '',
+      qty: 0,
+      unit: 'SF',
+      costPerUnit: 0,
+      freight: 0,
+      laborRate: 0,
+      displayMode: 'full',
+    };
+    setEstimateItems(eis => [...eis, newItem]);
+    await sb.from('estimate_items').insert(newItem);
+  };
+
+  const updateEstimateItem = async (next) => {
+    const updated = { ...next, updatedAt: new Date().toISOString() };
+    setEstimateItems(eis => eis.map(i => i.id === next.id ? updated : i));
+    await sb.from('estimate_items').upsert(updated);
+  };
+
+  const deleteEstimateItem = async (id) => {
+    // Also delete any VE children
+    const children = estimateItems.filter(i => i.parentItemId === id);
+    for (const child of children) {
+      setEstimateItems(eis => eis.filter(i => i.id !== child.id));
+      await sb.from('estimate_items').delete().eq('id', child.id);
+    }
+    setEstimateItems(eis => eis.filter(i => i.id !== id));
+    await sb.from('estimate_items').delete().eq('id', id);
+  };
+
+  const addVEAlternative = async (parentId) => {
+    const parent = estimateItems.find(i => i.id === parentId);
+    if (!parent) return;
+    const newItem = {
+      id: `ei_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      estimateId: parent.estimateId,
+      proposalId: parent.proposalId,
+      parentItemId: parentId,
+      sectionCode: parent.sectionCode,
+      sectionName: parent.sectionName,
+      isAlternate: parent.isAlternate,
+      isVeAlternative: true,
+      sortOrder: parent.sortOrder + 0.5,
+      itemCode: parent.itemCode + '-VE',
+      size: parent.size,
+      manufacturer: '',
+      description: 'VE: ' + (parent.description || ''),
+      color: '',
+      qty: parent.qty,
+      unit: parent.unit,
+      costPerUnit: 0,
+      freight: 0,
+      laborRate: parent.laborRate,
+      displayMode: 'full',
+      veNote: 'Same scope, value-engineered alternative',
+    };
+    setEstimateItems(eis => [...eis, newItem]);
+    await sb.from('estimate_items').insert(newItem);
+  };
+
+  // Sync estimate total back to proposal.bidAmount when estimate items change
+  useEffect(() => {
+    if (!selectedEstimate) return;
+    const baseTotal = selectedEstimateItems.reduce((s, item) => {
+      if (item.isVeAlternative || item.isAlternate) return s;
+      const c = calcEstimateItem(item, selectedEstimate.taxRate || 0.07, selectedEstimate.markupRate || 0.20);
+      return s + c.total;
+    }, 0);
+    if (baseTotal > 0) {
+      const prop = proposals.find(p => p.id === selectedId);
+      if (prop && Math.abs((prop.bidAmount || 0) - baseTotal) > 0.5) {
+        const updated = { ...prop, bidAmount: baseTotal };
+        setProposals(ps => ps.map(p => p.id === selectedId ? updated : p));
+        sb.from('proposals').update({ bidAmount: baseTotal }).eq('id', String(selectedId));
+      }
+    }
+  }, [selectedEstimateItems, selectedEstimate]);
+
+  // All GC names for autocomplete
+  const allGCNames = useMemo(() => Array.from(new Set(proposals.map(p => p.gc).filter(Boolean))).sort(), [proposals]);
+
 
   /* ── Import ──────────────────────────────────────────── */
   const handleImport=async(file)=>{
@@ -1021,7 +1852,29 @@ function App() {
         {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onImport={handleImport} onExport={handleExport} importStatus={importStatus} setShowNewProject={setShowNewProject}/>}
       </main>
 
-      {selectedProposal&&<ProjectDrawer proposal={selectedProposal} lineItems={selectedLineItems} onClose={()=>setSelectedId(null)} onSave={saveProposal} onAddLineItem={addLineItem} onUpdateLineItem={updateLineItem} onDeleteLineItem={deleteLineItem} onAddNote={addNote} onSelectGC={g=>{setSelectedId(null);setView('gcs');setSelectedGC(g);}}/>}
+      {selectedProposal&&<ProjectDrawer
+        proposal={selectedProposal}
+        lineItems={selectedLineItems}
+        onClose={()=>setSelectedId(null)}
+        onSave={saveProposal}
+        onAddLineItem={addLineItem}
+        onUpdateLineItem={updateLineItem}
+        onDeleteLineItem={deleteLineItem}
+        onAddNote={addNote}
+        onSelectGC={g=>{setSelectedId(null);setView('gcs');setSelectedGC(g);}}
+        estimate={selectedEstimate}
+        estimateItems={selectedEstimateItems}
+        allEstimateItems={estimateItems}
+        onSaveEstimate={saveEstimate}
+        onAddEstimateItem={addEstimateItem}
+        onUpdateEstimateItem={updateEstimateItem}
+        onDeleteEstimateItem={deleteEstimateItem}
+        onAddVEAlternative={addVEAlternative}
+        suppliers={suppliers}
+        installers={installers}
+        allGCs={allGCNames}
+        gcs={gcs}
+      />}
       {showNewProject&&<NewProjectModal onClose={()=>setShowNewProject(false)} onSave={addNewProject} allGCs={Array.from(new Set(proposals.map(p=>p.gc).filter(Boolean))).sort()} proposals={proposals}/>}
     </div>
   );
