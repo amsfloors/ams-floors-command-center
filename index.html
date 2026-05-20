@@ -26,7 +26,7 @@
 </head>
 <body class="bg-stone-100 min-h-screen">
 <div id="root"></div>
-<div id="gate" style="display:none;position:fixed;inset:0;background:#1c1917;z-index:9999;display:flex;align-items:center;justify-content:center;">
+<div id="gate" style="display:flex;position:fixed;inset:0;background:#1c1917;z-index:9999;align-items:center;justify-content:center;">
   <div style="background:#292524;border:1px solid #44403c;padding:40px;width:100%;max-width:360px;text-align:center;">
     <div style="font-family:'Instrument Serif',Georgia,serif;font-size:28px;color:#fafaf9;margin-bottom:6px;">AMS Floors</div>
     <div style="font-size:11px;letter-spacing:0.15em;text-transform:uppercase;color:#78716c;margin-bottom:28px;">Command Center</div>
@@ -252,6 +252,13 @@ const generateInstallerPOHTML = (estimate, items) => {
   </div></body></html>`;
 };
 
+</script>
+<script>
+// Error handler - catch any app startup errors
+window.addEventListener('error', function(e) {
+  document.getElementById('root').innerHTML = '<div style="padding:20px;font-family:monospace;color:#dc2626;background:#fef2f2;border:1px solid #fca5a5;margin:20px;"><strong>App Error:</strong><br>' + e.message + '<br><br>' + (e.filename || '') + ':' + (e.lineno || '') + '</div>';
+  console.error('App error:', e);
+});
 </script>
 <script>
 function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
