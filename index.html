@@ -724,17 +724,17 @@ const AddSectionModal=({onAdd,onClose,isAlternate})=>{
   return(
     <>
       <div className="fixed inset-0 bg-stone-900/50 z-50" onClick={onClose}/>
-      <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 bg-white shadow-2xl w-full max-w-lg rounded-sm border border-stone-200">
-        <div className="px-5 py-4 border-b border-stone-200 flex items-center justify-between">
+      <div className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 bg-white shadow-2xl w-full max-w-lg rounded-sm border-2 ${isAlternate?'border-amber-400':'border-stone-200'}`}>
+        <div className={`px-5 py-4 border-b flex items-center justify-between ${isAlternate?'border-amber-300 bg-amber-50':'border-stone-200'}`}>
           <div>
-            <h2 className="font-serif text-lg text-stone-900">
-              {isAlternate ? '⚡ Add Alternate Section' : 'Add Section'}
+            <h2 className={`font-serif text-lg ${isAlternate?'text-amber-900':'text-stone-900'}`}>
+              {isAlternate ? '⚡ Add Alternate — Optional Scope' : '+ Add Section'}
             </h2>
-            {isAlternate && (
-              <p className="text-xs text-stone-500 mt-0.5">
-                An alternate is optional scope the owner can choose to add. It's priced separately and not included in the base bid.
-              </p>
-            )}
+            <p className={`text-xs mt-0.5 ${isAlternate?'text-amber-700 font-medium':'text-stone-400'}`}>
+              {isAlternate
+                ? '⚠ Not included in the base bid — priced separately as an optional add-on for the owner.'
+                : 'Choose a flooring type to add to the base bid.'}
+            </p>
           </div>
           <button onClick={onClose} className="text-stone-400 hover:text-stone-900 ml-4"><Ico n="x" size={16}/></button>
         </div>
@@ -822,8 +822,9 @@ const EstimateItemRow=({item,onUpdate,onDelete,onAddVE,taxRate,markupRate,sugges
         <td className="px-1 py-1 text-right font-mono text-xs text-stone-600">{money(calc.material)}</td>
         <td className="px-1 py-1 text-right font-mono text-xs text-stone-600">{money(calc.labor)}</td>
       </>}
-      <td className="px-2 py-1 text-right whitespace-nowrap">
-        <span className={`font-mono text-sm font-bold ${calc.total>0?'text-stone-900':'text-stone-300'}`}>
+      {/* Estimated total */}
+      <td className="px-2 py-1 text-right whitespace-nowrap border-l border-stone-200">
+        <span className={`font-mono text-sm font-bold ${calc.total>0?'text-stone-700':'text-stone-300'}`}>
           {calc.total>0?money(calc.total):'—'}
         </span>
       </td>
@@ -999,7 +1000,7 @@ const EstimateView=({proposal,estimate,estimateItems,onSaveEstimate,onAddItem,on
                 <th className="px-1 py-2 text-right font-semibold text-stone-300">Material</th>
                 <th className="px-1 py-2 text-right font-semibold text-stone-300">Labor $</th>
               </>}
-              <th className="px-2 py-2 text-right font-semibold text-orange-300">LINE TOTAL</th>
+              <th className="px-2 py-2 text-right font-semibold text-orange-300">EST TOTAL</th>
               <th className="px-1 py-2 text-center font-semibold" title="Proposal display: F=Full detail, T=Total only, L=Lump sum">DM</th>
               <th className="px-1 py-2"></th>
             </tr>
@@ -1282,11 +1283,8 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
             <Ico n="building2" size={11} className="inline mr-1"/>Project Details
           </button>
           <button onClick={()=>setActiveTab('estimate')} className={`text-xs px-3 py-1.5 rounded-t-sm border-b-2 transition-colors ${activeTab==='estimate'?'border-orange-800 text-orange-800 font-semibold':'border-transparent text-stone-500 hover:text-stone-800'}`}>
-            <Ico n="zap" size={11} className="inline mr-1"/>Estimate / Bidsheet
+            <Ico n="zap" size={11} className="inline mr-1"/>Estimate & Costs
             {estimateItemsForThis.length > 0 && <span className="ml-1 text-[10px] bg-stone-200 text-stone-700 px-1.5 py-0.5 rounded-full font-bold">{estimateItemsForThis.length}</span>}
-          </button>
-          <button onClick={()=>setActiveTab('execution')} className={`text-xs px-3 py-1.5 rounded-t-sm border-b-2 transition-colors ${activeTab==='execution'?'border-stone-900 text-stone-900 font-semibold':'border-transparent text-stone-500 hover:text-stone-800'}`}>
-            <Ico n="flame" size={11} className="inline mr-1"/>Execution / Actuals
           </button>
           {activeTab==='estimate' && (
             <div className="ml-auto flex items-center gap-3 pb-1">
@@ -1348,21 +1346,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
             allGCs={allGCs||[]}
             gcs={gcs||[]}
           />}
-          {activeTab==='execution' && <div className="space-y-5">
-            <div className="bg-amber-50 border border-amber-300 px-4 py-3 text-sm text-amber-900">
-              <strong>Execution / Actuals tab</strong> — used after the project is awarded.
-              Track real material costs, real labor costs, and procurement status here.
-              The Estimate tab is the bid; this is what actually happened.
-            </div>
-            <LineItemSection title="Materials" type="Material" items={materials} onAdd={()=>onAddLineItem(proposal.id,'Material')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
-            <LineItemSection title="Labor" type="Labor" items={labor} onAdd={()=>onAddLineItem(proposal.id,'Labor')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
-            <LineItemSection title="Other costs" type="Other" items={other} onAdd={()=>onAddLineItem(proposal.id,'Other')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
-            {lineItems.length>0&&<div className="bg-stone-900 text-white p-4 grid grid-cols-3 gap-4 text-center">
-              {[['Estimated',estTotal],['Actual',actTotal],['Variance',actTotal>0&&estTotal>0?actTotal-estTotal:null]].map(([lbl,val])=>(
-                <div key={lbl}><div className="text-xs text-stone-400 uppercase tracking-widest">{lbl}</div><div className={`font-serif text-2xl mt-1 ${lbl==='Variance'?val>0?'text-rose-400':val<0?'text-emerald-400':'text-stone-500':''}`}>{val!==null?money(val,true):'—'}</div></div>
-              ))}
-            </div>}
-          </div>}
+
         </div>
       </aside>
     </>
