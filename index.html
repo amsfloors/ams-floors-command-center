@@ -201,6 +201,7 @@ const PATHS = {
   sparkles:['M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z','M20 3v4','M22 5h-4','M4 17v2','M5 18H3'],
   barChart:['M3 3v18h18','M18 17V9','M13 17V5','M8 17v-3'],
   settings:['M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16z','M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z','M12 2v2','M12 20v2','M4.93 4.93l1.41 1.41','M17.66 17.66l1.41 1.41','M2 12h2','M20 12h2','M4.93 19.07l1.41-1.41','M17.66 6.34l1.41-1.41'],
+  fileText:['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z','M14 2v6h6','M16 13H8','M16 17H8','M10 9H8'],
   listFilter:['M3 6h18','M7 12h10','M10 18h4'],
   arrowUpRight:['M7 17 17 7','M7 7h10v10'],
   mail:['M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z','M22 6l-10 7L2 6'],
@@ -952,30 +953,32 @@ const EstimateView=({proposal,estimate,estimateItems,onSaveEstimate,onAddItem,on
 
   return(
     <div className="space-y-0">
-      <HeaderBar draftHeader={draftHeader} setDraftHeader={setDraftHeader} hSave={hSave}
-        headerOpen={headerOpen} setHeaderOpen={setHeaderOpen} estimate={estimate}
-        showMath={showMath} setShowMath={setShowMath}/>
+      <div className="px-5 pt-4 pb-2">
+        <HeaderBar draftHeader={draftHeader} setDraftHeader={setDraftHeader} hSave={hSave}
+          headerOpen={headerOpen} setHeaderOpen={setHeaderOpen} estimate={estimate}
+          showMath={showMath} setShowMath={setShowMath}/>
+      </div>
 
-      <div className="bg-white border border-stone-200 overflow-x-auto">
-        <table style={{tableLayout:'fixed',minWidth:showMath?'1820px':'1160px'}} className="text-xs w-full">
+      <div className="bg-white border-t border-b border-stone-200 overflow-x-auto">
+        <table style={{tableLayout:'fixed',width:'100%',minWidth:showMath?'1600px':'900px'}} className="text-xs">
           <colgroup>
-            <col style={{width:'32px'}}/>
+            <col style={{width:'28px'}}/>
+            <col style={{width:'55px'}}/>
+            <col style={{width:'70px'}}/>
+            <col style={{width:'85px'}}/>
+            <col/>
+            <col style={{width:'105px'}}/>
             <col style={{width:'58px'}}/>
-            <col style={{width:'72px'}}/>
-            <col style={{width:'90px'}}/>
-            <col style={{minWidth:'180px'}}/>
-            <col style={{width:'110px'}}/>
-            <col style={{width:'62px'}}/>
-            <col style={{width:'52px'}}/>
-            <col style={{width:'58px'}}/>
-            <col style={{width:'78px'}}/>
-            <col style={{width:'62px'}}/>
-            <col style={{width:'58px'}}/>
+            <col style={{width:'50px'}}/>
+            <col style={{width:'55px'}}/>
+            <col style={{width:'75px'}}/>
             <col style={{width:'65px'}}/>
-            {showMath&&<><col style={{width:'75px'}}/><col style={{width:'68px'}}/><col style={{width:'68px'}}/><col style={{width:'78px'}}/><col style={{width:'68px'}}/></>}
-            <col style={{width:'90px'}}/>
-            <col style={{width:'36px'}}/>
             <col style={{width:'58px'}}/>
+            <col style={{width:'62px'}}/>
+            {showMath&&<><col style={{width:'85px'}}/><col style={{width:'70px'}}/><col style={{width:'70px'}}/><col style={{width:'85px'}}/><col style={{width:'70px'}}/></>}
+            <col style={{width:'92px'}}/>
+            <col style={{width:'36px'}}/>
+            <col style={{width:'55px'}}/>
           </colgroup>
           {/* Sticky column headers */}
           <thead className="sticky top-0 z-10">
@@ -1126,7 +1129,7 @@ const EstimateView=({proposal,estimate,estimateItems,onSaveEstimate,onAddItem,on
       </div>
 
       {/* Add section / alternate buttons */}
-      <div className="flex items-center gap-2 pt-3 pb-1">
+      <div className="flex items-center gap-2 pt-3 pb-1 px-5">
         <button onClick={()=>openAdd(false)}
           className="text-sm border border-stone-300 bg-white text-stone-700 px-3 py-1.5 rounded-sm hover:bg-stone-100 flex items-center gap-1.5">
           <Ico n="plus" size={12}/>Add Section
@@ -1160,7 +1163,7 @@ const EstimateView=({proposal,estimate,estimateItems,onSaveEstimate,onAddItem,on
       )}
 
       {/* DM legend — one line, subtle */}
-      <div className="text-[10px] text-stone-400 flex items-center gap-4 pt-1">
+      <div className="text-[10px] text-stone-400 flex items-center gap-4 pt-1 px-5 pb-4">
         <span className="font-semibold text-stone-500">Proposal display (DM):</span>
         <span><span className="bg-stone-100 text-stone-600 font-bold px-1 rounded-sm">F</span> Full — shows material + labor split</span>
         <span><span className="bg-sky-100 text-sky-700 font-bold px-1 rounded-sm">T</span> Total only — hides mat/labor (tax protection)</span>
@@ -1233,8 +1236,8 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
   const [edit,setEdit]=useState(false);
   const [draft,setDraft]=useState(proposal);
   const [noteText,setNoteText]=useState('');
-  const [activeTab,setActiveTab]=useState('details');
-  useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('details');},[proposal]);
+  const [activeTab,setActiveTab]=useState('estimate');
+  useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('estimate');},[proposal]);
   if(!proposal) return null;
   const save=()=>{onSave(draft);setEdit(false);};
   const materials=lineItems.filter(l=>l.type==='Material');
@@ -1255,9 +1258,9 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
   },0);
   return (
     <>
-      {activeTab !== 'estimate' && <div className="fixed inset-0 bg-stone-900/30 z-40" onClick={onClose}/>}
-      {activeTab === 'estimate' && <div className="fixed inset-0 bg-stone-900/60 z-40"/>}
-      <aside className={`fixed top-0 right-0 bottom-0 bg-stone-50 z-50 border-l border-stone-300 shadow-2xl ${activeTab==='estimate' ? 'w-full overflow-hidden flex flex-col' : 'overflow-y-auto'}`} style={activeTab!=='estimate'?{width:'min(760px,100vw)'}:{}}>
+      {(activeTab !== 'estimate' && activeTab !== 'proposal') && <div className="fixed inset-0 bg-stone-900/30 z-40" onClick={onClose}/>}
+      {(activeTab === 'estimate' || activeTab === 'proposal') && <div className="fixed inset-0 bg-stone-900/60 z-40"/>}
+      <aside className={`fixed top-0 right-0 bottom-0 bg-stone-50 z-50 border-l border-stone-300 shadow-2xl ${(activeTab==='estimate'||activeTab==='proposal') ? 'w-full overflow-hidden flex flex-col' : 'overflow-y-auto'}`} style={(activeTab!=='estimate'&&activeTab!=='proposal')?{width:'min(760px,100vw)'}:{}}>
         <div className="sticky top-0 z-10 bg-white border-b border-stone-200 px-5 py-3 flex items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <button onClick={onClose} className="text-stone-500 hover:text-stone-900 flex-shrink-0"><Ico n="x" size={18}/></button>
@@ -1279,12 +1282,15 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
         </div>
         {/* Tab navigation */}
         <div className="border-b border-stone-200 bg-white px-3 pt-2 flex items-center gap-1 sticky top-0 z-10 flex-shrink-0">
-          <button onClick={()=>setActiveTab('details')} className={`text-xs px-3 py-1.5 rounded-t-sm border-b-2 transition-colors ${activeTab==='details'?'border-stone-900 text-stone-900 font-semibold':'border-transparent text-stone-500 hover:text-stone-800'}`}>
-            <Ico n="building2" size={11} className="inline mr-1"/>Project Details
-          </button>
           <button onClick={()=>setActiveTab('estimate')} className={`text-xs px-3 py-1.5 rounded-t-sm border-b-2 transition-colors ${activeTab==='estimate'?'border-orange-800 text-orange-800 font-semibold':'border-transparent text-stone-500 hover:text-stone-800'}`}>
             <Ico n="zap" size={11} className="inline mr-1"/>Estimate & Costs
             {estimateItemsForThis.length > 0 && <span className="ml-1 text-[10px] bg-stone-200 text-stone-700 px-1.5 py-0.5 rounded-full font-bold">{estimateItemsForThis.length}</span>}
+          </button>
+          <button onClick={()=>setActiveTab('proposal')} className={`text-xs px-3 py-1.5 rounded-t-sm border-b-2 transition-colors ${activeTab==='proposal'?'border-stone-900 text-stone-900 font-semibold':'border-transparent text-stone-500 hover:text-stone-800'}`}>
+            <Ico n="fileText" size={11} className="inline mr-1"/>Proposal
+          </button>
+          <button onClick={()=>setActiveTab('notes')} className={`text-xs px-3 py-1.5 rounded-t-sm border-b-2 transition-colors ${activeTab==='notes'?'border-stone-900 text-stone-900 font-semibold':'border-transparent text-stone-500 hover:text-stone-800'}`}>
+            <Ico n="clock" size={11} className="inline mr-1"/>Notes & Activity
           </button>
           {activeTab==='estimate' && (
             <div className="ml-auto flex items-center gap-3 pb-1">
@@ -1296,8 +1302,8 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
             </div>
           )}
         </div>
-        <div className={activeTab==='estimate' ? 'flex-1 overflow-y-auto p-5' : 'p-5 space-y-5'}>
-          {activeTab==='details' && <>
+        <div className={activeTab==='estimate' ? 'flex-1 overflow-y-auto' : 'p-5 space-y-5'}>
+          {(activeTab==='details'||activeTab==='notes') && <>
           <div className="grid grid-cols-4 gap-3">
             {[['Bid (Estimate)',money(estimateBidTotal||contract,true),null],['Contract',money(contract,true),null],['Est. Margin',_em!==null?pct(_em,1):'—',_em],['Actual Margin',_am!==null?pct(_am,1):'—',_am]].map(([lbl,val,m])=>(
               <div key={lbl} className="bg-white border border-stone-200 p-3"><div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold">{lbl}</div><div className={`font-serif text-2xl mt-1 ${m===null?'text-stone-400':m<0.05?'text-rose-700':m>=0.18?'text-emerald-700':'text-amber-700'}`}>{val}</div></div>
@@ -1331,6 +1337,37 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
             </div>
           </section>
           </>}
+          {activeTab==='proposal' && (
+            <div className="p-6 space-y-4">
+              <div className="bg-stone-50 border border-stone-200 rounded-sm p-6 text-center">
+                <Ico n="fileText" size={40} className="mx-auto mb-3 text-stone-300"/>
+                <h3 className="font-serif text-xl text-stone-700 mb-2">Proposal Generator</h3>
+                <p className="text-sm text-stone-500 mb-1 max-w-md mx-auto">
+                  Generate a professional PDF proposal for <strong>{proposal.gc}</strong> based on your estimate data.
+                  Includes your logo, project details, all line items (with DM display settings applied), and boilerplate notes.
+                </p>
+                <div className="mt-4 inline-flex items-center gap-2 bg-stone-200 text-stone-600 px-4 py-2 rounded-sm text-sm">
+                  <Ico n="clock" size={14}/>Coming in Phase 2
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-stone-50 border border-stone-200 p-4">
+                  <div className="font-semibold text-stone-700 text-sm mb-1 flex items-center gap-2"><Ico n="fileText" size={13}/>Supplier POs</div>
+                  <p className="text-xs text-stone-500">Auto-generate purchase orders grouped by supplier — ships to job site address.</p>
+                  <div className="mt-3 text-[10px] bg-stone-200 text-stone-500 px-2 py-1 rounded-sm inline-block">Phase 2</div>
+                </div>
+                <div className="bg-stone-50 border border-stone-200 p-4">
+                  <div className="font-semibold text-stone-700 text-sm mb-1 flex items-center gap-2"><Ico n="user" size={13}/>Installer POs</div>
+                  <p className="text-xs text-stone-500">Generate work orders for install crews with scope, quantities, and labor rates.</p>
+                  <div className="mt-3 text-[10px] bg-stone-200 text-stone-500 px-2 py-1 rounded-sm inline-block">Phase 2</div>
+                </div>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
+                <strong>Estimate must be complete before generating outputs.</strong> Make sure all sections, quantities, and line items are filled in on the Estimate & Costs tab.
+                {estimateItemsForThis.length === 0 && <span className="ml-1 font-semibold">⚠ No estimate items yet.</span>}
+              </div>
+            </div>
+          )}
           {activeTab==='estimate' && <EstimateView
             proposal={proposal}
             estimate={estimate}
