@@ -2967,7 +2967,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
     <>
       {activeTab!=='estimate' && <div className="fixed inset-0 bg-stone-900/30 z-40" onClick={onClose}/>}
       {activeTab==='estimate' && <div className="fixed inset-0 bg-stone-900/50 z-40"/>}
-      <aside className={`fixed top-0 right-0 bottom-0 bg-stone-50 z-50 border-l border-stone-300 shadow-2xl ${activeTab==='estimate'?'w-full overflow-hidden flex flex-col':'overflow-y-auto'}`} style={activeTab!=='estimate'?{width:'min(760px,100vw)'}:{}}>
+      <aside className="fixed top-0 right-0 bottom-0 bg-stone-50 z-50 border-l border-stone-300 shadow-2xl" style={activeTab==='estimate'?{width:'100vw',overflowX:'hidden',display:'flex',flexDirection:'column'}:{width:'min(760px,100vw)',overflowY:'auto'}}>
         <div className="sticky top-0 z-10 bg-white border-b border-stone-200 px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
             <button onClick={onClose} className="text-stone-500 hover:text-stone-900"><Ico n="x" size={18}/></button>
