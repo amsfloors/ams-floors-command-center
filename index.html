@@ -3216,7 +3216,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
             📄 Proposal & POs
           </button>
         </div>
-        <div className={activeTab==='estimate' ? 'flex-1 overflow-y-auto' : 'p-5 space-y-5'} style={activeTab==='proposal'?{padding:0,overflowY:'auto'}:{}}>
+        <div className={activeTab==='estimate' ? 'flex-1 overflow-y-auto' : activeTab==='proposal' ? '' : 'p-5 space-y-5'}>
           {activeTab==='details' && <>
           <div className="grid grid-cols-4 gap-3">
             {[['Bid (Estimate)',money(estimateBidTotal||contract,true),null],['Contract',money(contract,true),null],['Est. Margin',_em!==null?pct(_em,1):'—',_em],['Actual Margin',_am!==null?pct(_am,1):'—',_am]].map(([lbl,val,m])=>(
