@@ -1858,77 +1858,9 @@ window.genInstallerPO = function(est, items) {
 </script>
 
 <script>
-(function() {
-  function ProposalTabFn(props) {
-    var proposal = props.proposal, estimate = props.estimate, estimateItems = props.estimateItems;
-    var st = React.useState('');
-    var notes = st[0], setNotes = st[1];
-    var hasItems = estimateItems && estimateItems.length > 0;
-    var open = function(fn) {
-      if (!hasItems) { alert('Add estimate items first on the Estimate / Bidsheet tab.'); return; }
-      var w = window.open('', '_blank');
-      w.document.write(fn(estimate || {}, estimateItems, notes));
-      w.document.close();
-    };
-    var tax = (estimate && estimate.taxRate) || 0.07;
-    var mup = (estimate && estimate.markupRate) || 0.20;
-    var base = (estimateItems||[]).filter(function(i){return !i.isAlternate && !i.isVeAlternative;});
-    var totM = base.reduce(function(s,i){
-      var q=Number(i.qty)||0,c=Number(i.costPerUnit)||0,f=Number(i.freight)||0;
-      var a=q*c,t=a*tax,ams=a+t+f,mk=a*mup;
-      return s+ams+mk;
-    },0);
-    var totL = base.reduce(function(s,i){return s+(Number(i.qty)||0)*(Number(i.laborRate)||0);},0);
-    var S = {
-      wrap:{padding:'20px',display:'flex',flexDirection:'column',gap:'16px'},
-      warn:{background:'#fffbeb',border:'1px solid #fcd34d',padding:'12px 16px',fontSize:'13px',color:'#92400e',borderRadius:'2px'},
-      totals:{background:'#1c1917',color:'white',padding:'16px',display:'grid',gridTemplateColumns:'1fr 1fr 1fr',textAlign:'center',gap:'16px'},
-      tl:{fontSize:'10px',textTransform:'uppercase',letterSpacing:'0.08em',color:'#a8a29e',marginBottom:'4px'},
-      tv:{fontFamily:'Georgia,serif',fontSize:'24px'},
-      card:{background:'white',border:'1px solid #e7e5e4',padding:'20px',display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'16px'},
-      title:{fontFamily:'Georgia,serif',fontSize:'17px',color:'#1c1917',marginBottom:'4px'},
-      desc:{fontSize:'12px',color:'#a8a29e'},
-      btn:{background:'#1c1917',color:'white',border:'none',padding:'8px 18px',cursor:'pointer',fontSize:'13px',fontWeight:'600',flexShrink:0},
-      ta:{width:'100%',padding:'8px 12px',border:'1px solid #e7e5e4',fontSize:'13px',marginTop:'12px',resize:'none',boxSizing:'border-box',fontFamily:'inherit'},
-    };
-    var e = React.createElement;
-    var $ = function(n){return '$'+Math.round(n||0).toLocaleString('en-US');};
-    return e('div',{style:S.wrap},
-      !hasItems && e('div',{style:S.warn},'⚠ No estimate items yet — complete the ',e('strong',null,'Estimate / Bidsheet'),' tab first.'),
-      hasItems && e('div',{style:S.totals},
-        e('div',null,e('div',{style:S.tl},'Material'),e('div',{style:S.tv},$(totM))),
-        e('div',null,e('div',{style:S.tl},'Labor'),e('div',{style:S.tv},$(totL))),
-        e('div',null,e('div',{style:S.tl},'Base Bid'),e('div',{style:{...S.tv,color:'#6ee7b7'}},$(totM+totL)))
-      ),
-      e('div',{style:S.card},
-        e('div',{style:{flex:1}},
-          e('div',{style:S.title},'📄 Proposal Document'),
-          e('div',{style:S.desc},'PDF with AMS Floors logo, GC info, all line items, and totals. Opens in new tab — Print to save as PDF.'),
-          e('textarea',{style:S.ta,value:notes,onChange:function(ev){setNotes(ev.target.value);},rows:2,placeholder:'Optional notes for this proposal…'})
-        ),
-        e('button',{style:S.btn,onClick:function(){open(window.genProposal);}},'Generate Proposal')
-      ),
-      e('div',{style:S.card},
-        e('div',{style:{flex:1}},
-          e('div',{style:S.title},'🏭 Supplier Purchase Orders'),
-          e('div',{style:S.desc},'One PO per supplier, ships to job site. Opens in new tab — Print to save.')
-        ),
-        e('button',{style:S.btn,onClick:function(){open(window.genSupplierPOs);}},'Generate POs')
-      ),
-      e('div',{style:S.card},
-        e('div',{style:{flex:1}},
-          e('div',{style:S.title},'👷 Installer Work Order'),
-          e('div',{style:S.desc},'Labor scope with quantities, rates, and job site. Opens in new tab — Print to save.')
-        ),
-        e('button',{style:S.btn,onClick:function(){open(window.genInstallerPO);}},'Generate Work Order')
-      )
-    );
-  }
-  window.ProposalTab = ProposalTabFn;
-})();
-</script>
+
+
 <script type="text/babel" data-presets="react">
-const ProposalTab = window.ProposalTab;
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
 /* ── Supabase ─────────────────────────────────────────────── */
@@ -3153,6 +3085,92 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
 };
 
 
+const ProposalTab = ({proposal, estimate, estimateItems}) => {
+  const [notes, setNotes] = useState('');
+  const hasItems = !!(estimateItems && estimateItems.length > 0);
+  const tax = estimate?.taxRate || 0.07;
+  const base = (estimateItems || []).filter(i => !i.isAlternate && !i.isVeAlternative);
+  const totM = base.reduce((s, i) => {
+    const q=Number(i.qty)||0, c=Number(i.costPerUnit)||0, f=Number(i.freight)||0;
+    const a=q*c, t=a*tax, ams=a+t+f, mk=a*0.20;
+    return s + ams + mk;
+  }, 0);
+  const totL = base.reduce((s, i) => s + (Number(i.qty)||0)*(Number(i.laborRate)||0), 0);
+  const fmt = n => '$' + Math.round(n||0).toLocaleString('en-US');
+  const openDoc = (fn) => {
+    if (!hasItems) { alert('Complete the Estimate / Bidsheet tab first — no items yet.'); return; }
+    const w = window.open('', '_blank');
+    w.document.write(fn(estimate || {}, estimateItems, notes));
+    w.document.close();
+  };
+  const card = {background:'white', border:'1px solid #e7e5e4', padding:'20px',
+    display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:'16px', marginBottom:'0'};
+  const title = {fontFamily:'Georgia,serif', fontSize:'17px', color:'#1c1917', marginBottom:'4px'};
+  const desc = {fontSize:'12px', color:'#a8a29e', lineHeight:'1.4'};
+  const btn = {background:'#1c1917', color:'white', border:'none', padding:'9px 18px',
+    cursor:'pointer', fontSize:'13px', fontWeight:'600', flexShrink:0, whiteSpace:'nowrap'};
+  return (
+    <div style={{padding:'24px', display:'flex', flexDirection:'column', gap:'16px', minHeight:'200px'}}>
+      {!hasItems && (
+        <div style={{background:'#fffbeb', border:'1px solid #fcd34d', padding:'14px 16px',
+          fontSize:'13px', color:'#92400e', display:'flex', alignItems:'center', gap:'10px'}}>
+          <span style={{fontSize:'16px'}}>⚠</span>
+          <span>No estimate items yet — go to <strong>Estimate / Bidsheet</strong> tab, add sections and line items, then come back here to generate outputs.</span>
+        </div>
+      )}
+      {hasItems && (
+        <div style={{background:'#1c1917', color:'white', padding:'16px',
+          display:'grid', gridTemplateColumns:'1fr 1fr 1fr', textAlign:'center', gap:'16px'}}>
+          <div>
+            <div style={{fontSize:'10px', textTransform:'uppercase', letterSpacing:'0.08em', color:'#a8a29e', marginBottom:'4px'}}>Material</div>
+            <div style={{fontFamily:'Georgia,serif', fontSize:'22px'}}>{fmt(totM)}</div>
+          </div>
+          <div>
+            <div style={{fontSize:'10px', textTransform:'uppercase', letterSpacing:'0.08em', color:'#a8a29e', marginBottom:'4px'}}>Labor</div>
+            <div style={{fontFamily:'Georgia,serif', fontSize:'22px'}}>{fmt(totL)}</div>
+          </div>
+          <div>
+            <div style={{fontSize:'10px', textTransform:'uppercase', letterSpacing:'0.08em', color:'#a8a29e', marginBottom:'4px'}}>Base Bid</div>
+            <div style={{fontFamily:'Georgia,serif', fontSize:'22px', color:'#6ee7b7'}}>{fmt(totM+totL)}</div>
+          </div>
+        </div>
+      )}
+      <div style={card}>
+        <div style={{flex:1}}>
+          <div style={title}>📄 Proposal Document</div>
+          <div style={desc}>Professional PDF with AMS Floors logo, GC info, all line items (DM settings applied), totals, and boilerplate notes. Opens in new tab — click Print to save as PDF.</div>
+          <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+            placeholder="Optional additional notes for this proposal…"
+            style={{width:'100%', marginTop:'10px', padding:'8px 10px', border:'1px solid #e7e5e4',
+              fontSize:'13px', resize:'none', boxSizing:'border-box', fontFamily:'inherit'}}/>
+        </div>
+        <button style={btn} onClick={() => openDoc(window.genProposal)}>Generate Proposal</button>
+      </div>
+      <div style={card}>
+        <div style={{flex:1}}>
+          <div style={title}>🏭 Supplier Purchase Orders</div>
+          <div style={desc}>One PO per supplier, ships to job site. Opens in new tab — Print to save.</div>
+        </div>
+        <button style={btn} onClick={() => openDoc(window.genSupplierPOs)}>Generate POs</button>
+      </div>
+      <div style={card}>
+        <div style={{flex:1}}>
+          <div style={title}>👷 Installer Work Order</div>
+          <div style={desc}>Labor scope with quantities, rates, and job site address. Opens in new tab — Print to save.</div>
+        </div>
+        <button style={btn} onClick={() => openDoc(window.genInstallerPO)}>Generate Work Order</button>
+      </div>
+      <div style={{fontSize:'11px', color:'#a8a29e', background:'#fafaf9', border:'1px solid #e7e5e4', padding:'10px 12px'}}>
+        <strong style={{color:'#78716c'}}>DM (Display Mode)</strong> on each estimate line controls what shows in the proposal:
+        <span style={{marginLeft:'8px', background:'#f5f5f4', padding:'1px 5px', fontSize:'10px', fontWeight:'700'}}>F</span> Full detail &nbsp;
+        <span style={{background:'#e0f2fe', padding:'1px 5px', fontSize:'10px', fontWeight:'700', color:'#0369a1'}}>T</span> Total only (hides mat/labor — tax protection) &nbsp;
+        <span style={{background:'#fef3c7', padding:'1px 5px', fontSize:'10px', fontWeight:'700', color:'#92400e'}}>L</span> Lump sum (hides quantities)
+      </div>
+    </div>
+  );
+};
+
+
 const Fld=({label,value,edit,type='text',onChange,render})=>(
   <div><div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">{label}</div>
   {edit?<input type={type} value={value??''} onChange={e=>onChange(e.target.value)} className="w-full px-2 py-1 text-sm border border-stone-300 bg-white rounded-sm focus:outline-none focus:border-stone-600"/>:<div className="text-sm text-stone-900">{render?render(value):(value||'—')}</div>}
@@ -3216,7 +3234,8 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
             📄 Proposal & POs
           </button>
         </div>
-        <div className={activeTab==='estimate' ? 'flex-1 overflow-y-auto' : activeTab==='proposal' ? '' : 'p-5 space-y-5'}>
+        <div className={activeTab==='estimate' ? 'flex-1 overflow-y-auto' : 'p-5 space-y-5'}
+          style={activeTab==='proposal' ? {padding:0, overflowY:'auto', height:'100%'} : {}}>
           {activeTab==='details' && <>
           <div className="grid grid-cols-4 gap-3">
             {[['Bid (Estimate)',money(estimateBidTotal||contract,true),null],['Contract',money(contract,true),null],['Est. Margin',_em!==null?pct(_em,1):'—',_em],['Actual Margin',_am!==null?pct(_am,1):'—',_am]].map(([lbl,val,m])=>(
