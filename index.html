@@ -3108,7 +3108,7 @@ const ProposalTab = ({proposal, estimate, estimateItems}) => {
     w.document.close();
   };
   return (
-    <div className="p-6 space-y-5 max-w-3xl">
+    <div style={{padding:"24px", display:"flex", flexDirection:"column", gap:"20px", maxWidth:"800px"}}>
       {!hasItems && (
         <div className="bg-amber-50 border border-amber-300 px-4 py-3 text-sm text-amber-900 flex items-start gap-2">
           <Ico n="alertTri" size={16} className="mt-0.5 flex-shrink-0"/>
@@ -3241,7 +3241,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
             <Ico n="fileText" size={11} className="inline mr-1"/>Proposal & POs
           </button>
         </div>
-        <div className={activeTab==='estimate'?'flex-1 overflow-y-auto':activeTab==='proposal'?'flex-1 overflow-y-auto':'p-5 space-y-5'}>
+        <div style={{padding: activeTab==='estimate' ? '0' : '20px', overflowY: 'auto', flex: activeTab==='estimate' ? '1' : 'none'}}>
           {activeTab==='details' && <>
           <div className="grid grid-cols-4 gap-3">
             {[['Bid (Estimate)',money(estimateBidTotal||contract,true),null],['Contract',money(contract,true),null],['Est. Margin',_em!==null?pct(_em,1):'—',_em],['Actual Margin',_am!==null?pct(_am,1):'—',_am]].map(([lbl,val,m])=>(
