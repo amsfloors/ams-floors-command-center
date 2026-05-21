@@ -3078,43 +3078,49 @@ const ProposalTab = ({proposal, estimate, estimateItems}) => {
   const base = (estimateItems||[]).filter(i => !i.isAlternate && !i.isVeAlternative);
   const totM = base.reduce((s,i) => { const c = calcEstimateItem(i,tax,mup); return s+c.material; }, 0);
   const totL = base.reduce((s,i) => { const c = calcEstimateItem(i,tax,mup); return s+c.labor; }, 0);
+  const S = {
+    wrap: {padding:'20px', display:'flex', flexDirection:'column', gap:'16px', maxWidth:'700px'},
+    warn: {background:'#fffbeb', border:'1px solid #fcd34d', padding:'12px 16px', fontSize:'13px', color:'#92400e'},
+    totals: {background:'#1c1917', color:'white', padding:'16px', display:'grid', gridTemplateColumns:'1fr 1fr 1fr', textAlign:'center', gap:'16px'},
+    totLabel: {fontSize:'10px', textTransform:'uppercase', letterSpacing:'0.08em', color:'#a8a29e', marginBottom:'4px'},
+    totVal: {fontFamily:'Georgia,serif', fontSize:'24px'},
+    card: {background:'white', border:'1px solid #e7e5e4', padding:'20px', display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:'16px'},
+    cardTitle: {fontFamily:'Georgia,serif', fontSize:'17px', color:'#1c1917', marginBottom:'4px'},
+    cardDesc: {fontSize:'12px', color:'#a8a29e'},
+    btn: {background:'#1c1917', color:'white', border:'none', padding:'8px 18px', cursor:'pointer', fontSize:'13px', fontWeight:'600', flexShrink:0, whiteSpace:'nowrap'},
+    textarea: {width:'100%', padding:'8px 12px', border:'1px solid #e7e5e4', fontSize:'13px', marginTop:'12px', resize:'none', boxSizing:'border-box', fontFamily:'inherit'},
+  };
   return (
-    <div className="p-5 space-y-4">
-      {!hasItems && (
-        <div className="bg-amber-50 border border-amber-300 px-4 py-3 text-sm text-amber-900">
-          ⚠ No estimate items yet — complete the <strong>Estimate / Bidsheet</strong> tab first.
-        </div>
-      )}
+    <div style={S.wrap}>
+      {!hasItems && <div style={S.warn}>⚠ No estimate items yet — complete the <strong>Estimate / Bidsheet</strong> tab first before generating outputs.</div>}
       {hasItems && (
-        <div className="bg-stone-900 text-white p-4 grid grid-cols-3 gap-4 text-center">
-          <div><div className="text-xs text-stone-400 uppercase tracking-widest">Material</div><div className="font-serif text-2xl mt-1">{money(totM,true)}</div></div>
-          <div><div className="text-xs text-stone-400 uppercase tracking-widest">Labor</div><div className="font-serif text-2xl mt-1">{money(totL,true)}</div></div>
-          <div><div className="text-xs text-stone-400 uppercase tracking-widest">Base Bid</div><div className="font-serif text-2xl mt-1 text-emerald-300">{money(totM+totL,true)}</div></div>
+        <div style={S.totals}>
+          <div><div style={S.totLabel}>Material</div><div style={S.totVal}>{money(totM,true)}</div></div>
+          <div><div style={S.totLabel}>Labor</div><div style={S.totVal}>{money(totL,true)}</div></div>
+          <div><div style={S.totLabel}>Base Bid</div><div style={{...S.totVal, color:'#6ee7b7'}}>{money(totM+totL,true)}</div></div>
         </div>
       )}
-      <div className="bg-white border border-stone-200 p-5">
-        <div className="flex items-start justify-between gap-4 mb-3">
-          <div>
-            <div className="font-serif text-lg text-stone-900">📄 Proposal Document</div>
-            <div className="text-xs text-stone-500 mt-0.5">PDF with logo, line items, and totals. Opens in new tab — Print to save.</div>
-          </div>
-          <button onClick={() => open(window.genProposal)} className="bg-stone-900 text-white px-4 py-2 text-sm hover:bg-stone-800 flex-shrink-0">Generate Proposal</button>
+      <div style={S.card}>
+        <div style={{flex:1}}>
+          <div style={S.cardTitle}>📄 Proposal Document</div>
+          <div style={S.cardDesc}>Professional PDF with AMS Floors logo, GC info, all line items, and totals. Opens in new tab — Print to save as PDF.</div>
+          <textarea style={S.textarea} value={notes} onChange={e=>setNotes(e.target.value)} rows={2} placeholder="Optional notes to add to this proposal…"/>
         </div>
-        <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Optional additional notes for this proposal…" className="w-full px-3 py-2 text-sm border border-stone-200 rounded-sm resize-none"/>
+        <button style={S.btn} onClick={()=>open(window.genProposal)}>Generate Proposal</button>
       </div>
-      <div className="bg-white border border-stone-200 p-5 flex items-start justify-between gap-4">
-        <div>
-          <div className="font-serif text-lg text-stone-900">🏭 Supplier Purchase Orders</div>
-          <div className="text-xs text-stone-500 mt-0.5">One PO per supplier, ships to job site. Opens in new tab — Print to save.</div>
+      <div style={S.card}>
+        <div style={{flex:1}}>
+          <div style={S.cardTitle}>🏭 Supplier Purchase Orders</div>
+          <div style={S.cardDesc}>One PO per supplier, ships to job site address. Opens in new tab — Print to save.</div>
         </div>
-        <button onClick={() => open(window.genSupplierPOs)} className="bg-stone-900 text-white px-4 py-2 text-sm hover:bg-stone-800 flex-shrink-0">Generate POs</button>
+        <button style={S.btn} onClick={()=>open(window.genSupplierPOs)}>Generate POs</button>
       </div>
-      <div className="bg-white border border-stone-200 p-5 flex items-start justify-between gap-4">
-        <div>
-          <div className="font-serif text-lg text-stone-900">👷 Installer Work Order</div>
-          <div className="text-xs text-stone-500 mt-0.5">Labor scope with quantities and rates. Opens in new tab — Print to save.</div>
+      <div style={S.card}>
+        <div style={{flex:1}}>
+          <div style={S.cardTitle}>👷 Installer Work Order</div>
+          <div style={S.cardDesc}>Labor scope with quantities, rates, and job site address. Opens in new tab — Print to save.</div>
         </div>
-        <button onClick={() => open(window.genInstallerPO)} className="bg-stone-900 text-white px-4 py-2 text-sm hover:bg-stone-800 flex-shrink-0">Generate Work Order</button>
+        <button style={S.btn} onClick={()=>open(window.genInstallerPO)}>Generate Work Order</button>
       </div>
     </div>
   );
@@ -3158,7 +3164,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
   return (
     <>
       <div className="fixed inset-0 bg-stone-900/30 z-40" onClick={onClose}/>
-      <aside className="fixed top-0 right-0 bottom-0 bg-stone-50 z-50 overflow-y-auto border-l border-stone-300 shadow-2xl" style={{width:'min(760px,100vw)'}}>
+      <aside className="fixed top-0 right-0 bottom-0 bg-stone-50 z-50 border-l border-stone-300 shadow-2xl" style={activeTab==='estimate'?{width:'100vw',display:'flex',flexDirection:'column',overflow:'hidden'}:{width:'min(760px,100vw)',overflowY:'auto'}}>
         <div className="sticky top-0 z-10 bg-white border-b border-stone-200 px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
             <button onClick={onClose} className="text-stone-500 hover:text-stone-900"><Ico n="x" size={18}/></button>
@@ -3186,7 +3192,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
             📄 Proposal & POs
           </button>
         </div>
-        <div className="p-5 space-y-5">
+        <div className={activeTab==='estimate' ? 'flex-1 overflow-y-auto' : 'p-5 space-y-5'}>
           {activeTab==='details' && <>
           <div className="grid grid-cols-4 gap-3">
             {[['Bid (Estimate)',money(estimateBidTotal||contract,true),null],['Contract',money(contract,true),null],['Est. Margin',_em!==null?pct(_em,1):'—',_em],['Actual Margin',_am!==null?pct(_am,1):'—',_am]].map(([lbl,val,m])=>(
