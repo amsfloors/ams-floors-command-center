@@ -2656,40 +2656,19 @@ const GCDetailView=({gc,proposals,gcStats,onBack,onSelectProposal,settings})=>{
 
 
 const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProposal})=>{
-  const [editingActual,setEditingActual]=useState(null); // {id, field}
+  const [editingActual,setEditingActual]=useState(null);
   const [editVal,setEditVal]=useState('');
   const jobs=useMemo(()=>{
     let p=proposals.filter(x=>WON_STATUSES.includes(x.status));
     if(settings.yearFilter!=='All') p=p.filter(x=>x.submitted&&x.submitted.startsWith(String(settings.yearFilter)));
     return p.map(x=>({...x,_em:estMargin(x),_am:actMargin(x),_contract:x.contractAmount||x.bidAmount||0,_ec:(x.estMaterial||0)+(x.estLabor||0)+(x.estOther||0),_ac:(x.actMaterial||0)+(x.actLabor||0)+(x.actOther||0)})).sort((a,b)=>b._contract-a._contract);
   },[proposals,settings.yearFilter]);
-  const startEdit=(j,field,e)=>{e.stopPropagation();setEditingActual({id:j.id,field});setEditVal(String(j[field]||''));};
+  const startEdit=(jid,field,curVal,e)=>{e.stopPropagation();setEditingActual({id:jid,field});setEditVal(String(curVal||''));};
   const commitEdit=(j)=>{
     const v=parseFloat(editVal)||0;
-    onSaveProposal({...j,[editingActual.field]:v,actMaterial:editingActual.field==='actMaterial'?v:(j.actMaterial||0),actLabor:editingActual.field==='actLabor'?v:(j.actLabor||0)});
-    setEditingActual(null);
-  };
-  const ActualCell=({job,field,label})=>{
-    const isEditing=editingActual&&editingActual.id===job.id&&editingActual.field===field;
-    const val=job[field]||0;
-    const est=field==='actMaterial'?job.estMaterial:job.estLabor;
-    const over=val>0&&est>0&&val>est;
-    if(isEditing) return(
-      <td className="px-2 py-1.5" onClick={e=>e.stopPropagation()}>
-        <div className="flex items-center gap-1">
-          <span className="text-[9px] text-stone-400 uppercase">{label}</span>
-          <input autoFocus type="number" value={editVal} onChange={e=>setEditVal(e.target.value)}
-            onBlur={()=>commitEdit(job)} onKeyDown={e=>{if(e.key==='Enter')commitEdit(job);if(e.key==='Escape')setEditingActual(null);}}
-            className="w-20 px-1.5 py-0.5 text-xs font-mono border border-sky-400 rounded-sm focus:outline-none bg-sky-50" step="100"/>
-        </div>
-      </td>
-    );
-    return(
-      <td className="px-3 py-2.5 text-right cursor-pointer group" onClick={e=>startEdit(job,field,e)} title={`Click to enter actual ${label}`}>
-        {val>0?<span className={`font-mono text-xs ${over?'text-rose-700 font-semibold':''}`}>{money(val)}{over&&<span className="ml-1 text-[9px]">↑</span>}</span>
-              :<span className="text-[10px] text-stone-300 group-hover:text-sky-600 italic">enter</span>}
-      </td>
-    );
+    const field=editingActual.field;
+    onSaveProposal({...j,actMaterial:field==='actMaterial'?v:(j.actMaterial||0),actLabor:field==='actLabor'?v:(j.actLabor||0)});
+    setEditingActual(null);setEditVal('');
   };
   return (
     <div className="space-y-4">
@@ -2699,7 +2678,7 @@ const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProp
           <h2 className="font-serif text-2xl text-stone-900">Active Jobs · Margin Watch</h2>
           <p className="text-sm text-stone-700 mt-1">{jobs.length} awarded · <strong>{money(jobs.reduce((s,j)=>s+j._contract,0),true)}</strong> contract value
             {jobs.filter(j=>j._ec===0).length>0&&<span className="text-rose-700 ml-2">· {jobs.filter(j=>j._ec===0).length} missing cost data</span>}
-            <span className="text-stone-500 ml-2 text-xs">· Click <em>Actual Mat</em> / <em>Actual Lab</em> cells to enter David's real costs</span>
+            <span className="text-stone-400 ml-3 text-xs italic">Click Actual Mat / Lab cells to enter David's costs</span>
           </p>
         </div>
       </div>
@@ -2722,14 +2701,24 @@ const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProp
               let health={label:'No data',color:'text-stone-400 bg-stone-100',icon:'alertCirc'};
               if(j._am!==null){if(j._am<settings.riskMarginFloor)health={label:'At risk',color:'text-rose-800 bg-rose-100',icon:'alertTri'};else if(j._am>=settings.targetMargin)health={label:'On target',color:'text-emerald-800 bg-emerald-100',icon:'check2'};else health={label:'Below target',color:'text-amber-800 bg-amber-100',icon:'clock'};}
               else if(j._em!==null){if(j._em<settings.riskMarginFloor)health={label:'Est. at risk',color:'text-rose-700 bg-rose-50',icon:'alertTri'};else if(j._em>=settings.targetMargin)health={label:'Est. on target',color:'text-emerald-700 bg-emerald-50',icon:'check2'};else health={label:'Est. below',color:'text-amber-700 bg-amber-50',icon:'clock'};}
+              const editingMat=editingActual&&editingActual.id===j.id&&editingActual.field==='actMaterial';
+              const editingLab=editingActual&&editingActual.id===j.id&&editingActual.field==='actLabor';
+              const matOver=(j.actMaterial||0)>0&&(j.estMaterial||0)>0&&(j.actMaterial||0)>(j.estMaterial||0);
+              const labOver=(j.actLabor||0)>0&&(j.estLabor||0)>0&&(j.actLabor||0)>(j.estLabor||0);
               return(
                 <tr key={j.id} className="border-b border-stone-100 hover:bg-stone-50/50 cursor-pointer" onClick={()=>onSelectProposal(j.id)}>
                   <td className="px-3 py-2.5 overflow-hidden"><div className="font-medium text-stone-900 truncate">{j.project}</div><div className="flex items-center gap-1.5 text-xs text-stone-500 mt-0.5">#{j.id}·{j.location}{j.pm&&<span className="text-[9px] px-1.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-full font-medium">PM: {j.pm}</span>}</div></td>
                   <td className="px-3 py-2.5"><button onClick={e=>{e.stopPropagation();onSelectGC(j.gc);}} className="text-stone-700 hover:text-orange-800 hover:underline">{j.gc}</button></td>
                   <td className="px-3 py-2.5 text-right font-semibold whitespace-nowrap"><MoneyCell amount={j._contract}/></td>
                   <td className="px-3 py-2.5 text-right text-stone-600 whitespace-nowrap">{j._ec?<MoneyCell amount={j._ec}/>:<span className="text-stone-300 text-xs">—</span>}</td>
-                  <ActualCell job={j} field="actMaterial" label="Mat"/>
-                  <ActualCell job={j} field="actLabor" label="Lab"/>
+                  {editingMat
+                    ?<td className="px-2 py-1.5" onClick={e=>e.stopPropagation()}><input autoFocus type="number" value={editVal} onChange={e=>setEditVal(e.target.value)} onBlur={()=>commitEdit(j)} onKeyDown={e=>{if(e.key==='Enter')commitEdit(j);if(e.key==='Escape'){setEditingActual(null);setEditVal('');}}} className="w-24 px-2 py-1 text-xs font-mono border border-sky-400 rounded-sm focus:outline-none bg-sky-50" step="100"/></td>
+                    :<td className="px-3 py-2.5 text-right cursor-pointer group" onClick={e=>startEdit(j.id,'actMaterial',j.actMaterial,e)} title="Click to enter actual material cost">{(j.actMaterial||0)>0?<span className={`font-mono text-xs ${matOver?'text-rose-700 font-semibold':''}`}>{money(j.actMaterial)}{matOver&&' ↑'}</span>:<span className="text-[10px] text-stone-300 group-hover:text-sky-500 italic">enter</span>}</td>
+                  }
+                  {editingLab
+                    ?<td className="px-2 py-1.5" onClick={e=>e.stopPropagation()}><input autoFocus type="number" value={editVal} onChange={e=>setEditVal(e.target.value)} onBlur={()=>commitEdit(j)} onKeyDown={e=>{if(e.key==='Enter')commitEdit(j);if(e.key==='Escape'){setEditingActual(null);setEditVal('');}}} className="w-24 px-2 py-1 text-xs font-mono border border-sky-400 rounded-sm focus:outline-none bg-sky-50" step="100"/></td>
+                    :<td className="px-3 py-2.5 text-right cursor-pointer group" onClick={e=>startEdit(j.id,'actLabor',j.actLabor,e)} title="Click to enter actual labor cost">{(j.actLabor||0)>0?<span className={`font-mono text-xs ${labOver?'text-rose-700 font-semibold':''}`}>{money(j.actLabor)}{labOver&&' ↑'}</span>:<span className="text-[10px] text-stone-300 group-hover:text-sky-500 italic">enter</span>}</td>
+                  }
                   <td className="px-3 py-2.5 text-right font-mono text-xs">{j._em!==null?<span className={j._em<settings.riskMarginFloor?'text-rose-600':j._em>=settings.targetMargin?'text-emerald-700':'text-amber-700'}>{pct(j._em,1)}</span>:'—'}</td>
                   <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold">{j._am!==null?<span className={j._am>=settings.targetMargin?'text-emerald-700':j._am<settings.riskMarginFloor?'text-rose-700':'text-amber-700'}>{pct(j._am,1)}</span>:<span className="text-stone-400">—</span>}</td>
                   <td className="px-3 py-2.5"><StatusPill status={j.status} size="xs"/></td>
