@@ -3707,6 +3707,255 @@ const NewProjectModal=({onClose,onSave,allGCs,proposals})=>{
 };
 
 
+const IntelligenceView=({proposals,gcStats,estimateItems,settings})=>{
+  const [tab,setTab]=useState('gcs');
+  const today=new Date();
+
+  // ── GC Performance table ────────────────────────────────────
+  const gcRows=useMemo(()=>{
+    return [...gcStats]
+      .filter(g=>g.gc&&(g.won+g.lost)>=1)
+      .sort((a,b)=>b.totalVolume-a.totalVolume)
+      .slice(0,30)
+      .map(g=>{
+        // True margin: avg estMaterial+estLabor vs contract on won jobs
+        const wonWithCost=g.projects.filter(p=>WON_STATUSES.includes(p.status)&&(p.estMaterial||p.estLabor));
+        const avgMargin=wonWithCost.length?wonWithCost.reduce((s,p)=>{
+          const c=p.contractAmount||p.bidAmount||0;
+          const cost=(p.estMaterial||0)+(p.estLabor||0);
+          return s+(c>0?(c-cost)/c:0);
+        },0)/wonWithCost.length:null;
+        return{...g,avgMargin};
+      });
+  },[gcStats]);
+
+  // ── Manufacturer volume rollup ──────────────────────────────
+  const mfrRows=useMemo(()=>{
+    const map=new Map();
+    estimateItems.forEach(it=>{
+      const mfr=(it.manufacturer||'').trim();
+      if(!mfr) return;
+      if(!map.has(mfr)) map.set(mfr,{manufacturer:mfr,items:0,totalAmt:0,proposals:new Set()});
+      const m=map.get(mfr);
+      m.items++;
+      m.totalAmt+=(Number(it.qty)||0)*(Number(it.costPerUnit)||0);
+      if(it.proposalId) m.proposals.add(it.proposalId);
+    });
+    return [...map.values()]
+      .filter(m=>m.totalAmt>0)
+      .sort((a,b)=>b.totalAmt-a.totalAmt)
+      .map(m=>({...m,proposals:m.proposals.size}));
+  },[estimateItems]);
+
+  // ── Pipeline funnel ─────────────────────────────────────────
+  const funnel=useMemo(()=>{
+    const yr=settings.yearFilter==='All'?proposals:proposals.filter(p=>p.submitted&&p.submitted.startsWith(String(settings.yearFilter)));
+    const stages=[
+      {label:'Lead / Qualified',statuses:['Lead','Qualified','Bidding'],color:'bg-sky-100 text-sky-800'},
+      {label:'Submitted',statuses:['Submitted'],color:'bg-amber-100 text-amber-800'},
+      {label:'Negotiating',statuses:['Negotiating','Follow-Up','Discussing'],color:'bg-orange-100 text-orange-800'},
+      {label:'Won / Active',statuses:WON_STATUSES,color:'bg-emerald-100 text-emerald-800'},
+      {label:'Lost / Dead',statuses:LOST_STATUSES,color:'bg-rose-100 text-rose-800'},
+    ];
+    return stages.map(s=>{
+      const ps=yr.filter(p=>s.statuses.includes(p.status));
+      return{...s,count:ps.length,value:ps.reduce((a,p)=>a+(p.bidAmount||0),0)};
+    });
+  },[proposals,settings.yearFilter]);
+
+  // ── Lost reason breakdown ───────────────────────────────────
+  const lostBreakdown=useMemo(()=>{
+    const lost=proposals.filter(p=>LOST_STATUSES.includes(p.status));
+    const map=new Map();
+    lost.forEach(p=>{
+      const r=p.lostReason||'Not recorded';
+      if(!map.has(r)) map.set(r,{reason:r,count:0,value:0});
+      const m=map.get(r);
+      m.count++;m.value+=(p.bidAmount||0);
+    });
+    return [...map.values()].sort((a,b)=>b.count-a.count);
+  },[proposals]);
+
+  const tabs=[
+    {id:'gcs',label:'GC Performance'},
+    {id:'funnel',label:'Pipeline Funnel'},
+    {id:'mfr',label:'Manufacturer Volume'},
+    {id:'lost',label:'Lost Analysis'},
+  ];
+
+  return(
+    <div className="space-y-5">
+      <div className="bg-stone-900 text-white px-5 py-4">
+        <h2 className="font-serif text-2xl">Intelligence</h2>
+        <p className="text-sm text-stone-400 mt-1">Weekly strategic review. Not for daily ops — use Follow-Ups and Pipeline for that.</p>
+      </div>
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 border-b border-stone-200 px-1">
+        {tabs.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            className={`px-4 py-2 text-sm border-b-2 transition-colors ${tab===t.id?'border-stone-900 text-stone-900 font-semibold':'border-transparent text-stone-500 hover:text-stone-800'}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* GC Performance */}
+      {tab==='gcs'&&(
+        <div className="bg-white border border-stone-200">
+          <div className="px-4 py-3 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
+            <h3 className="font-serif text-base text-stone-800">GC Performance — by lifetime volume</h3>
+            <span className="text-xs text-stone-500">{gcRows.length} GCs with settled bids · Use this to decide where to invest bid effort</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="bg-stone-50">
+                <TH>GC</TH>
+                <TH className="text-right"># Bids</TH>
+                <TH className="text-right">Total Vol.</TH>
+                <TH className="text-right">Open</TH>
+                <TH className="text-right">Won</TH>
+                <TH className="text-right">Lost</TH>
+                <TH className="text-right">Win Rate</TH>
+                <TH className="text-right">Avg Margin</TH>
+                <TH>Verdict</TH>
+              </tr></thead>
+              <tbody>
+                {gcRows.map(g=>{
+                  const verdict=g.winRate===null?{t:'Unproven',c:'text-stone-400'}:g.winRate>=0.6&&(g.won+g.lost)>=3?{t:'Chase hard',c:'text-emerald-700 font-semibold'}:g.winRate>=0.3?{t:'Active',c:'text-sky-700'}:{t:'Selective',c:'text-amber-700'};
+                  return(
+                    <tr key={g.gc} className="border-b border-stone-100 hover:bg-stone-50">
+                      <td className="px-3 py-2.5">
+                        <div className="font-medium text-stone-900">{g.gc}</div>
+                        <div className="text-xs text-stone-400">{g.contacts?.length||0} contact{g.contacts?.length!==1?'s':''} · last bid {g.lastSubmit?g.lastSubmit.slice(0,7):'—'}</div>
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono text-stone-700">{g.proposals}</td>
+                      <td className="px-3 py-2.5 text-right font-semibold"><MoneyCell amount={g.totalVolume} compact/></td>
+                      <td className="px-3 py-2.5 text-right"><MoneyCell amount={g.openValue} compact/></td>
+                      <td className="px-3 py-2.5 text-right text-emerald-700 font-mono">{g.won>0?money(g.wonValue,true):'—'}</td>
+                      <td className="px-3 py-2.5 text-right text-rose-600 font-mono">{g.lost>0?String(g.lost):'—'}</td>
+                      <td className="px-3 py-2.5 text-right font-mono font-semibold">{g.winRate!==null?<span className={g.winRate>=0.5?'text-emerald-700':'text-rose-600'}>{pct(g.winRate)}</span>:'—'}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs">{g.avgMargin!==null?<span className={g.avgMargin<0.05?'text-rose-600':g.avgMargin>=0.15?'text-emerald-700':'text-amber-700'}>{pct(g.avgMargin,1)}</span>:'—'}</td>
+                      <td className="px-3 py-2.5"><span className={`text-xs ${verdict.c}`}>{verdict.t}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Pipeline Funnel */}
+      {tab==='funnel'&&(
+        <div className="space-y-4">
+          <div className="bg-white border border-stone-200">
+            <div className="px-4 py-3 border-b border-stone-200 bg-stone-50"><h3 className="font-serif text-base text-stone-800">Pipeline Funnel</h3></div>
+            <div className="p-5 space-y-3">
+              {funnel.map(s=>{
+                const maxVal=funnel.reduce((m,x)=>Math.max(m,x.value),0);
+                const w=maxVal>0?Math.round((s.value/maxVal)*100):0;
+                return(
+                  <div key={s.label} className="flex items-center gap-4">
+                    <div className="w-36 text-right text-sm text-stone-600 flex-shrink-0">{s.label}</div>
+                    <div className="flex-1 bg-stone-100 h-8 relative rounded-sm overflow-hidden">
+                      <div className={`h-full ${s.color.split(' ')[0]} transition-all`} style={{width:`${w}%`}}/>
+                      <div className="absolute inset-0 flex items-center px-3">
+                        <span className="text-xs font-semibold text-stone-800">{s.count} bids · {money(s.value,true)}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            {(()=>{
+              const won=funnel.find(s=>s.label.startsWith('Won'));
+              const lost=funnel.find(s=>s.label.startsWith('Lost'));
+              const total=(won?.count||0)+(lost?.count||0);
+              const wr=total>0?((won?.count||0)/total):null;
+              const sub=funnel.find(s=>s.label==='Submitted');
+              return[
+                {label:'Win Rate',val:wr!==null?pct(wr):'—',sub:`${won?.count||0} won / ${total} settled`,c:wr>=0.4?'text-emerald-700':'text-rose-600'},
+                {label:'Open Pipeline',val:money((funnel.find(s=>s.label==='Submitted')?.value||0)+(funnel.find(s=>s.label.startsWith('Negot'))?.value||0),true),sub:'submitted + negotiating',c:'text-amber-700'},
+                {label:'Avg Bid Size',val:proposals.filter(p=>p.bidAmount>0).length?money(proposals.filter(p=>p.bidAmount>0).reduce((s,p)=>s+(p.bidAmount||0),0)/proposals.filter(p=>p.bidAmount>0).length,true):'—',sub:'across all bids',c:'text-stone-700'},
+              ].map(card=>(
+                <div key={card.label} className="bg-white border border-stone-200 p-4">
+                  <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold">{card.label}</div>
+                  <div className={`font-serif text-3xl mt-1 ${card.c}`}>{card.val}</div>
+                  <div className="text-xs text-stone-400 mt-0.5">{card.sub}</div>
+                </div>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Manufacturer Volume */}
+      {tab==='mfr'&&(
+        <div className="bg-white border border-stone-200">
+          <div className="px-4 py-3 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
+            <h3 className="font-serif text-base text-stone-800">Manufacturer / Supplier Volume</h3>
+            <span className="text-xs text-stone-500">Based on imported bidsheets · Use this to negotiate volume pricing</span>
+          </div>
+          {mfrRows.length===0?<Empty icon="barChart" title="No bidsheet data yet" body="Import Peter's Excel takeoff files to see manufacturer volume."/>:(
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="bg-stone-50"><TH>Manufacturer</TH><TH className="text-right">Line Items</TH><TH className="text-right">Proposals</TH><TH className="text-right">Bid Volume (cost)</TH><TH>Leverage</TH></tr></thead>
+                <tbody>
+                  {mfrRows.map((m,i)=>{
+                    const leverage=m.totalAmt>=500000?{t:'High — negotiate now',c:'text-emerald-700 font-semibold'}:m.totalAmt>=100000?{t:'Medium — worth a call',c:'text-amber-700'}:{t:'Track',c:'text-stone-400'};
+                    return(
+                      <tr key={m.manufacturer} className="border-b border-stone-100 hover:bg-stone-50">
+                        <td className="px-3 py-2.5"><div className="font-medium text-stone-900">{m.manufacturer}</div></td>
+                        <td className="px-3 py-2.5 text-right font-mono text-stone-600">{m.items}</td>
+                        <td className="px-3 py-2.5 text-right font-mono text-stone-600">{m.proposals}</td>
+                        <td className="px-3 py-2.5 text-right font-semibold"><MoneyCell amount={m.totalAmt} compact/></td>
+                        <td className="px-3 py-2.5"><span className={`text-xs ${leverage.c}`}>{leverage.t}</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Lost Analysis */}
+      {tab==='lost'&&(
+        <div className="space-y-4">
+          <div className="bg-white border border-stone-200">
+            <div className="px-4 py-3 border-b border-stone-200 bg-stone-50"><h3 className="font-serif text-base text-stone-800">Why We Lose — Post-Mortem Summary</h3></div>
+            {lostBreakdown.length===0?<Empty icon="check2" title="No lost bids recorded" body="Record lost reasons when bids close to enable this analysis."/>:(
+              <div className="p-5 space-y-3">
+                {lostBreakdown.map(r=>{
+                  const total=lostBreakdown.reduce((s,x)=>s+x.count,0);
+                  const w=total>0?Math.round((r.count/total)*100):0;
+                  return(
+                    <div key={r.reason} className="flex items-center gap-4">
+                      <div className="w-28 text-right text-sm text-stone-600 flex-shrink-0">{r.reason}</div>
+                      <div className="flex-1 bg-stone-100 h-7 relative rounded-sm overflow-hidden">
+                        <div className="h-full bg-rose-100 transition-all" style={{width:`${w}%`}}/>
+                        <div className="absolute inset-0 flex items-center px-3">
+                          <span className="text-xs font-semibold text-stone-800">{r.count} bid{r.count!==1?'s':''} · {money(r.value,true)} · {w}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div className="bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-900">
+            <strong>How to improve this data:</strong> When marking a bid Lost in the Pipeline, the quick-tap strip asks "Why lost?" — one tap records the reason. More data = better pattern recognition.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onImport,onExport,importStatus,setShowNewProject})=>{
   const fileRef=useRef();
   const handleFile=e=>{const f=e.target.files[0];if(f){onImport(f);e.target.value='';}};
@@ -4354,7 +4603,7 @@ function App() {
 
   
   const overdueCount=proposals.filter(p=>OPEN_STATUSES.includes(p.status)&&(overdueDays(p,settings)||0)>0).length;
-  const navItems=[{id:'dashboard',label:'Dashboard',icon:'barChart'},{id:'followups',label:'Follow-Ups',icon:'phone',badge:overdueCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Active Jobs',icon:'flame'},{id:'gcs',label:'GC Intel',icon:'building2'},{id:'settings',label:'Settings',icon:'settings'}];
+  const navItems=[{id:'dashboard',label:'Dashboard',icon:'barChart'},{id:'followups',label:'Follow-Ups',icon:'phone',badge:overdueCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Active Jobs',icon:'flame'},{id:'gcs',label:'GC Intel',icon:'building2'},{id:'intelligence',label:'Intelligence',icon:'zap'},{id:'settings',label:'Settings',icon:'settings'}];
 
   if(!loaded) return (
     <div className="min-h-screen flex items-center justify-center bg-stone-100">
@@ -4396,6 +4645,7 @@ function App() {
         {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
         {view==='active'&&<ActiveJobsView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
         {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onImport={handleImport} onExport={handleExport} importStatus={importStatus} setShowNewProject={setShowNewProject}/>}
+        {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings}/>}
       </main>
 
       {selectedProposal&&<ProjectDrawer
