@@ -4032,89 +4032,131 @@ function App() {
       const newRecs=[];
 
       // ── BIDSHEET DETECTION (Peter's takeoff format) ─────────────────────
-      // Scan ALL sheets first to gather metadata, then find the Bidsheet for line items
+      // STEP 1: Scan ALL sheets to collect metadata AND find the line-item sheet
       let bsMeta={proposalNum:'',projName:'',gcName:'',gcContact:'',gcEmail:'',gcPhone:'',location:''};
-      let bsRaw=null,bsHdrIdx=-1;
+      let bsRaw=null, bsHdrIdx=-1;
       for(const sn of wb.SheetNames){
         const ws2=wb.Sheets[sn];
         const raw=window.XLSX.utils.sheet_to_json(ws2,{header:1,defval:null,raw:false});
-        // Scan header area of every sheet for metadata
+        // Scan first 15 rows of every sheet for metadata
         for(let ri=0;ri<Math.min(raw.length,15);ri++){
           const cells=(raw[ri]||[]).map(v=>(v||'').toString().trim());
+          // Find "Proposal #" label → value in next cell
           for(let ci=0;ci<cells.length-1;ci++){
             const cu=cells[ci].replace(/\s+/g,'').toUpperCase();
-            if((cu==='PROPOSAL#'||cu==='PROPOSAL#:')&&cells[ci+1]&&cells[ci+1].match(/^\d+$/)&&!bsMeta.proposalNum) bsMeta.proposalNum=cells[ci+1];
+            if((cu==='PROPOSAL#'||cu==='PROPOSAL#:')&&cells[ci+1]&&/^\d+$/.test(cells[ci+1])&&!bsMeta.proposalNum)
+              bsMeta.proposalNum=cells[ci+1].trim();
           }
-          // GC name: col3 when col0 is project name area (Proposal Summary layout)
-          if(cells[3]&&cells[3].length>3&&!cells[3].match(/^(Contractor|Address|Email|Phone|Plans|Addendum|Attention|Prepared|Sarasota|\d)/i)&&!cells[3].includes('@')&&!bsMeta.gcName) bsMeta.gcName=cells[3];
-          // Project name: first long non-label string in col0
-          if(cells[0]&&cells[0].length>5&&!cells[0].match(/^(Quality|Project:|Architect:|Prepared|Proposal|[0-9])/i)&&cells[0].match(/[A-Za-z]/)&&!bsMeta.projName) bsMeta.projName=cells[0];
-          // Location: col1 = 2-letter state
-          if(!bsMeta.location&&cells[1]&&cells[1].match(/^[A-Z]{2}$/)&&cells[0]&&cells[0].length>1) bsMeta.location=`${cells[0]}, ${cells[1]} ${cells[2]||''}`.trim();
-          // Contact/email/phone from labelled rows
+          // GC name: col[3] non-label (Proposal Summary layout: row6 col3='Deangelis Diamond')
+          if(!bsMeta.gcName&&cells[3]&&cells[3].length>3
+            &&!/^(Contractor|Address|Email|Phone|Plans|Addendum|Attention|Prepared|Sarasota|\d)/i.test(cells[3])
+            &&!cells[3].includes('@'))
+            bsMeta.gcName=cells[3];
+          // Project name: first substantial col[0] string
+          if(!bsMeta.projName&&cells[0]&&cells[0].length>5
+            &&!/^(Quality|Project:|Architect:|Prepared|Proposal|\d)/i.test(cells[0])
+            &&/[A-Za-z]/.test(cells[0]))
+            bsMeta.projName=cells[0];
+          // Location: col[1]=state abbreviation
+          if(!bsMeta.location&&cells[1]&&/^[A-Z]{2}$/.test(cells[1])&&cells[0]&&cells[0].length>1)
+            bsMeta.location=(cells[0]+', '+cells[1]+' '+(cells[2]||'')).trim();
+          // Contact info from labelled rows
           if(cells[5]==='Email'&&cells[6]&&cells[6].includes('@')&&!bsMeta.gcEmail) bsMeta.gcEmail=cells[6];
           if(cells[5]==='Phone'&&cells[6]&&!bsMeta.gcPhone) bsMeta.gcPhone=cells[6];
-          // Attention row in Proposal Summary: col3 = contact name
           if(cells[0]==='Peter Laitres'&&cells[3]&&!bsMeta.gcContact) bsMeta.gcContact=cells[3];
         }
-        // Check if this sheet has the Bidsheet column headers
-        for(let i=0;i<Math.min(raw.length,20);i++){
-          const rowStr=(raw[i]||[]).map(v=>(v||'').toString().toUpperCase().trim());
-          if(rowStr.includes('ITEM')&&rowStr.includes('COST')&&rowStr.some(v=>v.startsWith('MFR'))){
-            bsRaw=raw; bsHdrIdx=i; break;
+        // Detect line-item sheet: has ITEM + MFR + COST in same header row
+        if(!bsRaw){
+          for(let i=0;i<Math.min(raw.length,20);i++){
+            const r=(raw[i]||[]).map(v=>(v||'').toString().toUpperCase().trim());
+            if(r.includes('ITEM')&&r.includes('COST')&&r.some(v=>v.startsWith('MFR'))){
+              bsRaw=raw; bsHdrIdx=i; break;
+            }
           }
         }
       }
 
       if(bsHdrIdx!==-1&&bsRaw){
+        setImportStatus({ok:true,message:'Bidsheet detected — importing line items…'});
         let {proposalNum,projName,gcName,gcContact,gcEmail,gcPhone,location}=bsMeta;
         if(!projName) projName=file.name.replace(/\.xlsx?$/i,'').replace(/_/g,' ');
         if(!gcName) gcName='Unknown GC';
-        // Find proposal: by ID (direct Supabase lookup if not in local state)
-        let existingProp=proposalNum?proposals.find(p=>String(p.id)===proposalNum):null;
-        if(!existingProp&&proposalNum){const {data:dp}=await sb.from('proposals').select('*').eq('id',proposalNum).maybeSingle();if(dp) existingProp=dp;}
-        if(!existingProp){const kl=`${projName.toLowerCase().slice(0,20)}|${gcName.toLowerCase().slice(0,20)}`;existingProp=proposals.find(p=>`${(p.project||'').toLowerCase().slice(0,20)}|${(p.gc||'').toLowerCase().slice(0,20)}`===kl);}
-        const propId=existingProp?String(existingProp.id):(proposalNum||String(nextId++));
+
+        // STEP 2: Find the proposal — try local state, then Supabase directly
+        let propId='';
+        let existingProp=null;
+        if(proposalNum){
+          existingProp=proposals.find(p=>String(p.id)===proposalNum);
+          if(!existingProp){
+            const {data:dp}=await sb.from('proposals').select('*').eq('id',proposalNum).maybeSingle();
+            if(dp){existingProp=dp;}
+          }
+        }
         if(!existingProp){
-          const np={id:propId,project:projName,location:location||'',gc:gcName,contact:gcContact,email:gcEmail,phone:gcPhone,submitted:todayStr(),bidAmount:0,contractAmount:null,status:'Submitted',owner:'Peter',estimator:'Peter',bdOwner:'Paul',pm:'',notes:`Imported from ${file.name}`,retainage:0.1,estMaterial:null,estLabor:null,estOther:null,actMaterial:null,actLabor:null,actOther:null};
+          const kl=projName.toLowerCase().slice(0,25)+'|'+gcName.toLowerCase().slice(0,25);
+          existingProp=proposals.find(p=>(p.project||'').toLowerCase().slice(0,25)+'|'+(p.gc||'').toLowerCase().slice(0,25)===kl);
+        }
+        propId=existingProp?String(existingProp.id):(proposalNum||String(nextId++));
+
+        // Create proposal if it doesn't exist
+        if(!existingProp){
+          const np={id:propId,project:projName,location:location||'',gc:gcName,contact:gcContact,email:gcEmail,phone:gcPhone,submitted:todayStr(),bidAmount:0,contractAmount:null,status:'Submitted',owner:'Peter',estimator:'Peter',bdOwner:'Paul',pm:'',notes:'Imported from '+file.name,retainage:0.1,estMaterial:null,estLabor:null,estOther:null,actMaterial:null,actLabor:null,actOther:null};
           await sb.from('proposals').insert(np);
-          setProposals(ps=>[np,...ps]);
         }
-        // Find or create estimate — check Supabase directly to avoid stale state
-        let est=estimates.find(e=>e.proposalId===propId);
-        if(!est){const {data:de}=await sb.from('estimates').select('*').eq('proposalId',propId).maybeSingle();if(de) est=de;}
-        if(!est){
-          est={id:`est_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,proposalId:propId,proposalNumber:proposalNum||propId,projectName:projName,gcName:gcName,gcContactName:gcContact,gcContactEmail:gcEmail,gcContactPhone:gcPhone,taxRate:0.07,markupRate:0.20,preparedByName:'Peter Laitres',preparedByEmail:'peter@amsfloors.com',preparedByPhone:'9417401555'};
-          await sb.from('estimates').insert(est);
+
+        // STEP 3: NUCLEAR CLEAN — delete ALL estimates and items for this proposal
+        // This eliminates any stale/duplicate data from previous attempts
+        const {data:oldEsts}=await sb.from('estimates').select('id').eq('proposalId',propId);
+        if(oldEsts&&oldEsts.length){
+          for(const oe of oldEsts){
+            await sb.from('estimate_items').delete().eq('estimateId',oe.id);
+          }
+          await sb.from('estimates').delete().eq('proposalId',propId);
         }
-        // Delete all existing items for this estimate
-        await sb.from('estimate_items').delete().eq('estimateId',est.id);
-        // Parse line items
+        // Also delete any orphaned items by proposalId (belt + suspenders)
+        await sb.from('estimate_items').delete().eq('proposalId',propId);
+
+        // STEP 4: Create ONE fresh estimate
+        const estId='est_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+        const freshEst={
+          id:estId, proposalId:propId, proposalNumber:proposalNum||propId,
+          projectName:projName, gcName:gcName,
+          gcContactName:gcContact, gcContactEmail:gcEmail, gcContactPhone:gcPhone,
+          taxRate:0.07, markupRate:0.20,
+          preparedByName:'Peter Laitres', preparedByEmail:'peter@amsfloors.com', preparedByPhone:'9417401555'
+        };
+        await sb.from('estimates').insert(freshEst);
+
+        // STEP 5: Parse all line items from the bidsheet
         const headers=(bsRaw[bsHdrIdx]||[]).map(v=>(v||'').toString().trim());
-        const hCols={};headers.forEach((h,i)=>{hCols[h.toUpperCase()]=i;});
-        const iItem=hCols['ITEM']??0,iSize=hCols['SIZE']??1,iMfr=hCols['MFR']??2,iDesc=hCols['DESCRIPTION']??3,iColor=hCols['COLOR']??4;
-        const iQty=hCols['QTY']??5,iUnit=hCols['UNIT']??6,iSfCtn=hCols['SF/CTN']??7,iSyCtn=hCols['SY/CTN']??8;
-        const iCost=hCols['COST']??11,iFreight=hCols['FREIGHT']??14,iLabRate=hCols['LABOR RATE']??18;
-        let curSection='',curSectionName='',sortOrd=0;
-        const itemsToInsert=[];
+        const hC={};headers.forEach((h,i)=>{hC[h.toUpperCase()]=i;});
+        const iItem=hC['ITEM']??0, iSize=hC['SIZE']??1, iMfr=hC['MFR']??2, iDesc=hC['DESCRIPTION']??3, iColor=hC['COLOR']??4;
+        const iQty=hC['QTY']??5, iUnit=hC['UNIT']??6, iSfCtn=hC['SF/CTN']??7, iSyCtn=hC['SY/CTN']??8;
+        const iCost=hC['COST']??11, iFreight=hC['FREIGHT']??14, iLabRate=hC['LABOR RATE']??18;
+        let sec='', secName='', ord=0;
+        const items=[];
+        const now=Date.now();
         for(let ri=bsHdrIdx+1;ri<bsRaw.length;ri++){
           const row=bsRaw[ri]||[];
-          const item0=(row[iItem]||'').toString().trim();
-          const size0=(row[iSize]||'').toString().trim();
-          const qty0=parseFloat((row[iQty]||'').toString().replace(/[^0-9.]/g,''))||0;
-          if(item0.match(/^\d{6}$/)&&qty0===0){curSection=item0;curSectionName=size0||item0;continue;}
-          if(!item0||!item0.match(/[A-Za-z]/)) continue;
-          if(item0.toUpperCase().match(/TOTAL|BASE BID/)) continue;
-          itemsToInsert.push({
-            id:`ei_${Date.now()}_${Math.random().toString(36).slice(2,7)}_${ri}`,
-            estimateId:est.id,proposalId:propId,
-            sectionCode:curSection,sectionName:curSectionName,
-            isAlternate:false,isVeAlternative:false,sortOrder:sortOrd++,
-            itemCode:item0,size:(row[iSize]||'').toString().trim(),
+          const c0=(row[iItem]||'').toString().trim();
+          const c1=(row[iSize]||'').toString().trim();
+          const qty=parseFloat((row[iQty]||'').toString().replace(/[^0-9.]/g,''))||0;
+          // CSI section header row: 6-digit number with no qty
+          if(/^\d{6}$/.test(c0)&&qty===0){sec=c0;secName=c1||c0;continue;}
+          // Skip blank, total, non-item rows
+          if(!c0||!/[A-Za-z]/.test(c0)) continue;
+          if(/TOTAL|BASE BID/i.test(c0)) continue;
+          items.push({
+            id:'ei_'+now+'_'+Math.random().toString(36).slice(2,9)+'_'+ri,
+            estimateId:estId, proposalId:propId,
+            sectionCode:sec, sectionName:secName,
+            isAlternate:false, isVeAlternative:false, sortOrder:ord++,
+            itemCode:c0,
+            size:(row[iSize]||'').toString().trim(),
             manufacturer:(row[iMfr]||'').toString().trim(),
             description:(row[iDesc]||'').toString().trim(),
             color:(row[iColor]||'').toString().trim(),
-            qty:qty0,unit:(row[iUnit]||'SF').toString().trim(),
+            qty:qty, unit:(row[iUnit]||'SF').toString().trim(),
             sfPerCtn:parseFloat((row[iSfCtn]||'').toString())||null,
             syPerCtn:parseFloat((row[iSyCtn]||'').toString())||null,
             costPerUnit:parseFloat((row[iCost]||'').toString().replace(/[^0-9.]/g,''))||0,
@@ -4123,13 +4165,21 @@ function App() {
             displayMode:'full',
           });
         }
-        for(let i=0;i<itemsToInsert.length;i+=50) await sb.from('estimate_items').insert(itemsToInsert.slice(i,i+50));
-        // Full Supabase refresh
-        const [{data:fE},{data:fI},{data:fP}]=await Promise.all([sb.from('estimates').select('*'),sb.from('estimate_items').select('*'),sb.from('proposals').select('*').order('submitted',{ascending:false})]);
+
+        // STEP 6: Insert all items
+        for(let i=0;i<items.length;i+=50) await sb.from('estimate_items').insert(items.slice(i,i+50));
+
+        // STEP 7: Full Supabase refresh — guarantees UI shows correct data
+        const [{data:fE},{data:fI},{data:fP}]=await Promise.all([
+          sb.from('estimates').select('*'),
+          sb.from('estimate_items').select('*'),
+          sb.from('proposals').select('*').order('submitted',{ascending:false}),
+        ]);
         if(fE) setEstimates(fE);
         if(fI) setEstimateItems(fI);
         if(fP) setProposals(fP.map(p=>({...p,bidAmount:Number(p.bidAmount)||0})));
-        setImportStatus({ok:true,message:`✓ Bidsheet imported — ${itemsToInsert.length} line items into proposal #${propId} "${projName}" (${gcName}). Open the project → Estimate / Bidsheet tab.`});
+
+        setImportStatus({ok:true,message:'✓ Bidsheet imported — '+items.length+' line items into proposal #'+propId+' "'+projName+'" ('+gcName+'). Open that project → Estimate / Bidsheet tab.'});
         return;
       }
       // ── END BIDSHEET DETECTION ───────────────────────────────────────────
