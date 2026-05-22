@@ -3613,21 +3613,86 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
             gcs={gcs||[]}
             gcStats={gcStats||[]}
           />}
-          {activeTab==='execution' && <div className="space-y-5">
-            <div className="bg-amber-50 border border-amber-300 px-4 py-3 text-sm text-amber-900">
-              <strong>Execution / Actuals tab</strong> — used after the project is awarded.
-              Track real material costs, real labor costs, and procurement status here.
-              The Estimate tab is the bid; this is what actually happened.
-            </div>
-            <LineItemSection title="Materials" type="Material" items={materials} onAdd={()=>onAddLineItem(proposal.id,'Material')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
-            <LineItemSection title="Labor" type="Labor" items={labor} onAdd={()=>onAddLineItem(proposal.id,'Labor')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
-            <LineItemSection title="Other costs" type="Other" items={other} onAdd={()=>onAddLineItem(proposal.id,'Other')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
-            {lineItems.length>0&&<div className="bg-stone-900 text-white p-4 grid grid-cols-3 gap-4 text-center">
-              {[['Estimated',estTotal],['Actual',actTotal],['Variance',actTotal>0&&estTotal>0?actTotal-estTotal:null]].map(([lbl,val])=>(
-                <div key={lbl}><div className="text-xs text-stone-400 uppercase tracking-widest">{lbl}</div><div className={`font-serif text-2xl mt-1 ${lbl==='Variance'?val>0?'text-rose-400':val<0?'text-emerald-400':'text-stone-500':''}`}>{val!==null?money(val,true):'—'}</div></div>
-              ))}
-            </div>}
-          </div>}
+          {activeTab==='execution' && (()=>{
+            const isAwarded=WON_STATUSES.includes(draft.status);
+            const c=draft.contractAmount||draft.bidAmount||0;
+            const estCost=(draft.estMaterial||0)+(draft.estLabor||0)+(draft.estOther||0);
+            const actCost=(draft.actMaterial||0)+(draft.actLabor||0)+(draft.actOther||0);
+            const estM=_em!==null?(_em*100).toFixed(1)+'%':null;
+            const actM=actCost>0&&c>0?((c-actCost)/c*100).toFixed(1)+'%':null;
+            if(!isAwarded) return(
+              <div className="flex flex-col items-center justify-center py-16 text-center space-y-2">
+                <Ico n="clock" size={32} className="text-stone-300"/>
+                <div className="text-stone-500 font-medium">Not awarded yet</div>
+                <div className="text-xs text-stone-400 max-w-xs">Execution tracking activates when status is set to Won, Active, or In Progress.</div>
+              </div>
+            );
+            return(
+              <div className="space-y-4">
+                {/* Margin summary bar */}
+                <div className="grid grid-cols-4 border border-stone-200 divide-x divide-stone-200">
+                  {[
+                    {lbl:'Contract',val:money(c,true),sub:'awarded value',color:'text-stone-900'},
+                    {lbl:'Est. Cost',val:estCost>0?money(estCost,true):'—',sub:'from Peter\'s bidsheet',color:'text-stone-700'},
+                    {lbl:'Actual Cost',val:actCost>0?money(actCost,true):'—',sub:'mat + labor entered',color:actCost>estCost&&estCost>0?'text-rose-700':'text-stone-700'},
+                    {lbl:actM?'Act. Margin':'Est. Margin',val:actM||estM||'—',sub:actM?'actual margin':estM?'estimated margin':'enter costs below',color:actM?parseFloat(actM)>=15?'text-emerald-700':parseFloat(actM)<5?'text-rose-700':'text-amber-700':estM?'text-stone-500':'text-stone-300'},
+                  ].map(({lbl,val,sub,color})=>(
+                    <div key={lbl} className="px-4 py-3 bg-white text-center">
+                      <div className="text-[10px] uppercase tracking-widest text-stone-400 font-semibold">{lbl}</div>
+                      <div className={`font-serif text-xl mt-0.5 ${color}`}>{val}</div>
+                      <div className="text-[10px] text-stone-400 mt-0.5">{sub}</div>
+                    </div>
+                  ))}
+                </div>
+                {/* Quick entry — David's two fields */}
+                <div className="bg-white border border-stone-200 p-4 space-y-3">
+                  <div className="text-xs font-semibold text-stone-700 uppercase tracking-widest mb-3">David's Actual Costs</div>
+                  <div className="grid grid-cols-2 gap-4">
+                    {[
+                      {lbl:'Actual Material Cost',field:'actMaterial',est:draft.estMaterial,hint:'Total paid to suppliers'},
+                      {lbl:'Actual Labor Cost',field:'actLabor',est:draft.estLabor,hint:'Total paid to crews'},
+                    ].map(({lbl,field,est,hint})=>{
+                      const cur=draft[field]||0;
+                      const over=cur>0&&est>0&&cur>est;
+                      return(
+                        <div key={field} className="space-y-1">
+                          <label className="text-xs text-stone-600 font-medium">{lbl}</label>
+                          {est>0&&<div className="text-[10px] text-stone-400">Est: {money(est,true)}{over&&<span className="text-rose-600 ml-1 font-semibold">↑ over by {money(cur-est,true)}</span>}</div>}
+                          <input type="number" step="100"
+                            value={cur||''}
+                            onChange={e=>setDraft(d=>({...d,[field]:parseFloat(e.target.value)||0}))}
+                            onBlur={()=>onSave(draft)}
+                            placeholder={hint}
+                            className="w-full px-3 py-2 text-sm font-mono border border-stone-300 focus:border-sky-400 focus:outline-none rounded-sm bg-sky-50/30 focus:bg-sky-50"/>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center justify-between pt-2 border-t border-stone-100">
+                    <div className="text-xs text-stone-400">Changes save automatically on blur · also editable inline in Active Jobs table</div>
+                    <button onClick={()=>onSave(draft)} className="px-3 py-1.5 text-xs bg-stone-900 text-white hover:bg-stone-700">Save</button>
+                  </div>
+                </div>
+                {/* Collapsible detailed PO tracking */}
+                {(()=>{
+                  const hasDetail=lineItems.length>0&&lineItems.some(l=>l.item&&l.item.trim());
+                  return(
+                    <details className="bg-white border border-stone-200" open={hasDetail}>
+                      <summary className="px-4 py-3 cursor-pointer text-sm font-medium text-stone-700 flex items-center justify-between select-none">
+                        <span>Detailed PO / Vendor Tracking <span className="text-stone-400 font-normal ml-1">({lineItems.filter(l=>l.item&&l.item.trim()).length} entries)</span></span>
+                        <span className="text-xs text-stone-400">Optional — for tracking by vendor/PO</span>
+                      </summary>
+                      <div className="border-t border-stone-200 space-y-3 p-4">
+                        <LineItemSection title="Materials" type="Material" items={materials} onAdd={()=>onAddLineItem(proposal.id,'Material')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
+                        <LineItemSection title="Labor" type="Labor" items={labor} onAdd={()=>onAddLineItem(proposal.id,'Labor')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
+                        <LineItemSection title="Other costs" type="Other" items={other} onAdd={()=>onAddLineItem(proposal.id,'Other')} onUpdate={onUpdateLineItem} onDelete={onDeleteLineItem}/>
+                      </div>
+                    </details>
+                  );
+                })()}
+              </div>
+            );
+          })()}
           {activeTab==='proposal'&&<div style={{padding:'20px',display:'flex',flexDirection:'column',gap:'12px'}}>
             {(!estimateItemsForThis||estimateItemsForThis.length===0)
               ?<div style={{background:'#fffbeb',border:'1px solid #fcd34d',padding:'14px',fontSize:'13px',color:'#92400e'}}>
