@@ -4179,7 +4179,28 @@ function App() {
         if(fI) setEstimateItems(fI);
         if(fP) setProposals(fP.map(p=>({...p,bidAmount:Number(p.bidAmount)||0})));
 
-        setImportStatus({ok:true,message:'✓ Bidsheet imported — '+items.length+' line items into proposal #'+propId+' "'+projName+'" ('+gcName+'). Open that project → Estimate / Bidsheet tab.'});
+        // STEP 7b: Write estimate totals back to the proposal record
+        // This feeds: Active Jobs margin watch, bid amount, KPI cards
+        // Uses same calc logic as calcEstimateItem()
+        const tax=0.07, mu=0.20;
+        let sumMat=0, sumLab=0;
+        items.forEach(it=>{
+          const qty=Number(it.qty)||0;
+          const cpu=Number(it.costPerUnit)||0;
+          const fr=Number(it.freight)||0;
+          const lr=Number(it.laborRate)||0;
+          const amt=qty*cpu;
+          sumMat += amt + amt*tax + fr + amt*mu;
+          sumLab += qty*lr;
+        });
+        const grandTotal=Math.round(sumMat+sumLab);
+        const propUpdate={bidAmount:grandTotal,estMaterial:Math.round(sumMat),estLabor:Math.round(sumLab)};
+        await sb.from('proposals').update(propUpdate).eq('id',propId);
+        // Refresh proposals again to reflect updated bid amount
+        const {data:fP2}=await sb.from('proposals').select('*').order('submitted',{ascending:false});
+        if(fP2) setProposals(fP2.map(p=>({...p,bidAmount:Number(p.bidAmount)||0})));
+
+        setImportStatus({ok:true,message:'✓ Bidsheet imported — '+items.length+' line items, Grand Total '+money(grandTotal)+' → proposal #'+propId+' "'+projName+'" ('+gcName+'). Open the project → Estimate / Bidsheet tab.'});
         return;
       }
       // ── END BIDSHEET DETECTION ───────────────────────────────────────────
