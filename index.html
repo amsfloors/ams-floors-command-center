@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2197,6 +2198,7 @@ const PATHS = {
   save:['M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z','M17 21v-8H7v8','M7 3v5h8'],
   filter:['M22 3H2l8 9.46V19l4 2v-8.54L22 3z'],
   extLink:['M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6','M15 3h6v6','M10 14 21 3'],
+  arrowRight:'M5 12h14M12 5l7 7-7 7',
   loader:['M12 2v4','M12 18v4','M4.93 4.93l2.83 2.83','M16.24 16.24l2.83 2.83','M2 12h4','M18 12h4','M4.93 19.07l2.83-2.83','M16.24 7.76l2.83-2.83'],
   alertCirc:['M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z','M12 8v4','M12 16h.01'],
   sparkles:['M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z','M20 3v4','M22 5h-4','M4 17v2','M5 18H3'],
@@ -2343,7 +2345,57 @@ const DashboardView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onN
 };
 
 
-const PipelineView=({proposals,onSelectProposal,onSelectGC,settings})=>{
+const LOST_STATUSES_SET=new Set(['Lost','Dead','Closed Lost']);
+const LOST_REASONS=['Price','Relationship','Scope','Timing','Don\'t know'];
+
+const NextActionCell=({proposal,onSave})=>{
+  const [open,setOpen]=useState(false);
+  const [txt,setTxt]=useState('');
+  const [dt,setDt]=useState('');
+  const today=todayStr();
+  const na=proposal.nextAction||'';
+  const nd=proposal.nextActionDate||'';
+  const daysUntil=nd?Math.round((new Date(nd)-new Date(today))/86400000):null;
+  const isOD=nd&&nd<today;
+  const openEdit=(e)=>{e.stopPropagation();setTxt(na);setDt(nd);setOpen(true);};
+  const save=(e)=>{e.stopPropagation();onSave({...proposal,nextAction:txt.trim(),nextActionDate:dt||null});setOpen(false);};
+  const clear=(e)=>{e.stopPropagation();onSave({...proposal,nextAction:'',nextActionDate:null});setOpen(false);};
+  if(open) return(
+    <div onClick={e=>e.stopPropagation()} className="absolute right-0 top-0 z-30 bg-white border border-stone-300 shadow-xl p-2.5 w-52 space-y-2 rounded-sm">
+      <input autoFocus value={txt} onChange={e=>setTxt(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')save(e);if(e.key==='Escape')setOpen(false);}} placeholder="e.g. Call re: scope" className="w-full text-xs px-2 py-1.5 border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/>
+      <input type="date" value={dt} onChange={e=>setDt(e.target.value)} className="w-full text-xs px-2 py-1.5 border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/>
+      <div className="flex gap-1.5">
+        <button onClick={save} className="flex-1 text-xs bg-stone-900 text-white py-1 rounded-sm hover:bg-stone-700">Save</button>
+        {na&&<button onClick={clear} className="text-xs text-stone-400 hover:text-rose-600 px-1.5">Clear</button>}
+        <button onClick={e=>{e.stopPropagation();setOpen(false);}} className="text-xs text-stone-400 hover:text-stone-700 px-1"><Ico n="x" size={12}/></button>
+      </div>
+    </div>
+  );
+  return(
+    <button onClick={openEdit} className="text-left w-full min-w-[80px] group">
+      {na?(
+        <div>
+          <div className="text-xs text-stone-700 truncate max-w-[130px] group-hover:text-stone-900">{na}</div>
+          {nd&&<div className={`text-[10px] font-mono mt-0.5 ${isOD?'text-rose-700 font-semibold':'text-stone-400'}`}>{isOD?`${Math.abs(daysUntil)}d overdue`:daysUntil===0?'Today':`in ${daysUntil}d`}</div>}
+        </div>
+      ):<span className="text-[10px] text-stone-300 group-hover:text-stone-500 italic">Set...</span>}
+    </button>
+  );
+};
+
+const LostReasonStrip=({proposal,onSave})=>{
+  if(!LOST_STATUSES_SET.has(proposal.status)||proposal.lostReason) return null;
+  return(
+    <div className="bg-rose-50 border-t border-rose-100 px-3 py-1.5 flex items-center gap-2 flex-wrap" onClick={e=>e.stopPropagation()}>
+      <span className="text-[10px] text-rose-700 font-semibold uppercase tracking-widest mr-1">Why lost?</span>
+      {LOST_REASONS.map(r=>(
+        <button key={r} onClick={e=>{e.stopPropagation();onSave({...proposal,lostReason:r});}} className="text-[11px] px-2.5 py-0.5 bg-white border border-rose-200 text-rose-800 rounded-full hover:bg-rose-100 hover:border-rose-400 transition-colors">{r}</button>
+      ))}
+    </div>
+  );
+};
+
+const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProposal})=>{
   const [search,setSearch]=useState('');
   const [statusF,setStatusF]=useState('all');
   const [gcF,setGcF]=useState('all');
@@ -2382,14 +2434,16 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings})=>{
       <div className="bg-white border border-stone-200 overflow-x-auto">
         <table style={{tableLayout:'fixed',width:'100%'}} className="text-sm">
           <colgroup><col style={{width:'5%'}}/><col style={{width:'25%'}}/><col style={{width:'18%'}}/><col style={{width:'13%'}}/><col style={{width:'11%'}}/><col style={{width:'11%'}}/><col style={{width:'10%'}}/><col style={{width:'7%'}}/></colgroup>
-          <thead><tr className="bg-stone-50"><TH>#</TH><TH>Project</TH><TH>GC</TH><TH>Contact</TH><TH>Submitted</TH><TH className="text-right">Bid</TH><TH>Status</TH><TH className="text-right">Age</TH></tr></thead>
+          <thead><tr className="bg-stone-50"><TH>#</TH><TH>Project</TH><TH>GC</TH><TH>Contact</TH><TH>Submitted</TH><TH className="text-right">Bid</TH><TH>Status</TH><TH>Next Action</TH><TH className="text-right">Age</TH></tr></thead>
           <tbody>
-            {filtered.length===0&&<tr><td colSpan={8}><Empty icon="search" title="No projects match" body="Try adjusting filters."/></td></tr>}
+            {filtered.length===0&&<tr><td colSpan={9}><Empty icon="search" title="No projects match" body="Try adjusting filters."/></td></tr>}
             {filtered.map(p=>{
               const age=daysSince(p.submitted);
               const od=overdueDays(p,settings)||0;
+              const showLost=LOST_STATUSES_SET.has(p.status)&&!p.lostReason;
               return (
-                <tr key={p.id} className="border-b border-stone-100 hover:bg-stone-50 cursor-pointer" onClick={()=>onSelectProposal(p.id)}>
+                <React.Fragment key={p.id}>
+                <tr className="border-b border-stone-100 hover:bg-stone-50 cursor-pointer" onClick={()=>onSelectProposal(p.id)}>
                   <td className="px-3 py-2 font-mono text-stone-500 text-[10px] overflow-hidden">{p.id}</td>
                   <td className="px-3 py-2 overflow-hidden"><div className="font-medium text-stone-900 truncate">{p.project||'—'}</div><div className="text-xs text-stone-500 truncate">{p.location||'—'}</div></td>
                   <td className="px-3 py-2 overflow-hidden"><button onClick={e=>{e.stopPropagation();onSelectGC(p.gc);}} className="text-stone-700 hover:text-orange-800 hover:underline truncate block w-full text-left">{p.gc||'—'}</button></td>
@@ -2397,10 +2451,13 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings})=>{
                   <td className="px-3 py-2 text-stone-600 whitespace-nowrap text-xs">{formatDate(p.submitted)}</td>
                   <td className="px-3 py-2 text-right whitespace-nowrap"><MoneyCell amount={p.bidAmount}/></td>
                   <td className="px-3 py-2"><StatusPill status={p.status} size="xs"/></td>
+                  <td className="px-3 py-2 relative" style={{minWidth:'100px'}}><NextActionCell proposal={p} onSave={onSaveProposal}/></td>
                   <td className="px-3 py-2 text-right font-mono text-[10px] whitespace-nowrap">
                     {age!==null?<div><div className="text-stone-500">{age}d</div>{od>0&&<div className="text-rose-700 font-semibold">{od}d late</div>}</div>:'—'}
                   </td>
                 </tr>
+                {showLost&&<tr className="border-b border-stone-100"><td colSpan={9} className="p-0"><LostReasonStrip proposal={p} onSave={onSaveProposal}/></td></tr>}
+                </React.Fragment>
               );
             })}
           </tbody>
@@ -2411,23 +2468,35 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings})=>{
 };
 
 
-const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onMarkContacted})=>{
+const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onMarkContacted,onSaveProposal})=>{
   const [filter,setFilter]=useState('overdue');
   const [logOpen,setLogOpen]=useState(null);
   const [logNote,setLogNote]=useState('');
+  const [logNextAction,setLogNextAction]=useState('');
+  const [logNextDate,setLogNextDate]=useState('');
   const logRef=useRef();
+  const today=todayStr();
   const gcWR=useMemo(()=>new Map(gcStats.map(g=>[g.gc,g.winRate])),[gcStats]);
   const queue=useMemo(()=>{
     let pool=proposals.filter(p=>OPEN_STATUSES.includes(p.status)&&p.bidAmount>0);
     if(settings.yearFilter!=='All') pool=pool.filter(p=>p.submitted&&p.submitted.startsWith(String(settings.yearFilter)));
-    pool=pool.map(p=>({...p,_od:overdueDays(p,settings)||0,_score:followUpScore(p,settings,gcWR.get(p.gc)),_gcWR:gcWR.get(p.gc)}));
-    if(filter==='overdue') pool=pool.filter(p=>p._od>0);
+    pool=pool.map(p=>{
+      const od=overdueDays(p,settings)||0;
+      const naOD=p.nextActionDate&&p.nextActionDate<=today?Math.round((new Date(today)-new Date(p.nextActionDate))/86400000)+1:0;
+      return{...p,_od:od,_naOD:naOD,_score:followUpScore(p,settings,gcWR.get(p.gc))+(naOD*5000),_gcWR:gcWR.get(p.gc)};
+    });
+    if(filter==='overdue') pool=pool.filter(p=>p._od>0||p._naOD>0);
     else if(filter==='large') pool=pool.filter(p=>p.bidAmount>=100000);
     else if(filter==='highWR') pool=pool.filter(p=>p._gcWR!==null&&p._gcWR>=0.5);
     return pool.sort((a,b)=>b._score-a._score);
-  },[proposals,settings,filter,gcWR]);
-  const openLog=(id,e)=>{e.stopPropagation();setLogOpen(id);setLogNote('');setTimeout(()=>logRef.current?.focus(),50);};
-  const submitLog=(id)=>{onMarkContacted(id,logNote.trim());setLogOpen(null);setLogNote('');};
+  },[proposals,settings,filter,gcWR,today]);
+  const openLog=(id,e)=>{e.stopPropagation();const p=proposals.find(x=>x.id===id);setLogOpen(id);setLogNote('');setLogNextAction(p?.nextAction||'');setLogNextDate(p?.nextActionDate||'');setTimeout(()=>logRef.current?.focus(),50);};
+  const submitLog=(id)=>{
+    const p=proposals.find(x=>x.id===id);
+    onMarkContacted(id,logNote.trim());
+    if(logNextAction.trim()||logNextDate){onSaveProposal({...p,nextAction:logNextAction.trim(),nextActionDate:logNextDate||null});}
+    setLogOpen(null);setLogNote('');setLogNextAction('');setLogNextDate('');
+  };
   return (
     <div className="space-y-4">
       <div className="bg-gradient-to-br from-rose-50 to-amber-50 border border-rose-200 px-5 py-4">
@@ -2458,7 +2527,8 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
                   {p._od>0&&<span className="inline-flex items-center gap-1 text-rose-700 font-semibold text-xs"><Ico n="clock" size={13}/>{p._od}d overdue</span>}
                   {p._gcWR!==null&&<span className="text-xs text-stone-500">GC WR <span className={p._gcWR>=0.5?'text-emerald-700 font-semibold':'text-stone-700'}>{pct(p._gcWR)}</span></span>}
                 </div>
-                {p.notes&&<div className="text-xs text-stone-500 mt-1.5 line-clamp-1 italic">{p.notes.split('\n')[0]}</div>}
+                {p.nextAction&&<div className="flex items-center gap-1.5 mt-1.5"><Ico n="arrowRight" size={11} className={p._naOD>0?'text-rose-600':'text-sky-600'}/><span className={`text-xs font-medium ${p._naOD>0?'text-rose-700':'text-sky-700'}`}>{p.nextAction}</span>{p.nextActionDate&&<span className={`text-[10px] font-mono ${p._naOD>0?'text-rose-600':'text-stone-400'}`}>· {p._naOD>0?`${p._naOD}d overdue`:p.nextActionDate===today?'Today':`${Math.round((new Date(p.nextActionDate)-new Date(today))/86400000)}d`}</span>}</div>}
+                {p.notes&&<div className="text-xs text-stone-500 mt-1 line-clamp-1 italic">{p.notes.split('\n')[0]}</div>}
               </button>
               <button onClick={e=>openLog(p.id,e)} className={`px-4 border-l border-stone-200 transition-colors text-sm flex items-center gap-1.5 flex-shrink-0 ${logOpen===p.id?'bg-emerald-50 text-emerald-800':'hover:bg-emerald-50 hover:text-emerald-800 text-stone-600'}`}>
                 <Ico n="check2" size={15}/><span className="hidden md:inline text-xs font-medium">Log Call</span>
@@ -2467,9 +2537,16 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
             {logOpen===p.id&&(
               <div className="border-t border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center gap-2" onClick={e=>e.stopPropagation()}>
                 <Ico n="phone" size={15} className="text-emerald-700 flex-shrink-0"/>
-                <input ref={logRef} value={logNote} onChange={e=>setLogNote(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')submitLog(p.id);if(e.key==='Escape')setLogOpen(null);}} placeholder="What happened? e.g. Left VM, emailed pricing, discussed scope… (Enter to save)" className="flex-1 px-3 py-1.5 text-sm border border-emerald-300 bg-white rounded-sm focus:outline-none focus:border-emerald-600"/>
-                <button onClick={()=>submitLog(p.id)} className="px-3 py-1.5 text-sm bg-emerald-700 text-white rounded-sm hover:bg-emerald-800 flex-shrink-0">Save</button>
-                <button onClick={()=>setLogOpen(null)} className="text-stone-500 hover:text-stone-700"><Ico n="x" size={15}/></button>
+                <div className="flex-1 flex flex-col gap-1.5">
+                  <input ref={logRef} value={logNote} onChange={e=>setLogNote(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')submitLog(p.id);if(e.key==='Escape')setLogOpen(null);}} placeholder="What happened? e.g. Left VM, emailed pricing, discussed scope…" className="w-full px-3 py-1.5 text-sm border border-emerald-300 bg-white rounded-sm focus:outline-none focus:border-emerald-600"/>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-emerald-800 font-semibold whitespace-nowrap">Next action:</span>
+                    <input value={logNextAction} onChange={e=>setLogNextAction(e.target.value)} placeholder="e.g. Follow up on revised scope" className="flex-1 px-2 py-1 text-xs border border-emerald-200 bg-white rounded-sm focus:outline-none focus:border-emerald-500"/>
+                    <input type="date" value={logNextDate} onChange={e=>setLogNextDate(e.target.value)} className="text-xs px-2 py-1 border border-emerald-200 bg-white rounded-sm focus:outline-none focus:border-emerald-500"/>
+                  </div>
+                </div>
+                <button onClick={()=>submitLog(p.id)} className="px-3 py-1.5 text-sm bg-emerald-700 text-white rounded-sm hover:bg-emerald-800 flex-shrink-0 self-start">Save</button>
+                <button onClick={()=>setLogOpen(null)} className="text-stone-500 hover:text-stone-700 self-start"><Ico n="x" size={15}/></button>
               </div>
             )}
           </div>
@@ -3359,8 +3436,17 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
               <Fld label="Contract Amount" value={draft.contractAmount} edit={edit} type="number" onChange={v=>setDraft({...draft,contractAmount:v?Number(v):null})} render={money}/>
               <Fld label="Owner" value={draft.owner} edit={edit} onChange={v=>setDraft({...draft,owner:v})}/>
               <Fld label="SharePoint / Folder" value={draft.sharepoint||''} edit={edit} onChange={v=>setDraft({...draft,sharepoint:v})} render={v=>v?<a href={v} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline inline-flex items-center gap-1">Open <Ico n="extLink" size={11}/></a>:'—'}/>
+              <Fld label="Next Action" value={draft.nextAction||''} edit={edit} onChange={v=>setDraft({...draft,nextAction:v})} render={v=>v||<span className="text-stone-400 italic text-xs">None set</span>}/>
+              <Fld label="Next Action Date" value={draft.nextActionDate||''} edit={edit} type="date" onChange={v=>setDraft({...draft,nextActionDate:v||null})} render={v=>v?<span className={`font-mono text-sm ${v<todayStr()?'text-rose-700 font-semibold':''}`}>{formatDate(v)}</span>:'—'}/>
+              {LOST_STATUSES_SET.has(draft.status)&&<div className="col-span-2"><div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Lost Reason</div>
+                {edit?<select value={draft.lostReason||''} onChange={e=>setDraft({...draft,lostReason:e.target.value||null})} className="w-full px-2 py-1 text-sm border border-stone-300 bg-white rounded-sm focus:outline-none focus:border-stone-600"><option value="">— Select —</option>{LOST_REASONS.map(r=><option key={r} value={r}>{r}</option>)}</select>:<div className="text-sm text-stone-900">{draft.lostReason||<span className="text-amber-700 font-medium text-xs">Not recorded — use quick buttons below</span>}</div>}
+              </div>}
             </div>
           </section>
+          {LOST_STATUSES_SET.has(proposal.status)&&!proposal.lostReason&&<div className="bg-rose-50 border border-rose-200 px-4 py-3">
+            <div className="text-xs font-semibold text-rose-800 mb-2 uppercase tracking-widest">Why was this lost? (quick record)</div>
+            <div className="flex gap-2 flex-wrap">{LOST_REASONS.map(r=><button key={r} onClick={()=>onSave({...proposal,lostReason:r})} className="text-sm px-3 py-1 bg-white border border-rose-200 text-rose-800 rounded-full hover:bg-rose-100 hover:border-rose-400 transition-colors">{r}</button>)}</div>
+          </div>}
           <section className="bg-white border border-stone-200">
             <div className="px-4 py-2.5 border-b border-stone-200 bg-stone-50"><h3 className="font-serif text-base text-stone-800">Activity & notes</h3></div>
             <div className="p-4 space-y-3">
@@ -3971,8 +4057,8 @@ function App() {
       {}
       <main className="px-5 py-5" style={{maxWidth:'1600px',margin:'0 auto'}}>
         {view==='dashboard'&&<DashboardView proposals={proposals} settings={settings} gcStats={gcStats} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
-        {view==='pipeline'&&<PipelineView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings}/>}
-        {view==='followups'&&<FollowUpsView proposals={proposals} settings={settings} gcStats={gcStats} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted}/>}
+        {view==='pipeline'&&<PipelineView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
+        {view==='followups'&&<FollowUpsView proposals={proposals} settings={settings} gcStats={gcStats} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted} onSaveProposal={saveProposal}/>}
         {view==='gcs'&&!selectedGC&&<GCIntelView gcStats={gcStats} proposals={proposals} onSelectGC={setSelectedGC} settings={settings}/>}
         {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
         {view==='active'&&<ActiveJobsView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings}/>}
