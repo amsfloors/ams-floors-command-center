@@ -2281,63 +2281,64 @@ const DashboardView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onN
     const won=filtered.filter(p=>WON_STATUSES.includes(p.status));
     const lost=filtered.filter(p=>LOST_STATUSES.includes(p.status));
     const overdue=open.filter(p=>(overdueDays(p,settings)||0)>0);
+    const nextActionDue=open.filter(p=>p.nextActionDate&&p.nextActionDate<=todayStr());
     const settled=won.length+lost.length;
-    return{openCount:open.length,openValue:open.reduce((s,p)=>s+(p.bidAmount||0),0),awardedValue:won.reduce((s,p)=>s+(p.contractAmount||p.bidAmount||0),0),awardedCount:won.length,winRate:settled>0?won.length/settled:null,overdueCount:overdue.length,overdueValue:overdue.reduce((s,p)=>s+(p.bidAmount||0),0)};
+    const wonWithMargin=won.filter(p=>(p.estMaterial||0)+(p.estLabor||0)>0);
+    const avgMargin=wonWithMargin.length?wonWithMargin.reduce((s,p)=>{const c=p.contractAmount||p.bidAmount||0;const cost=(p.estMaterial||0)+(p.estLabor||0);return s+(c>0?(c-cost)/c:0);},0)/wonWithMargin.length:null;
+    return{openCount:open.length,openValue:open.reduce((s,p)=>s+(p.bidAmount||0),0),awardedValue:won.reduce((s,p)=>s+(p.contractAmount||p.bidAmount||0),0),awardedCount:won.length,winRate:settled>0?won.length/settled:null,overdueCount:overdue.length,overdueValue:overdue.reduce((s,p)=>s+(p.bidAmount||0),0),nextActionDue:nextActionDue.length,avgMargin};
   },[filtered,settings]);
   const topFollowUps=useMemo(()=>{
     const gcWR=new Map(gcStats.map(g=>[g.gc,g.winRate]));
-    return filtered.filter(p=>OPEN_STATUSES.includes(p.status)).map(p=>({...p,_od:overdueDays(p,settings)||0,_score:followUpScore(p,settings,gcWR.get(p.gc))})).sort((a,b)=>b._score-a._score).slice(0,8);
+    return filtered.filter(p=>OPEN_STATUSES.includes(p.status)).map(p=>({...p,_od:overdueDays(p,settings)||0,_naOD:p.nextActionDate&&p.nextActionDate<=todayStr()?1:0,_score:followUpScore(p,settings,gcWR.get(p.gc))})).sort((a,b)=>b._score-a._score).slice(0,8);
   },[filtered,settings,gcStats]);
-  const topGCs=useMemo(()=>[...gcStats].filter(g=>filtered.some(p=>p.gc===g.gc)).sort((a,b)=>b.openValue-a.openValue).slice(0,8),[gcStats,filtered]);
   const insights=useMemo(()=>{
     const out=[];
-    if(kpis.overdueCount>0) out.push({severity:'critical',icon:'phone',title:`${kpis.overdueCount} follow-ups overdue · ${money(kpis.overdueValue,true)} at stake`,body:`Bids past SLA with no logged contact. Queue sorted by $ × days overdue × win-rate.`,action:'Open Follow-Up Queue',onAction:()=>onNavigate('followups')});
-    const hwr=gcStats.filter(g=>g.winRate!==null&&g.winRate>=0.7&&g.openValue>50000).sort((a,b)=>b.openValue-a.openValue)[0];
-    if(hwr) out.push({severity:'opp',icon:'target',title:`${hwr.gc} — ${pct(hwr.winRate)} win rate, ${money(hwr.openValue,true)} open`,body:`You win ${hwr.won}/${hwr.won+hwr.lost} bids with ${hwr.gc}. Push open bids hard.`,action:'View GC scorecard',onAction:()=>onSelectGC(hwr.gc)});
-    const leak=gcStats.filter(g=>g.winRate!==null&&g.winRate<=0.1&&(g.won+g.lost)>=2&&g.openValue>50000).sort((a,b)=>b.openValue-a.openValue)[0];
-    if(leak) out.push({severity:'warn',icon:'trendDown',title:`${leak.gc} — ${pct(leak.winRate)} win rate, ${money(leak.openValue,true)} still bidding`,body:`You've won ${leak.won} of ${leak.won+leak.lost} settled bids. Consider raising the bar.`,action:'View GC scorecard',onAction:()=>onSelectGC(leak.gc)});
+    // Only surface insights where something NEEDS attention
+    if(kpis.overdueCount>0) out.push({severity:'critical',icon:'phone',title:`${kpis.overdueCount} follow-up${kpis.overdueCount>1?'s':''} overdue · ${money(kpis.overdueValue,true)} at stake`,body:`Bids past SLA with no logged contact. Sorted by $ × days × win-rate.`,action:'Open Call Queue',onAction:()=>onNavigate('followups')});
+    if(kpis.nextActionDue>0&&kpis.overdueCount===0) out.push({severity:'warn',icon:'arrowRight',title:`${kpis.nextActionDue} next action${kpis.nextActionDue>1?'s':''} due today`,body:`Scheduled follow-ups are waiting. Check the Follow-Up queue.`,action:'Open Queue',onAction:()=>onNavigate('followups')});
+    const hwr=gcStats.filter(g=>g.winRate!==null&&g.winRate>=0.6&&(g.won+g.lost)>=3&&g.openValue>50000).sort((a,b)=>b.openValue-a.openValue)[0];
+    if(hwr) out.push({severity:'opp',icon:'target',title:`${hwr.gc} — ${pct(hwr.winRate)} WR, ${money(hwr.openValue,true)} open`,body:`High win-rate GC with open bids. Push these hard.`,action:'View scorecard',onAction:()=>onSelectGC(hwr.gc)});
+    const leak=gcStats.filter(g=>g.winRate!==null&&g.winRate===0&&(g.won+g.lost)>=3&&g.openValue>50000).sort((a,b)=>b.openValue-a.openValue)[0];
+    if(leak) out.push({severity:'warn',icon:'trendDown',title:`${leak.gc} — 0% win rate, ${money(leak.openValue,true)} still open`,body:`0 wins from ${leak.won+leak.lost} bids. Question whether to keep pursuing.`,action:'View scorecard',onAction:()=>onSelectGC(leak.gc)});
     const wonNoCost=filtered.filter(p=>WON_STATUSES.includes(p.status)&&!p.estMaterial&&!p.estLabor);
-    if(wonNoCost.length) out.push({severity:'warn',icon:'alertTri',title:`${wonNoCost.length} active jobs · no cost data entered`,body:`Margin tracking is blind without estimated material + labor. Enter line items in each project drawer.`,action:'View Active Jobs',onAction:()=>onNavigate('active')});
+    if(wonNoCost.length) out.push({severity:'warn',icon:'alertTri',title:`${wonNoCost.length} awarded job${wonNoCost.length>1?'s':''} · no cost data`,body:`Import Peter's bidsheet or enter estimates to enable margin tracking.`,action:'View Active Jobs',onAction:()=>onNavigate('active')});
     return out;
-  },[filtered,gcStats,kpis,settings,onNavigate,onSelectGC,onSelectProposal]);
+  },[filtered,gcStats,kpis,settings,onNavigate,onSelectGC]);
   return (
     <div className="space-y-6">
+      {/* KPI row — 4 cards, all clickable */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <KPICard label="Open Pipeline" value={money(kpis.openValue,true)} sublabel={`${kpis.openCount} active bids`} accent="bronze" icon="flame" onClick={()=>onNavigate('pipeline')}/>
-        <KPICard label="Awarded Value" value={money(kpis.awardedValue,true)} sublabel={`${kpis.awardedCount} projects awarded`} accent="green" icon="check2" onClick={()=>onNavigate('active')}/>
-        <KPICard label="Follow-Ups Overdue" value={String(kpis.overdueCount)} sublabel={`${money(kpis.overdueValue,true)} at stake`} accent="rose" icon="phone" onClick={()=>onNavigate('followups')}/>
-        <KPICard label="Win Rate" value={kpis.winRate!==null?pct(kpis.winRate):'—'} sublabel="of settled bids" accent="blue" icon="trendUp" onClick={()=>onNavigate('gcs')}/>
+        <KPICard label="Awarded Value" value={money(kpis.awardedValue,true)} sublabel={`${kpis.awardedCount} projects`} accent="green" icon="check2" onClick={()=>onNavigate('active')}/>
+        <KPICard label={kpis.overdueCount>0?`${kpis.overdueCount} Overdue`:'Follow-Ups'} value={kpis.overdueCount>0?money(kpis.overdueValue,true):kpis.nextActionDue>0?`${kpis.nextActionDue} due today`:'All clear'} sublabel={kpis.overdueCount>0?'past SLA — act now':kpis.nextActionDue>0?'next actions today':'no overdue follow-ups'} accent={kpis.overdueCount>0?'rose':kpis.nextActionDue>0?'amber':'green'} icon="phone" onClick={()=>onNavigate('followups')}/>
+        <KPICard label="Win Rate" value={kpis.winRate!==null?pct(kpis.winRate):'—'} sublabel={kpis.avgMargin!==null?`avg margin ${pct(kpis.avgMargin,0)}`:'of settled bids'} accent="blue" icon="trendUp" onClick={()=>onNavigate('gcs')}/>
       </div>
-      {insights.length>0&&<div><h2 className="font-serif text-xl text-stone-800 mb-3 flex items-center gap-2"><Ico n="zap" className="text-orange-700"/>What needs your attention</h2><div className="grid md:grid-cols-2 gap-3">{insights.map((ins,i)=><InsightCard key={i} {...ins}/>)}</div></div>}
-      <div className="grid lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-white border border-stone-200">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-stone-200"><h3 className="font-serif text-lg text-stone-800">Top Follow-Up Queue</h3><button onClick={()=>onNavigate('followups')} className="text-xs text-stone-500 hover:text-stone-900 inline-flex items-center gap-1">View all <Ico n="chevRight" size={12}/></button></div>
-          <table className="w-full text-sm">
-            <thead><tr className="bg-stone-50"><TH>Project</TH><TH>GC</TH><TH className="text-right">Bid</TH><TH>Status</TH><TH className="text-right">Overdue</TH></tr></thead>
-            <tbody>
-              {topFollowUps.map(p=>(
-                <tr key={p.id} className="border-b border-stone-100 hover:bg-stone-50 cursor-pointer" onClick={()=>onSelectProposal(p.id)}>
-                  <td className="px-3 py-2.5"><div className="font-medium text-stone-900 truncate">{p.project||'—'}</div><div className="text-xs text-stone-500">#{p.id}·{p.location||'—'}</div></td>
-                  <td className="px-3 py-2.5"><button onClick={e=>{e.stopPropagation();onSelectGC(p.gc);}} className="text-stone-700 hover:text-orange-800 hover:underline truncate block">{p.gc||'—'}</button></td>
-                  <td className="px-3 py-2.5 text-right whitespace-nowrap"><MoneyCell amount={p.bidAmount} compact/></td>
-                  <td className="px-3 py-2.5"><StatusPill status={p.status}/></td>
-                  <td className="px-3 py-2.5 text-right">{p._od>0?<span className="font-mono text-rose-700 font-semibold">+{p._od}d</span>:<span className="font-mono text-stone-400 text-xs">ok</span>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* Insights — only appear when something needs attention */}
+      {insights.length>0&&<div><h2 className="font-serif text-lg text-stone-800 mb-2 flex items-center gap-2"><Ico n="zap" size={16} className="text-orange-700"/>What needs your attention</h2><div className="grid md:grid-cols-2 gap-3">{insights.map((ins,i)=><InsightCard key={i} {...ins}/>)}</div></div>}
+      {/* Follow-up queue — main operational surface */}
+      <div className="bg-white border border-stone-200">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-stone-200">
+          <h3 className="font-serif text-lg text-stone-800">Priority Follow-Up Queue</h3>
+          <button onClick={()=>onNavigate('followups')} className="text-xs text-stone-500 hover:text-stone-900 inline-flex items-center gap-1">Full queue <Ico n="chevRight" size={12}/></button>
         </div>
-        <div className="bg-white border border-stone-200">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-stone-200"><h3 className="font-serif text-lg text-stone-800">Top GCs · Open</h3><button onClick={()=>onNavigate('gcs')} className="text-xs text-stone-500 hover:text-stone-900 inline-flex items-center gap-1">All <Ico n="chevRight" size={12}/></button></div>
-          <div className="divide-y divide-stone-100">
-            {topGCs.map((g,i)=>(
-              <button key={g.gc} onClick={()=>onSelectGC(g.gc)} className="w-full text-left px-4 py-3 hover:bg-stone-50 flex items-center justify-between group">
-                <div className="min-w-0 flex-1"><div className="flex items-baseline gap-2"><span className="text-stone-400 font-mono text-[10px]">{String(i+1).padStart(2,'0')}</span><span className="font-medium text-stone-900 truncate group-hover:text-orange-800">{g.gc}</span></div><div className="text-xs text-stone-500">{g.proposals} bids · WR {g.winRate!==null?pct(g.winRate):'—'}</div></div>
-                <MoneyCell amount={g.openValue} compact className="font-semibold text-stone-900 ml-3 flex-shrink-0"/>
-              </button>
+        <table className="w-full text-sm">
+          <thead><tr className="bg-stone-50"><TH>Project</TH><TH>GC</TH><TH className="text-right">Bid</TH><TH>Status</TH><TH>Next Action</TH><TH className="text-right">Age</TH></tr></thead>
+          <tbody>
+            {topFollowUps.length===0&&<tr><td colSpan={6}><Empty icon="check2" title="Nothing overdue" body="All follow-ups are within SLA."/></td></tr>}
+            {topFollowUps.map(p=>(
+              <tr key={p.id} className="border-b border-stone-100 hover:bg-stone-50 cursor-pointer" onClick={()=>onSelectProposal(p.id)}>
+                <td className="px-3 py-2.5"><div className="font-medium text-stone-900 truncate max-w-[160px]">{p.project||'—'}</div><div className="text-xs text-stone-500 truncate">#{p.id}·{p.location||'—'}</div></td>
+                <td className="px-3 py-2.5"><button onClick={e=>{e.stopPropagation();onSelectGC(p.gc);}} className="text-stone-700 hover:text-orange-800 hover:underline truncate block max-w-[140px]">{p.gc||'—'}</button></td>
+                <td className="px-3 py-2.5 text-right whitespace-nowrap"><MoneyCell amount={p.bidAmount} compact/></td>
+                <td className="px-3 py-2.5"><StatusPill status={p.status} size="xs"/></td>
+                <td className="px-3 py-2.5">
+                  {p.nextAction?<div><div className={`text-xs font-medium truncate max-w-[130px] ${p._naOD?'text-rose-700':'text-sky-700'}`}>{p.nextAction}</div>{p.nextActionDate&&<div className={`text-[10px] font-mono ${p._naOD?'text-rose-600':'text-stone-400'}`}>{p._naOD?'overdue':p.nextActionDate===todayStr()?'Today':''}</div>}</div>:<span className="text-[10px] text-stone-300 italic">—</span>}
+                </td>
+                <td className="px-3 py-2.5 text-right">{p._od>0?<span className="font-mono text-rose-700 font-semibold text-xs">+{p._od}d</span>:<span className="font-mono text-stone-400 text-xs">{daysSince(p.submitted)||0}d</span>}</td>
+              </tr>
             ))}
-          </div>
-        </div>
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -2654,12 +2655,94 @@ const GCDetailView=({gc,proposals,gcStats,onBack,onSelectProposal,settings})=>{
 };
 
 
-const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings})=>{
+const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProposal})=>{
+  const [editingActual,setEditingActual]=useState(null); // {id, field}
+  const [editVal,setEditVal]=useState('');
   const jobs=useMemo(()=>{
     let p=proposals.filter(x=>WON_STATUSES.includes(x.status));
     if(settings.yearFilter!=='All') p=p.filter(x=>x.submitted&&x.submitted.startsWith(String(settings.yearFilter)));
     return p.map(x=>({...x,_em:estMargin(x),_am:actMargin(x),_contract:x.contractAmount||x.bidAmount||0,_ec:(x.estMaterial||0)+(x.estLabor||0)+(x.estOther||0),_ac:(x.actMaterial||0)+(x.actLabor||0)+(x.actOther||0)})).sort((a,b)=>b._contract-a._contract);
   },[proposals,settings.yearFilter]);
+  const startEdit=(j,field,e)=>{e.stopPropagation();setEditingActual({id:j.id,field});setEditVal(String(j[field]||''));};
+  const commitEdit=(j)=>{
+    const v=parseFloat(editVal)||0;
+    onSaveProposal({...j,[editingActual.field]:v,actMaterial:editingActual.field==='actMaterial'?v:(j.actMaterial||0),actLabor:editingActual.field==='actLabor'?v:(j.actLabor||0)});
+    setEditingActual(null);
+  };
+  const ActualCell=({job,field,label})=>{
+    const isEditing=editingActual&&editingActual.id===job.id&&editingActual.field===field;
+    const val=job[field]||0;
+    const est=field==='actMaterial'?job.estMaterial:job.estLabor;
+    const over=val>0&&est>0&&val>est;
+    if(isEditing) return(
+      <td className="px-2 py-1.5" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center gap-1">
+          <span className="text-[9px] text-stone-400 uppercase">{label}</span>
+          <input autoFocus type="number" value={editVal} onChange={e=>setEditVal(e.target.value)}
+            onBlur={()=>commitEdit(job)} onKeyDown={e=>{if(e.key==='Enter')commitEdit(job);if(e.key==='Escape')setEditingActual(null);}}
+            className="w-20 px-1.5 py-0.5 text-xs font-mono border border-sky-400 rounded-sm focus:outline-none bg-sky-50" step="100"/>
+        </div>
+      </td>
+    );
+    return(
+      <td className="px-3 py-2.5 text-right cursor-pointer group" onClick={e=>startEdit(job,field,e)} title={`Click to enter actual ${label}`}>
+        {val>0?<span className={`font-mono text-xs ${over?'text-rose-700 font-semibold':''}`}>{money(val)}{over&&<span className="ml-1 text-[9px]">↑</span>}</span>
+              :<span className="text-[10px] text-stone-300 group-hover:text-sky-600 italic">enter</span>}
+      </td>
+    );
+  };
+  return (
+    <div className="space-y-4">
+      <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 px-5 py-4 flex items-start gap-3">
+        <Ico n="barChart" size={18} className="text-emerald-700 mt-1"/>
+        <div>
+          <h2 className="font-serif text-2xl text-stone-900">Active Jobs · Margin Watch</h2>
+          <p className="text-sm text-stone-700 mt-1">{jobs.length} awarded · <strong>{money(jobs.reduce((s,j)=>s+j._contract,0),true)}</strong> contract value
+            {jobs.filter(j=>j._ec===0).length>0&&<span className="text-rose-700 ml-2">· {jobs.filter(j=>j._ec===0).length} missing cost data</span>}
+            <span className="text-stone-500 ml-2 text-xs">· Click <em>Actual Mat</em> / <em>Actual Lab</em> cells to enter David's real costs</span>
+          </p>
+        </div>
+      </div>
+      <div className="bg-white border border-stone-200 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead><tr className="bg-stone-50">
+            <TH>Project</TH><TH>GC</TH>
+            <TH className="text-right">Contract</TH>
+            <TH className="text-right">Est. Cost</TH>
+            <TH className="text-right text-sky-700">Actual Mat ✎</TH>
+            <TH className="text-right text-sky-700">Actual Lab ✎</TH>
+            <TH className="text-right">Est. Margin</TH>
+            <TH className="text-right">Act. Margin</TH>
+            <TH>Status</TH>
+            <TH>Health</TH>
+          </tr></thead>
+          <tbody>
+            {jobs.length===0&&<tr><td colSpan={10}><Empty icon="check2" title="No awarded projects" body="Projects with Won / Active / Complete status appear here."/></td></tr>}
+            {jobs.map(j=>{
+              let health={label:'No data',color:'text-stone-400 bg-stone-100',icon:'alertCirc'};
+              if(j._am!==null){if(j._am<settings.riskMarginFloor)health={label:'At risk',color:'text-rose-800 bg-rose-100',icon:'alertTri'};else if(j._am>=settings.targetMargin)health={label:'On target',color:'text-emerald-800 bg-emerald-100',icon:'check2'};else health={label:'Below target',color:'text-amber-800 bg-amber-100',icon:'clock'};}
+              else if(j._em!==null){if(j._em<settings.riskMarginFloor)health={label:'Est. at risk',color:'text-rose-700 bg-rose-50',icon:'alertTri'};else if(j._em>=settings.targetMargin)health={label:'Est. on target',color:'text-emerald-700 bg-emerald-50',icon:'check2'};else health={label:'Est. below',color:'text-amber-700 bg-amber-50',icon:'clock'};}
+              return(
+                <tr key={j.id} className="border-b border-stone-100 hover:bg-stone-50/50 cursor-pointer" onClick={()=>onSelectProposal(j.id)}>
+                  <td className="px-3 py-2.5 overflow-hidden"><div className="font-medium text-stone-900 truncate">{j.project}</div><div className="flex items-center gap-1.5 text-xs text-stone-500 mt-0.5">#{j.id}·{j.location}{j.pm&&<span className="text-[9px] px-1.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-full font-medium">PM: {j.pm}</span>}</div></td>
+                  <td className="px-3 py-2.5"><button onClick={e=>{e.stopPropagation();onSelectGC(j.gc);}} className="text-stone-700 hover:text-orange-800 hover:underline">{j.gc}</button></td>
+                  <td className="px-3 py-2.5 text-right font-semibold whitespace-nowrap"><MoneyCell amount={j._contract}/></td>
+                  <td className="px-3 py-2.5 text-right text-stone-600 whitespace-nowrap">{j._ec?<MoneyCell amount={j._ec}/>:<span className="text-stone-300 text-xs">—</span>}</td>
+                  <ActualCell job={j} field="actMaterial" label="Mat"/>
+                  <ActualCell job={j} field="actLabor" label="Lab"/>
+                  <td className="px-3 py-2.5 text-right font-mono text-xs">{j._em!==null?<span className={j._em<settings.riskMarginFloor?'text-rose-600':j._em>=settings.targetMargin?'text-emerald-700':'text-amber-700'}>{pct(j._em,1)}</span>:'—'}</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold">{j._am!==null?<span className={j._am>=settings.targetMargin?'text-emerald-700':j._am<settings.riskMarginFloor?'text-rose-700':'text-amber-700'}>{pct(j._am,1)}</span>:<span className="text-stone-400">—</span>}</td>
+                  <td className="px-3 py-2.5"><StatusPill status={j.status} size="xs"/></td>
+                  <td className="px-3 py-2.5"><span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold ${health.color}`}><Ico n={health.icon} size={11}/>{health.label}</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
   return (
     <div className="space-y-4">
       <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 px-5 py-4 flex items-start gap-3"><Ico n="barChart" size={18} className="text-emerald-700 mt-1"/>
@@ -4356,7 +4439,7 @@ function App() {
         {view==='followups'&&<FollowUpsView proposals={proposals} settings={settings} gcStats={gcStats} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted} onSaveProposal={saveProposal}/>}
         {view==='gcs'&&!selectedGC&&<GCIntelView gcStats={gcStats} proposals={proposals} onSelectGC={setSelectedGC} settings={settings}/>}
         {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
-        {view==='active'&&<ActiveJobsView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings}/>}
+        {view==='active'&&<ActiveJobsView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
         {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onImport={handleImport} onExport={handleExport} importStatus={importStatus} setShowNewProject={setShowNewProject}/>}
       </main>
 
