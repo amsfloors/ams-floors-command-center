@@ -2398,6 +2398,7 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
   const [search,setSearch]=useState('');
   const [statusF,setStatusF]=useState('all');
   const [gcF,setGcF]=useState('all');
+  const [roleF,setRoleF]=useState('all');
   const [sortBy,setSortBy]=useState('submitted_desc');
   const allGCs=useMemo(()=>Array.from(new Set(proposals.map(p=>p.gc).filter(Boolean))).sort(),[proposals]);
   const filtered=useMemo(()=>{
@@ -2408,6 +2409,9 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
     else if(statusF==='lost') out=out.filter(p=>LOST_STATUSES.includes(p.status));
     else if(statusF!=='all') out=out.filter(p=>p.status===statusF);
     if(gcF!=='all') out=out.filter(p=>p.gc===gcF);
+    if(roleF==='Peter') out=out.filter(p=>(p.estimator||p.owner)==='Peter');
+    else if(roleF==='Paul') out=out.filter(p=>(p.bdOwner||p.owner)==='Paul');
+    else if(roleF==='David') out=out.filter(p=>p.pm==='David');
     if(search.trim()){const q=search.toLowerCase();out=out.filter(p=>(p.project||'').toLowerCase().includes(q)||(p.gc||'').toLowerCase().includes(q)||(p.location||'').toLowerCase().includes(q)||(p.contact||'').toLowerCase().includes(q)||String(p.id).includes(q));}
     const sorted=[...out];
     if(sortBy==='submitted_desc') sorted.sort((a,b)=>(b.submitted||'').localeCompare(a.submitted||''));
@@ -2417,7 +2421,7 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
     else if(sortBy==='gc') sorted.sort((a,b)=>(a.gc||'').localeCompare(b.gc||''));
     else if(sortBy==='status') sorted.sort((a,b)=>(STATUS_CONFIG[a.status]?.order||99)-(STATUS_CONFIG[b.status]?.order||99));
     return sorted;
-  },[proposals,search,statusF,gcF,sortBy,settings.yearFilter]);
+  },[proposals,search,statusF,gcF,roleF,sortBy,settings.yearFilter]);
   return (
     <div className="space-y-3">
       <div className="bg-white border border-stone-200 px-3 py-2 flex flex-wrap items-center gap-2">
@@ -2427,6 +2431,7 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
         </div>
         <select value={statusF} onChange={e=>setStatusF(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none"><option value="all">All statuses</option><option value="open">Open</option><option value="awarded">Awarded</option><option value="lost">Lost/Dead</option>{ALL_STATUSES.map(s=><option key={s} value={s}>{s}</option>)}</select>
         <select value={gcF} onChange={e=>setGcF(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none" style={{maxWidth:'180px'}}><option value="all">All GCs</option>{allGCs.map(g=><option key={g} value={g}>{g}</option>)}</select>
+        <select value={roleF} onChange={e=>setRoleF(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none"><option value="all">All people</option><option value="Peter">Peter (Est.)</option><option value="Paul">Paul (BD)</option><option value="David">David (PM)</option></select>
         <select value={sortBy} onChange={e=>setSortBy(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none"><option value="submitted_desc">Newest first</option><option value="submitted_asc">Oldest first</option><option value="amount_desc">$ high→low</option><option value="amount_asc">$ low→high</option><option value="gc">GC A→Z</option><option value="status">Status</option></select>
         <div className="text-xs text-stone-600 ml-auto whitespace-nowrap"><span className="font-mono font-semibold">{filtered.length}</span> rows · <span className="font-mono font-semibold">{money(filtered.reduce((s,p)=>s+(p.bidAmount||0),0),true)}</span></div>
       </div>
@@ -2446,7 +2451,14 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
                   <td className="px-3 py-2 font-mono text-stone-500 text-[10px] overflow-hidden">{p.id}</td>
                   <td className="px-3 py-2 overflow-hidden"><div className="font-medium text-stone-900 truncate">{p.project||'—'}</div><div className="text-xs text-stone-500 truncate">{p.location||'—'}</div></td>
                   <td className="px-3 py-2 overflow-hidden"><button onClick={e=>{e.stopPropagation();onSelectGC(p.gc);}} className="text-stone-700 hover:text-orange-800 hover:underline truncate block w-full text-left">{p.gc||'—'}</button></td>
-                  <td className="px-3 py-2 text-stone-600 overflow-hidden truncate">{p.contact||'—'}</td>
+                  <td className="px-3 py-2 overflow-hidden">
+                    <div className="text-stone-600 truncate text-sm">{p.contact||'—'}</div>
+                    <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                      {(p.estimator||p.owner)&&<span title="Estimator" className="text-[9px] px-1.5 py-0 bg-sky-50 text-sky-700 border border-sky-100 rounded-full font-medium">{(p.estimator||p.owner)[0]}est</span>}
+                      {(p.bdOwner||p.owner)&&<span title="BD Owner" className="text-[9px] px-1.5 py-0 bg-amber-50 text-amber-700 border border-amber-100 rounded-full font-medium">{(p.bdOwner||p.owner)[0]}bd</span>}
+                      {p.pm&&<span title="Project Manager" className="text-[9px] px-1.5 py-0 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-full font-medium">{p.pm[0]}pm</span>}
+                    </div>
+                  </td>
                   <td className="px-3 py-2 text-stone-600 whitespace-nowrap text-xs">{formatDate(p.submitted)}</td>
                   <td className="px-3 py-2 text-right whitespace-nowrap"><MoneyCell amount={p.bidAmount}/></td>
                   <td className="px-3 py-2"><StatusPill status={p.status} size="xs"/></td>
@@ -2664,7 +2676,7 @@ const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings})=>{
               else if(j._em!==null){if(j._em<settings.riskMarginFloor)health={label:'Est. at risk',color:'text-rose-700 bg-rose-50',icon:'alertTri'};else if(j._em>=settings.targetMargin)health={label:'Est. on target',color:'text-emerald-700 bg-emerald-50',icon:'check2'};else health={label:'Est. below',color:'text-amber-700 bg-amber-50',icon:'clock'};}
               return(
                 <tr key={j.id} className="border-b border-stone-100 hover:bg-stone-50 cursor-pointer" onClick={()=>onSelectProposal(j.id)}>
-                  <td className="px-3 py-2.5 overflow-hidden"><div className="font-medium text-stone-900 truncate">{j.project}</div><div className="text-xs text-stone-500">#{j.id}·{j.location}</div></td>
+                  <td className="px-3 py-2.5 overflow-hidden"><div className="font-medium text-stone-900 truncate">{j.project}</div><div className="flex items-center gap-1.5 text-xs text-stone-500 mt-0.5">{j.id}·{j.location}{j.pm&&<span className="text-[9px] px-1.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-full font-medium">PM: {j.pm}</span>}</div></td>
                   <td className="px-3 py-2.5"><button onClick={e=>{e.stopPropagation();onSelectGC(j.gc);}} className="text-stone-700 hover:text-orange-800 hover:underline">{j.gc}</button></td>
                   <td className="px-3 py-2.5 text-right font-semibold whitespace-nowrap"><MoneyCell amount={j._contract}/></td>
                   <td className="px-3 py-2.5 text-right text-stone-600 whitespace-nowrap"><MoneyCell amount={j._ec||null}/></td>
@@ -3433,7 +3445,11 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
               <FldSel label="Status" value={draft.status} edit={edit} options={ALL_STATUSES} onChange={v=>setDraft({...draft,status:v})} render={v=><StatusPill status={v}/>}/>
               <Fld label="Bid Amount" value={draft.bidAmount} edit={edit} type="number" onChange={v=>setDraft({...draft,bidAmount:v?Number(v):null})} render={money}/>
               <Fld label="Contract Amount" value={draft.contractAmount} edit={edit} type="number" onChange={v=>setDraft({...draft,contractAmount:v?Number(v):null})} render={money}/>
-              <Fld label="Owner" value={draft.owner} edit={edit} onChange={v=>setDraft({...draft,owner:v})}/>
+              <div className="col-span-2 grid grid-cols-3 gap-3">
+                <FldSel label="Estimator" value={draft.estimator||draft.owner||''} edit={edit} options={['Peter','Paul','David','Other']} onChange={v=>setDraft({...draft,estimator:v})} render={v=><span className="inline-flex items-center gap-1.5"><span className="w-5 h-5 rounded-full bg-sky-100 text-sky-800 text-[10px] font-bold flex items-center justify-center">{(v||'?')[0]}</span>{v||'—'}</span>}/>
+                <FldSel label="BD Owner" value={draft.bdOwner||draft.owner||''} edit={edit} options={['Paul','Peter','David','Other']} onChange={v=>setDraft({...draft,bdOwner:v})} render={v=><span className="inline-flex items-center gap-1.5"><span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold flex items-center justify-center">{(v||'?')[0]}</span>{v||'—'}</span>}/>
+                <FldSel label="PM (if awarded)" value={draft.pm||''} edit={edit} options={['David','Peter','Paul','Other']} onChange={v=>setDraft({...draft,pm:v})} render={v=>v?<span className="inline-flex items-center gap-1.5"><span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold flex items-center justify-center">{v[0]}</span>{v}</span>:<span className="text-stone-400 text-xs">Not assigned</span>}/>
+              </div>
               <Fld label="SharePoint / Folder" value={draft.sharepoint||''} edit={edit} onChange={v=>setDraft({...draft,sharepoint:v})} render={v=>v?<a href={v} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline inline-flex items-center gap-1">Open <Ico n="extLink" size={11}/></a>:'—'}/>
               <Fld label="Next Action" value={draft.nextAction||''} edit={edit} onChange={v=>setDraft({...draft,nextAction:v})} render={v=>v||<span className="text-stone-400 italic text-xs">None set</span>}/>
               <Fld label="Next Action Date" value={draft.nextActionDate||''} edit={edit} type="date" onChange={v=>setDraft({...draft,nextActionDate:v||null})} render={v=>v?<span className={`font-mono text-sm ${v<todayStr()?'text-rose-700 font-semibold':''}`}>{formatDate(v)}</span>:'—'}/>
@@ -3512,7 +3528,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
 
 const NewProjectModal=({onClose,onSave,allGCs,proposals})=>{
   const maxNumId=Math.max(0,...proposals.map(p=>typeof p.id==='number'?p.id:parseInt(p.id)||0));
-  const [draft,setDraft]=useState({project:'',location:'',gc:'',contact:'',email:'',phone:'',submitted:todayStr(),bidAmount:'',status:'Lead',owner:'Paul',notes:''});
+  const [draft,setDraft]=useState({project:'',location:'',gc:'',contact:'',email:'',phone:'',submitted:todayStr(),bidAmount:'',status:'Lead',estimator:'Peter',bdOwner:'Paul',pm:'',notes:''});
   const [gcQuery,setGcQuery]=useState('');
   const [showList,setShowList]=useState(false);
   const [dupWarn,setDupWarn]=useState(null);
@@ -3524,7 +3540,7 @@ const NewProjectModal=({onClose,onSave,allGCs,proposals})=>{
     const isLead=draft.status==='Lead';
     const leadCount=proposals.filter(p=>typeof p.id==='string'&&p.id.startsWith('L')).length;
     const id=isLead?`L${String(leadCount+1).padStart(3,'0')}`:maxNumId+1;
-    onSave({id,project:draft.project.trim(),location:draft.location.trim(),gc:draft.gc.trim(),contact:draft.contact.trim(),email:draft.email.trim(),phone:draft.phone.trim(),submitted:draft.submitted||todayStr(),bidAmount:parseFloat(String(draft.bidAmount).replace(/[$,]/g,''))||0,contractAmount:null,status:draft.status,owner:draft.owner||'Paul',notes:draft.notes.trim(),retainage:0.1,estMaterial:null,estLabor:null,estOther:null,actMaterial:null,actLabor:null,actOther:null});
+    onSave({id,project:draft.project.trim(),location:draft.location.trim(),gc:draft.gc.trim(),contact:draft.contact.trim(),email:draft.email.trim(),phone:draft.phone.trim(),submitted:draft.submitted||todayStr(),bidAmount:parseFloat(String(draft.bidAmount).replace(/[$,]/g,''))||0,contractAmount:null,status:draft.status,estimator:draft.estimator||'Peter',bdOwner:draft.bdOwner||'Paul',pm:draft.pm||'',owner:draft.bdOwner||'Paul',notes:draft.notes.trim(),retainage:0.1,estMaterial:null,estLabor:null,estOther:null,actMaterial:null,actLabor:null,actOther:null});
     onClose();
   };
   return (
@@ -3551,6 +3567,8 @@ const NewProjectModal=({onClose,onSave,allGCs,proposals})=>{
             <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Phone</label><input value={draft.phone} onChange={e=>set('phone',e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
             <div className="col-span-2"><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Email</label><input value={draft.email} onChange={e=>set('email',e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
             <div className="col-span-2"><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Notes</label><textarea value={draft.notes} onChange={e=>set('notes',e.target.value)} rows={2} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600 resize-none"/></div>
+            <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Estimator</label><select value={draft.estimator} onChange={e=>set('estimator',e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600">{['Peter','Paul','David','Other'].map(o=><option key={o}>{o}</option>)}</select></div>
+            <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">BD Owner</label><select value={draft.bdOwner} onChange={e=>set('bdOwner',e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600">{['Paul','Peter','David','Other'].map(o=><option key={o}>{o}</option>)}</select></div>
           </div>
           <div className="text-[10px] text-stone-500 bg-stone-50 px-3 py-2 border border-stone-200">{draft.status==='Lead'?'Lead status → ID assigned as L001, L002… Update to a real proposal # once it becomes an active bid.':`Will be assigned ID #${maxNumId+1}`}</div>
         </div>
@@ -3977,18 +3995,21 @@ function App() {
           const email=String(norm['email']??'').trim();
           const phone=String(norm['phone']??'').trim();
           const location=String(norm['location']??norm['city']??norm['address']??'').trim();
-          const owner=String(norm['owner']??norm['estimator']??'Paul').trim();
+          const owner=String(norm['owner']??norm['bd owner']??norm['bd']??'Paul').trim();
+          const estimator=String(norm['estimator']??norm['est']??'Peter').trim();
+          const bdOwner=String(norm['bd owner']??norm['bd']??norm['owner']??'Paul').trim();
+          const pm=String(norm['pm']??norm['project manager']??'').trim();
           const notes=String(norm['notes']??norm['comments']??'').trim();
 
           if(id&&existingIds.has(id)){
-            newRecs.push({_action:'update',id,project,gc,contact,email,phone,location,submitted,bidAmount,contractAmount,status,owner,notes});
+            newRecs.push({_action:'update',id,project,gc,contact,email,phone,location,submitted,bidAmount,contractAmount,status,owner,estimator,bdOwner,pm,notes});
             updated++;continue;
           }
           const key=`${project.toLowerCase()}|${gc.toLowerCase()}`;
           if(existingKeys.has(key)) continue;
           existingKeys.add(key);
           if(!id||id==='0') id=String(nextId++);
-          newRecs.push({_action:'insert',id,project,gc,contact,email,phone,location,submitted:submitted||(dateAwarded?null:null),bidAmount,contractAmount,status,owner,notes,retainage:0.1,estMaterial:null,estLabor:null,estOther:null,actMaterial:null,actLabor:null,actOther:null});
+          newRecs.push({_action:'insert',id,project,gc,contact,email,phone,location,submitted:submitted||(dateAwarded?null:null),bidAmount,contractAmount,status,owner,estimator,bdOwner,pm,notes,retainage:0.1,estMaterial:null,estLabor:null,estOther:null,actMaterial:null,actLabor:null,actOther:null});
           added++;
         }
       }
@@ -4010,7 +4031,7 @@ function App() {
   
   const handleExport=()=>{
     const wb=window.XLSX.utils.book_new();
-    const ws1=window.XLSX.utils.json_to_sheet(proposals.map(p=>({'#':p.id,'Project':p.project,'Location':p.location,'GC':p.gc,'Contact':p.contact,'Email':p.email,'Phone':p.phone,'Submitted':p.submitted,'Bid Amount':p.bidAmount,'Contract Amt':p.contractAmount,'Status':p.status,'Owner':p.owner,'Notes':p.notes})));
+    const ws1=window.XLSX.utils.json_to_sheet(proposals.map(p=>({'#':p.id,'Project':p.project,'Location':p.location,'GC':p.gc,'Contact':p.contact,'Email':p.email,'Phone':p.phone,'Submitted':p.submitted,'Bid Amount':p.bidAmount,'Contract Amt':p.contractAmount,'Status':p.status,'Estimator':p.estimator||p.owner||'','BD Owner':p.bdOwner||p.owner||'','PM':p.pm||'','Next Action':p.nextAction||'','Next Action Date':p.nextActionDate||'','Lost Reason':p.lostReason||'','Notes':p.notes})));
     window.XLSX.utils.book_append_sheet(wb,ws1,'Pipeline');
     if(lineItems.length){const ws2=window.XLSX.utils.json_to_sheet(lineItems.map(l=>({'Proposal #':l.proposalId,'Type':l.type,'Item':l.item,'Vendor':l.vendor,'Qty':l.qty,'Unit':l.unit,'Est $/Unit':l.estUnit,'Est Total':l.estTotal,'Act $/Unit':l.actUnit,'Act Total':l.actTotal,'Status':l.status})));window.XLSX.utils.book_append_sheet(wb,ws2,'Line Items');}
     const ws3=window.XLSX.utils.json_to_sheet(gcStats.map(g=>({'GC':g.gc,'# Bids':g.proposals,'Total Volume':g.totalVolume,'Open Value':g.openValue,'Won':g.won,'Won Value':g.wonValue,'Lost':g.lost,'Win Rate':g.winRate,'Last Bid':g.lastSubmit})));
