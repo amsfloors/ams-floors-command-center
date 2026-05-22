@@ -2983,12 +2983,26 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
     return { baseBidTotal, alternatesTotal };
   }, [estimateItems, estimate?.taxRate, estimate?.markupRate]);
 
-  const addSection = (isAlternate = false) => {
-    const code = window.prompt(`Enter CSI section code (e.g., 093000):${isAlternate ? '\n\n(This will be an ALTERNATE section)' : ''}`);
-    if (!code) return;
-    const csi = CSI_SECTIONS.find(s => s.code === code.trim());
-    const name = csi ? csi.name : (window.prompt('Section name:') || 'Custom Section');
-    onAddItem(code.trim(), name, isAlternate);
+  const [showSectionPicker, setShowSectionPicker] = useState(false);
+  const [pickerIsAlt, setPickerIsAlt] = useState(false);
+  const [customSectionName, setCustomSectionName] = useState('');
+  const [showCustomInput, setShowCustomInput] = useState(false);
+  const openSectionPicker = (isAlternate = false) => {
+    setPickerIsAlt(isAlternate);
+    setShowCustomInput(false);
+    setCustomSectionName('');
+    setShowSectionPicker(true);
+  };
+  const pickSection = (csiCode, name) => {
+    if (csiCode === 'custom') { setShowCustomInput(true); return; }
+    onAddItem(csiCode, name, pickerIsAlt);
+    setShowSectionPicker(false);
+  };
+  const confirmCustom = () => {
+    if (!customSectionName.trim()) return;
+    onAddItem('custom', customSectionName.trim(), pickerIsAlt);
+    setShowSectionPicker(false);
+    setShowCustomInput(false);
   };
 
   const saveHeader = () => {
@@ -3104,7 +3118,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
           <h3 className="font-serif text-xl text-stone-700 mb-1">No estimate yet</h3>
           <p className="text-sm text-stone-500 mb-4">Start by adding a CSI section. Common sections include Ceramic Tile (093000), Resilient Flooring (096500), Carpeting (096800).</p>
           <div className="flex items-center gap-2 justify-center">
-            <button onClick={() => addSection(false)} className="bg-stone-900 text-white px-4 py-2 rounded-sm hover:bg-stone-800 text-sm flex items-center gap-2">
+            <button onClick={() => openSectionPicker(false)} className="bg-stone-900 text-white px-4 py-2 rounded-sm hover:bg-stone-800 text-sm flex items-center gap-2">
               <Ico n="plus" size={13} />Add CSI Section
             </button>
           </div>
@@ -3163,10 +3177,10 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
             />
           ))}
           <div className="flex items-center gap-2 mt-3">
-            <button onClick={() => addSection(false)} className="bg-stone-900 text-white px-3 py-1.5 rounded-sm hover:bg-stone-800 text-xs flex items-center gap-1">
+            <button onClick={() => openSectionPicker(false)} className="bg-stone-900 text-white px-3 py-1.5 rounded-sm hover:bg-stone-800 text-xs flex items-center gap-1">
               <Ico n="plus" size={11} />Add CSI Section
             </button>
-            <button onClick={() => addSection(true)} className="bg-amber-700 text-white px-3 py-1.5 rounded-sm hover:bg-amber-800 text-xs flex items-center gap-1">
+            <button onClick={() => openSectionPicker(true)} className="bg-amber-700 text-white px-3 py-1.5 rounded-sm hover:bg-amber-800 text-xs flex items-center gap-1">
               <Ico n="plus" size={11} />Add Alternate
             </button>
           </div>
@@ -3190,6 +3204,53 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
       </div>
 
       {}
+      {showSectionPicker && <>
+        <div onClick={()=>setShowSectionPicker(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:9998}}/>
+        <div style={{position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',zIndex:9999,background:'white',width:'480px',maxWidth:'95vw',boxShadow:'0 25px 60px rgba(0,0,0,0.35)',border:pickerIsAlt?'2px solid #d97706':'2px solid #1c1917'}}>
+          <div style={{padding:'16px 20px',borderBottom:'1px solid #e7e5e4',background:pickerIsAlt?'#fffbeb':'#1c1917'}}>
+            <div style={{fontFamily:'Georgia,serif',fontSize:'18px',color:pickerIsAlt?'#92400e':'white'}}>{pickerIsAlt?'+ Add Alternate Section':'+ Add CSI Section'}</div>
+            <div style={{fontSize:'11px',color:pickerIsAlt?'#b45309':'#a8a29e',marginTop:'2px'}}>{pickerIsAlt?'Alternate — optional scope, owner picks one or more.':'Choose the flooring type for this section.'}</div>
+          </div>
+          <div style={{padding:'16px'}}>
+            {!showCustomInput?(
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+                {[{code:'093000',name:'Ceramic / Porcelain Tile',desc:'12x24, 24x24, mosaic, porcelain pavers',color:'#f97316'},
+                  {code:'096800',name:'Carpet / Carpet Tile',desc:'Broadloom, modular carpet tile, luxury carpet',color:'#22c55e'},
+                  {code:'096500',name:'Resilient / LVT / VCT',desc:'Luxury vinyl tile, VCT, rubber flooring',color:'#3b82f6'},
+                  {code:'096400',name:'Wood Flooring',desc:'Engineered hardwood, solid wood, parquet',color:'#a16207'},
+                  {code:'096300',name:'Stone Flooring',desc:'Marble, travertine, natural stone, slate',color:'#6b7280'},
+                  {code:'custom',name:'Custom / Other',desc:'Waterproofing, transitions, sundries, prep',color:'#8b5cf6'},
+                ].map(c=>(
+                  <button key={c.code} onClick={()=>pickSection(c.code,c.name)}
+                    style={{border:'2px solid #e7e5e4',padding:'14px 12px',textAlign:'left',cursor:'pointer',background:'white'}}
+                    onMouseOver={e=>e.currentTarget.style.borderColor=c.color}
+                    onMouseOut={e=>e.currentTarget.style.borderColor='#e7e5e4'}>
+                    <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'5px'}}>
+                      <div style={{width:'10px',height:'10px',borderRadius:'50%',background:c.color,flexShrink:0}}/>
+                      <div style={{fontWeight:'700',fontSize:'13px',color:'#1c1917'}}>{c.name}</div>
+                    </div>
+                    <div style={{fontSize:'11px',color:'#a8a29e',paddingLeft:'18px'}}>{c.desc}</div>
+                    {c.code!=='custom'&&<div style={{fontSize:'10px',color:'#d6d3d1',fontFamily:'monospace',marginTop:'4px',paddingLeft:'18px'}}>{c.code}</div>}
+                  </button>
+                ))}
+              </div>
+            ):(
+              <div>
+                <div style={{fontSize:'13px',color:'#57534e',marginBottom:'8px'}}>Section name:</div>
+                <input autoFocus value={customSectionName} onChange={e=>setCustomSectionName(e.target.value)}
+                  onKeyDown={e=>e.key==='Enter'&&confirmCustom()}
+                  placeholder="e.g. Waterproofing, Transitions, Sundries..."
+                  style={{width:'100%',padding:'10px 12px',border:'1px solid #d6d3d1',fontSize:'13px',boxSizing:'border-box',outline:'none'}}/>
+                <div style={{display:'flex',gap:'8px',justifyContent:'flex-end',marginTop:'12px'}}>
+                  <button onClick={()=>setShowCustomInput(false)} style={{padding:'7px 18px',border:'1px solid #d6d3d1',cursor:'pointer',background:'white',fontSize:'13px'}}>Back</button>
+                  <button onClick={confirmCustom} style={{padding:'7px 18px',background:'#1c1917',color:'white',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:'600'}}>Add Section</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </>}
+
       <div className="bg-stone-50 border border-stone-200 p-3 text-xs text-stone-600">
         <div className="font-semibold mb-1">Display Mode (DM) per line — controls what shows on proposal:</div>
         <div className="grid grid-cols-3 gap-2">
