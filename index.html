@@ -2732,40 +2732,6 @@ const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProp
     </div>
   );
 };
-  return (
-    <div className="space-y-4">
-      <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 px-5 py-4 flex items-start gap-3"><Ico n="barChart" size={18} className="text-emerald-700 mt-1"/>
-        <div><h2 className="font-serif text-2xl text-stone-900">Active Jobs · Margin Watch</h2><p className="text-sm text-stone-700 mt-1">{jobs.length} awarded · <strong>{money(jobs.reduce((s,j)=>s+j._contract,0),true)}</strong> contract value{jobs.filter(j=>j._ec===0).length>0?<span className="text-rose-700 ml-2">· {jobs.filter(j=>j._ec===0).length} missing cost data</span>:null}</p></div>
-      </div>
-      <div className="bg-white border border-stone-200 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead><tr className="bg-stone-50"><TH>Project</TH><TH>GC</TH><TH className="text-right">Contract</TH><TH className="text-right">Est. Cost</TH><TH className="text-right">Actual Cost</TH><TH className="text-right">Est. Margin</TH><TH className="text-right">Act. Margin</TH><TH>Status</TH><TH>Health <span title="Based on actual margin vs your target and risk floor. No data = cost tracking not started." className="cursor-help">ⓘ</span></TH></tr></thead>
-          <tbody>
-            {jobs.length===0&&<tr><td colSpan={9}><Empty icon="check2" title="No awarded projects" body="Projects with Won / Active / Complete status appear here."/></td></tr>}
-            {jobs.map(j=>{
-              let health={label:'No data',color:'text-stone-400 bg-stone-100',icon:'alertCirc'};
-              if(j._am!==null){if(j._am<settings.riskMarginFloor)health={label:'At risk',color:'text-rose-800 bg-rose-100',icon:'alertTri'};else if(j._am>=settings.targetMargin)health={label:'On target',color:'text-emerald-800 bg-emerald-100',icon:'check2'};else health={label:'Below target',color:'text-amber-800 bg-amber-100',icon:'clock'};}
-              else if(j._em!==null){if(j._em<settings.riskMarginFloor)health={label:'Est. at risk',color:'text-rose-700 bg-rose-50',icon:'alertTri'};else if(j._em>=settings.targetMargin)health={label:'Est. on target',color:'text-emerald-700 bg-emerald-50',icon:'check2'};else health={label:'Est. below',color:'text-amber-700 bg-amber-50',icon:'clock'};}
-              return(
-                <tr key={j.id} className="border-b border-stone-100 hover:bg-stone-50 cursor-pointer" onClick={()=>onSelectProposal(j.id)}>
-                  <td className="px-3 py-2.5 overflow-hidden"><div className="font-medium text-stone-900 truncate">{j.project}</div><div className="flex items-center gap-1.5 text-xs text-stone-500 mt-0.5">{j.id}·{j.location}{j.pm&&<span className="text-[9px] px-1.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-full font-medium">PM: {j.pm}</span>}</div></td>
-                  <td className="px-3 py-2.5"><button onClick={e=>{e.stopPropagation();onSelectGC(j.gc);}} className="text-stone-700 hover:text-orange-800 hover:underline">{j.gc}</button></td>
-                  <td className="px-3 py-2.5 text-right font-semibold whitespace-nowrap"><MoneyCell amount={j._contract}/></td>
-                  <td className="px-3 py-2.5 text-right text-stone-600 whitespace-nowrap"><MoneyCell amount={j._ec||null}/></td>
-                  <td className="px-3 py-2.5 text-right text-stone-600 whitespace-nowrap"><MoneyCell amount={j._ac||null}/></td>
-                  <td className="px-3 py-2.5 text-right font-mono">{j._em!==null?pct(j._em,1):'—'}</td>
-                  <td className="px-3 py-2.5 text-right font-mono font-semibold">{j._am!==null?<span className={j._am>=settings.targetMargin?'text-emerald-700':j._am<settings.riskMarginFloor?'text-rose-700':'text-amber-700'}>{pct(j._am,1)}</span>:<span className="text-stone-400">—</span>}</td>
-                  <td className="px-3 py-2.5"><StatusPill status={j.status} size="xs"/></td>
-                  <td className="px-3 py-2.5"><span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold ${health.color}`}><Ico n={health.icon} size={11}/>{health.label}</span></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
 
 
 const LineItemRow=({item,itemList,onUpdate,onDelete})=>{
