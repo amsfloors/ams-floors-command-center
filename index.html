@@ -3468,12 +3468,10 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
   const estTotal=sumCol(lineItems,'estTotal');
   const actTotal=sumCol(lineItems,'actTotal');
   const contract=draft.contractAmount||draft.bidAmount||0;
-  // Est. margin: prefer line_items if populated, fall back to estimate_items (bidsheet) or proposal.estMaterial/estLabor
+  // Est. margin: use line_items if populated, else fall back to proposal.estMaterial/estLabor
+  const _estCosts=(draft.estMaterial||0)+(draft.estLabor||0)+(draft.estOther||0);
   const _em=estTotal>0?(contract-estTotal)/contract:
-            estimateBidTotal>0?(contract>0?(contract-estimateBidTotal)/contract:null):
-            (draft.estMaterial||draft.estLabor)?
-              ((draft.estMaterial||0)+(draft.estLabor||0)+(draft.estOther||0)>0?
-                (contract-((draft.estMaterial||0)+(draft.estLabor||0)+(draft.estOther||0)))/contract:null):null;
+            (_estCosts>0&&contract>0)?(contract-_estCosts)/contract:null;
   const _am=actTotal>0?(contract-actTotal)/contract:null;
   // Calculate estimate total to show on bid card
   const estimateItemsForThis=estimateItems||[];
