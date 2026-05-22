@@ -3031,11 +3031,11 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
 
   useEffect(() => { setDraftHeader(estimate); setEditingHeader(false); }, [estimate?.id]);
 
-  // GC intel — confidence-gated (5+ settled bids)
+  // GC intel — confidence-gated (3+ settled bids)
   const gcIntel = useMemo(() => {
     if (!proposal?.gc || !gcStats?.length) return null;
     const g = gcStats.find(x => x.gc === proposal.gc);
-    if (!g || (g.won + g.lost) < 5) return null;
+    if (!g || (g.won + g.lost) < 3) return null;
     return g;
   }, [proposal?.gc, gcStats]);
 
@@ -4022,6 +4022,91 @@ function App() {
       const existingIds=new Set(proposals.map(p=>String(p.id)));
       const existingKeys=new Set(proposals.map(p=>`${(p.project||'').toLowerCase().trim()}|${(p.gc||'').toLowerCase().trim()}`));
       const newRecs=[];
+
+      // ── BIDSHEET DETECTION (Peter's takeoff format) ─────────────────────
+      for(const sheetName of wb.SheetNames){
+        const ws2=wb.Sheets[sheetName];
+        const raw=window.XLSX.utils.sheet_to_json(ws2,{header:1,defval:null,raw:false});
+        let hdrIdx=-1;
+        for(let i=0;i<Math.min(raw.length,20);i++){
+          const rowStr=(raw[i]||[]).map(v=>(v||'').toString().toUpperCase().trim());
+          if(rowStr.includes('ITEM')&&rowStr.includes('COST')&&rowStr.some(v=>v.startsWith('MFR'))){hdrIdx=i;break;}
+        }
+        if(hdrIdx===-1) continue;
+        const headers=(raw[hdrIdx]||[]).map(v=>(v||'').toString().trim());
+        let projName='',gcName='',gcContact='',gcEmail='',gcPhone='',location='',proposalNum='';
+        const topRows=raw.slice(0,hdrIdx);
+        topRows.forEach(row=>{
+          const cells=(row||[]).map(v=>(v||'').toString().trim());
+          cells.forEach((c,i)=>{
+            const cu=c.toUpperCase();
+            if(cu==='PROPOSAL #'||cu==='PROPOSAL#') proposalNum=String(cells[i+1]||'').trim();
+          });
+          if(cells[1]==='FL'||cells[1]==='TX'||cells[1]==='GA'||cells[1]==='NY'||cells[1]==='MA'||cells[1]==='CO'||cells[1]==='SC'||cells[1]==='AL'||cells[1]==='CT') location=`${cells[0]}, ${cells[1]} ${cells[2]||''}`.trim();
+          if(cells[5]==='Name'&&cells[6]) gcContact=cells[6];
+          if(cells[5]==='Email'&&cells[6]) gcEmail=cells[6];
+          if(cells[5]==='Phone'&&cells[6]) gcPhone=cells[6];
+          if(cells[6]&&cells[6].length>3&&!['ADDRESS','NAME','EMAIL','PHONE'].includes(cells[5].toUpperCase())&&!cells[6].includes('@')&&!cells[6].match(/^\d/)&&!gcName) gcName=cells[6];
+          if(cells[0]&&cells[0].length>5&&!cells[0].toUpperCase().match(/QUALITY|PROJECT|ARCHITECT|PREPARED|PROPOSAL/)&&cells[0].match(/[A-Za-z]/)&&projName==='') projName=cells[0];
+        });
+        if(!projName) projName=file.name.replace(/\.xlsx?$/i,'').replace(/_/g,' ');
+        if(!gcName) gcName='Unknown GC';
+        const pidStr=proposalNum||null;
+        let existingProp=pidStr?proposals.find(p=>String(p.id)===pidStr):null;
+        if(!existingProp){const kl=`${projName.toLowerCase().slice(0,20)}|${gcName.toLowerCase().slice(0,20)}`;existingProp=proposals.find(p=>`${(p.project||'').toLowerCase().slice(0,20)}|${(p.gc||'').toLowerCase().slice(0,20)}`===kl);}
+        let propId=existingProp?String(existingProp.id):(pidStr||String(nextId++));
+        if(!existingProp){
+          const np={id:propId,project:projName,location:location||'',gc:gcName,contact:gcContact,email:gcEmail,phone:gcPhone,submitted:todayStr(),bidAmount:0,contractAmount:null,status:'Submitted',owner:'Peter',estimator:'Peter',bdOwner:'Paul',pm:'',notes:`Imported from ${file.name}`,retainage:0.1,estMaterial:null,estLabor:null,estOther:null,actMaterial:null,actLabor:null,actOther:null};
+          await sb.from('proposals').insert(np);
+          setProposals(ps=>[np,...ps]);
+        }
+        let est=estimates.find(e=>e.proposalId===propId);
+        if(!est){
+          est={id:`est_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,proposalId:propId,proposalNumber:proposalNum||propId,projectName:projName,gcName:gcName,gcContactName:gcContact,gcContactEmail:gcEmail,gcContactPhone:gcPhone,taxRate:0.07,markupRate:0.20,preparedByName:'Peter Laitres',preparedByEmail:'peter@amsfloors.com',preparedByPhone:'9417401555'};
+          await sb.from('estimates').insert(est);
+          setEstimates(es=>[...es,est]);
+        }
+        const hCols={};headers.forEach((h,i)=>{hCols[h.toUpperCase()]=i;});
+        const iItem=hCols['ITEM']??0,iSize=hCols['SIZE']??1,iMfr=hCols['MFR']??2,iDesc=hCols['DESCRIPTION']??3,iColor=hCols['COLOR']??4;
+        const iQty=hCols['QTY']??5,iUnit=hCols['UNIT']??6,iSfCtn=hCols['SF/CTN']??7,iSyCtn=hCols['SY/CTN']??8;
+        const iCost=hCols['COST']??11,iFreight=hCols['FREIGHT']??14,iLabRate=hCols['LABOR RATE']??18;
+        let curSection='',curSectionName='',sortOrd=0;
+        const itemsToInsert=[];
+        await sb.from('estimate_items').delete().eq('estimateId',est.id);
+        setEstimateItems(eis=>eis.filter(i=>i.estimateId!==est.id));
+        for(let ri=hdrIdx+1;ri<raw.length;ri++){
+          const row=raw[ri]||[];
+          const item0=(row[iItem]||'').toString().trim();
+          const size0=(row[iSize]||'').toString().trim();
+          const qty0=parseFloat((row[iQty]||'').toString().replace(/[^0-9.]/g,''))||0;
+          if(item0.match(/^\d{6}$/)&&qty0===0){curSection=item0;curSectionName=size0||item0;continue;}
+          if(!item0||!item0.match(/[A-Za-z]/)) continue;
+          if(item0.toUpperCase().match(/TOTAL|BASE BID/)) continue;
+          const ni={
+            id:`ei_${Date.now()}_${Math.random().toString(36).slice(2,7)}_${ri}`,
+            estimateId:est.id,proposalId:propId,
+            sectionCode:curSection,sectionName:curSectionName,
+            isAlternate:false,isVeAlternative:false,sortOrder:sortOrd++,
+            itemCode:item0,size:(row[iSize]||'').toString().trim(),
+            manufacturer:(row[iMfr]||'').toString().trim(),
+            description:(row[iDesc]||'').toString().trim(),
+            color:(row[iColor]||'').toString().trim(),
+            qty:qty0,unit:(row[iUnit]||'SF').toString().trim(),
+            sfPerCtn:parseFloat((row[iSfCtn]||'').toString())||null,
+            syPerCtn:parseFloat((row[iSyCtn]||'').toString())||null,
+            costPerUnit:parseFloat((row[iCost]||'').toString().replace(/[^0-9.]/g,''))||0,
+            freight:parseFloat((row[iFreight]||'').toString().replace(/[^0-9.]/g,''))||0,
+            laborRate:parseFloat((row[iLabRate]||'').toString().replace(/[^0-9.]/g,''))||0,
+            displayMode:'full',
+          };
+          itemsToInsert.push(ni);
+        }
+        for(let i=0;i<itemsToInsert.length;i+=50) await sb.from('estimate_items').insert(itemsToInsert.slice(i,i+50));
+        setEstimateItems(eis=>[...eis.filter(i=>i.estimateId!==est.id),...itemsToInsert]);
+        setImportStatus({ok:true,message:`✓ Bidsheet imported — ${itemsToInsert.length} line items into proposal #${propId} "${projName}" (${gcName}). Open the project to see the Estimate tab.`});
+        return;
+      }
+      // ── END BIDSHEET DETECTION ───────────────────────────────────────────
 
       for(const sheetName of wb.SheetNames){
         const ws=wb.Sheets[sheetName];
