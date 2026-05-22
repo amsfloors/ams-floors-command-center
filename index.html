@@ -3853,14 +3853,16 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings})=>{
             <div className="p-5 space-y-3">
               {funnel.map(s=>{
                 const maxVal=funnel.reduce((m,x)=>Math.max(m,x.value),0);
-                const w=maxVal>0?Math.round((s.value/maxVal)*100):0;
+                const w=maxVal>0?Math.max(2,Math.round((s.value/maxVal)*100)):0;
+                const barColors={'Lead / Qualified':'#bae6fd','Submitted':'#fde68a','Negotiating':'#fed7aa','Won / Active':'#a7f3d0','Lost / Dead':'#fecaca'};
+                const bg=barColors[s.label]||'#e7e5e4';
                 return(
                   <div key={s.label} className="flex items-center gap-4">
                     <div className="w-36 text-right text-sm text-stone-600 flex-shrink-0">{s.label}</div>
-                    <div className="flex-1 bg-stone-100 h-8 relative rounded-sm overflow-hidden">
-                      <div className={`h-full ${s.color.split(' ')[0]} transition-all`} style={{width:`${w}%`}}/>
+                    <div className="flex-1 h-8 relative rounded-sm overflow-hidden" style={{background:'#f5f5f4'}}>
+                      <div className="h-full transition-all" style={{width:`${w}%`,background:bg}}/>
                       <div className="absolute inset-0 flex items-center px-3">
-                        <span className="text-xs font-semibold text-stone-800">{s.count} bids · {money(s.value,true)}</span>
+                        <span className="text-xs font-semibold text-stone-800">{s.count} bid{s.count!==1?'s':''} · {money(s.value,true)}</span>
                       </div>
                     </div>
                   </div>
@@ -3931,12 +3933,12 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings})=>{
               <div className="p-5 space-y-3">
                 {lostBreakdown.map(r=>{
                   const total=lostBreakdown.reduce((s,x)=>s+x.count,0);
-                  const w=total>0?Math.round((r.count/total)*100):0;
+                  const w=total>0?Math.max(2,Math.round((r.count/total)*100)):0;
                   return(
                     <div key={r.reason} className="flex items-center gap-4">
                       <div className="w-28 text-right text-sm text-stone-600 flex-shrink-0">{r.reason}</div>
-                      <div className="flex-1 bg-stone-100 h-7 relative rounded-sm overflow-hidden">
-                        <div className="h-full bg-rose-100 transition-all" style={{width:`${w}%`}}/>
+                      <div className="flex-1 h-7 relative rounded-sm overflow-hidden" style={{background:'#f5f5f4'}}>
+                        <div className="h-full transition-all" style={{width:`${w}%`,background:'#fecaca'}}/>
                         <div className="absolute inset-0 flex items-center px-3">
                           <span className="text-xs font-semibold text-stone-800">{r.count} bid{r.count!==1?'s':''} · {money(r.value,true)} · {w}%</span>
                         </div>
@@ -4472,16 +4474,20 @@ function App() {
         // STEP 7b: Write estimate totals back to the proposal record
         // Uses upsert (same as saveProposal) + immediate local state update
         const tax=0.07, mu=0.20;
-        let sumMat=0, sumLab=0;
+        let sumMatCost=0, sumMatSell=0, sumLab=0;
         items.forEach(it=>{
           const qty=Number(it.qty)||0, cpu=Number(it.costPerUnit)||0;
           const fr=Number(it.freight)||0, lr=Number(it.laborRate)||0;
           const amt=qty*cpu;
-          sumMat += amt + amt*tax + fr + amt*mu;
-          sumLab += qty*lr;
+          const amsCost=amt+amt*tax+fr;   // what AMS pays (no markup) → estMaterial
+          const matSell=amsCost+amt*mu;   // what AMS charges GC → part of contract
+          sumMatCost+=amsCost;
+          sumMatSell+=matSell;
+          sumLab+=qty*lr;
         });
-        const grandTotal=Math.round(sumMat+sumLab);
-        const estMat=Math.round(sumMat), estLab=Math.round(sumLab);
+        const grandTotal=Math.round(sumMatSell+sumLab); // sell price = contract
+        const estMat=Math.round(sumMatCost);            // AMS cost = basis for margin
+        const estLab=Math.round(sumLab);
 
         // Fetch the current full proposal to merge (avoids column mismatch issues)
         const {data:curProp}=await sb.from('proposals').select('*').eq('id',propId).maybeSingle();
@@ -4496,7 +4502,7 @@ function App() {
         if(fP2) setProposals(fP2.map(p=>({...p,bidAmount:Number(p.bidAmount)||0,estMaterial:Number(p.estMaterial)||0,estLabor:Number(p.estLabor)||0})));
 
         const marginPct=grandTotal>0?Math.round((grandTotal-estMat-estLab)/grandTotal*100):0;
-        setImportStatus({ok:true,message:'✓ Bidsheet imported — '+items.length+' items · '+money(grandTotal)+' total · Est. Margin '+marginPct+'% → proposal #'+propId+' "'+projName+'" ('+gcName+'). Open the project → Estimate / Bidsheet tab.'});
+        setImportStatus({ok:true,message:'✓ Bidsheet imported — '+items.length+' items · '+money(grandTotal)+' total · Est. Margin ~'+marginPct+'% → proposal #'+propId+' "'+projName+'" ('+gcName+'). Open the project → Estimate / Bidsheet tab.'});
         return;
       }
       // ── END BIDSHEET DETECTION ───────────────────────────────────────────
