@@ -3825,7 +3825,7 @@ function App() {
 
   
   const handleImport=async(file)=>{
-    setImportStatus({ok:true,message:'Reading…'});
+    setImportStatus({ok:true,message:'Reading file…'});
     try{
       const buf=await file.arrayBuffer();
       const wb=window.XLSX.read(buf,{type:'array',cellDates:true});
@@ -3835,29 +3835,79 @@ function App() {
       const existingIds=new Set(proposals.map(p=>String(p.id)));
       const existingKeys=new Set(proposals.map(p=>`${(p.project||'').toLowerCase().trim()}|${(p.gc||'').toLowerCase().trim()}`));
       const newRecs=[];
+
       for(const sheetName of wb.SheetNames){
-        const rows=window.XLSX.utils.sheet_to_json(wb.Sheets[sheetName],{defval:null,raw:false});
+        const ws=wb.Sheets[sheetName];
+        // Try multiple header rows (row 1, 2, 3) - AMS files have headers offset
+        let rows=[];
+        for(let hdr=1;hdr<=4;hdr++){
+          const attempt=window.XLSX.utils.sheet_to_json(ws,{defval:null,raw:false,range:hdr-1});
+          // Check if this row has useful columns
+          if(attempt.length>0){
+            const keys=Object.keys(attempt[0]).map(k=>k.toLowerCase().trim());
+            const hasProject=keys.some(k=>k.includes('project')||k.includes('name'));
+            const hasGC=keys.some(k=>k==='gc'||k.includes('client')||k.includes('contractor'));
+            const hasId=keys.some(k=>k==='#'||k==='id'||k.includes('proposal'));
+            if(hasProject||hasGC||hasId){rows=attempt;break;}
+          }
+        }
+        if(!rows.length) continue;
+
         for(const r of rows){
-          const norm={};Object.keys(r).forEach(k=>{norm[k.toLowerCase().trim()]=r[k];});
-          const rawProj=norm['project']??norm['project name']??norm['name']??'';
-          const project=cleanProject(rawProj);
-          const gc=String(norm['gc']??norm['client']??norm['gc / client']??'').trim();
+          const norm={};
+          Object.keys(r).forEach(k=>{
+            const v=r[k];
+            if(v!==null&&v!==undefined&&String(v).trim()!=='')
+              norm[k.toLowerCase().trim()]=v;
+          });
+
+          // Map project name — handles "Project", "Project Name", "Name", and strip URL junk
+          const rawProj=norm['project']??norm['project name']??norm['name']??norm['job name']??'';
+          const project=cleanProject(String(rawProj).split(';')[0].split('http')[0].trim());
+
+          // Map GC
+          const gc=String(norm['gc']??norm['client']??norm['gc / client']??norm['general contractor']??norm['contractor']??'').trim();
+
           if(!project&&!gc) continue;
-          const idVal=norm['#']??norm['id']??norm['proposal #']??norm['proposal#'];
-          let id=idVal?String(Number(String(idVal).replace(/\D/g,''))||''):'';;
+
+          // Map ID — handles "Proposal #", "#", "Project Number", "ID"
+          const idVal=norm['proposal #']??norm['proposal#']??norm['#']??norm['id']??norm['project number']??norm['project #']??null;
+          let id=idVal?String(Math.round(Number(String(idVal).replace(/[^0-9.]/g,'')))):'';
+          if(id==='0'||id==='NaN') id='';
+
+          // Map status
+          const rawStatus=String(norm['status']??norm['awarded']??'').trim();
+          const status=rawStatus?mapStatus(rawStatus):'Lead';
+
+          // Map dates
+          const submitted=parseDate(norm['submitted']??norm['date submitted']??norm['date']??norm['bid date']??null);
+          const dateAwarded=parseDate(norm['date awarded']??norm['awarded date']??null);
+
+          // Map amounts
+          const bidAmount=parseNumber(norm['bid amount']??norm['bid']??norm['amount']??norm['proposal amount']??null)??0;
+          const contractAmount=parseNumber(norm['contract amount']??norm['contract amt']??norm['contract']??null)??null;
+
+          // Map contacts
+          const contact=String(norm['contact']??norm['contact name']??norm['name']??'').trim();
+          const email=String(norm['email']??'').trim();
+          const phone=String(norm['phone']??'').trim();
+          const location=String(norm['location']??norm['city']??norm['address']??'').trim();
+          const owner=String(norm['owner']??norm['estimator']??'Paul').trim();
+          const notes=String(norm['notes']??norm['comments']??'').trim();
+
           if(id&&existingIds.has(id)){
-            // Update
-            const rec={id,project,gc,contact:String(norm['contact']??norm['contact name']??'').trim(),email:String(norm['email']??'').trim(),phone:String(norm['phone']??'').trim(),submitted:parseDate(norm['submitted']??norm['date']),bidAmount:parseNumber(norm['bid amount']??norm['bid']??norm['amount'])??0,contractAmount:parseNumber(norm['contract amt']??norm['contract amount']),status:norm['status']?mapStatus(norm['status']):'Submitted',owner:String(norm['owner']??'Paul').trim(),notes:String(norm['notes']??'').trim()};
-            newRecs.push({...rec,_action:'update'});updated++;continue;
+            newRecs.push({_action:'update',id,project,gc,contact,email,phone,location,submitted,bidAmount,contractAmount,status,owner,notes});
+            updated++;continue;
           }
           const key=`${project.toLowerCase()}|${gc.toLowerCase()}`;
           if(existingKeys.has(key)) continue;
           existingKeys.add(key);
           if(!id||id==='0') id=String(nextId++);
-          const rec={id,project,gc,contact:String(norm['contact']??norm['contact name']??'').trim(),email:String(norm['email']??'').trim(),phone:String(norm['phone']??'').trim(),submitted:parseDate(norm['submitted']??norm['date']),bidAmount:parseNumber(norm['bid amount']??norm['bid']??norm['amount'])??0,contractAmount:null,status:norm['status']?mapStatus(norm['status']):'Lead',owner:String(norm['owner']??'Paul').trim(),notes:String(norm['notes']??'').trim(),retainage:0.1,estMaterial:null,estLabor:null,estOther:null,actMaterial:null,actLabor:null,actOther:null};
-          newRecs.push({...rec,_action:'insert'});added++;
+          newRecs.push({_action:'insert',id,project,gc,contact,email,phone,location,submitted:submitted||(dateAwarded?null:null),bidAmount,contractAmount,status,owner,notes,retainage:0.1,estMaterial:null,estLabor:null,estOther:null,actMaterial:null,actLabor:null,actOther:null});
+          added++;
         }
       }
+
       if(newRecs.length){
         const inserts=newRecs.filter(r=>r._action==='insert').map(({_action,...r})=>r);
         const updates=newRecs.filter(r=>r._action==='update').map(({_action,...r})=>r);
@@ -3865,9 +3915,9 @@ function App() {
         if(updates.length){for(const u of updates)await sb.from('proposals').upsert(u);}
         const {data}=await sb.from('proposals').select('*').order('submitted',{ascending:false});
         if(data) setProposals(data.map(p=>({...p,bidAmount:Number(p.bidAmount)||0})));
-        setImportStatus({ok:true,message:`Import complete — ${added} new, ${updated} updated.`});
+        setImportStatus({ok:true,message:`Done — ${added} added, ${updated} updated.`});
       } else {
-        setImportStatus({ok:false,message:'Nothing new to import. All rows already exist or no Project/GC columns found.'});
+        setImportStatus({ok:false,message:`No new records found. Checked ${wb.SheetNames.length} sheet(s). Make sure your file has Project and/or GC columns.`});
       }
     }catch(e){setImportStatus({ok:false,message:`Import failed: ${e.message}`});}
   };
