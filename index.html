@@ -3468,7 +3468,12 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
   const estTotal=sumCol(lineItems,'estTotal');
   const actTotal=sumCol(lineItems,'actTotal');
   const contract=draft.contractAmount||draft.bidAmount||0;
-  const _em=estTotal>0?(contract-estTotal)/contract:null;
+  // Est. margin: prefer line_items if populated, fall back to estimate_items (bidsheet) or proposal.estMaterial/estLabor
+  const _em=estTotal>0?(contract-estTotal)/contract:
+            estimateBidTotal>0?(contract>0?(contract-estimateBidTotal)/contract:null):
+            (draft.estMaterial||draft.estLabor)?
+              ((draft.estMaterial||0)+(draft.estLabor||0)+(draft.estOther||0)>0?
+                (contract-((draft.estMaterial||0)+(draft.estLabor||0)+(draft.estOther||0)))/contract:null):null;
   const _am=actTotal>0?(contract-actTotal)/contract:null;
   // Calculate estimate total to show on bid card
   const estimateItemsForThis=estimateItems||[];
@@ -4180,27 +4185,33 @@ function App() {
         if(fP) setProposals(fP.map(p=>({...p,bidAmount:Number(p.bidAmount)||0})));
 
         // STEP 7b: Write estimate totals back to the proposal record
-        // This feeds: Active Jobs margin watch, bid amount, KPI cards
-        // Uses same calc logic as calcEstimateItem()
+        // Uses upsert (same as saveProposal) + immediate local state update
         const tax=0.07, mu=0.20;
         let sumMat=0, sumLab=0;
         items.forEach(it=>{
-          const qty=Number(it.qty)||0;
-          const cpu=Number(it.costPerUnit)||0;
-          const fr=Number(it.freight)||0;
-          const lr=Number(it.laborRate)||0;
+          const qty=Number(it.qty)||0, cpu=Number(it.costPerUnit)||0;
+          const fr=Number(it.freight)||0, lr=Number(it.laborRate)||0;
           const amt=qty*cpu;
           sumMat += amt + amt*tax + fr + amt*mu;
           sumLab += qty*lr;
         });
         const grandTotal=Math.round(sumMat+sumLab);
-        const propUpdate={bidAmount:grandTotal,estMaterial:Math.round(sumMat),estLabor:Math.round(sumLab)};
-        await sb.from('proposals').update(propUpdate).eq('id',propId);
-        // Refresh proposals again to reflect updated bid amount
-        const {data:fP2}=await sb.from('proposals').select('*').order('submitted',{ascending:false});
-        if(fP2) setProposals(fP2.map(p=>({...p,bidAmount:Number(p.bidAmount)||0})));
+        const estMat=Math.round(sumMat), estLab=Math.round(sumLab);
 
-        setImportStatus({ok:true,message:'✓ Bidsheet imported — '+items.length+' line items, Grand Total '+money(grandTotal)+' → proposal #'+propId+' "'+projName+'" ('+gcName+'). Open the project → Estimate / Bidsheet tab.'});
+        // Fetch the current full proposal to merge (avoids column mismatch issues)
+        const {data:curProp}=await sb.from('proposals').select('*').eq('id',propId).maybeSingle();
+        const mergedProp={...(curProp||existingProp||{}),id:propId,bidAmount:grandTotal,contractAmount:grandTotal,estMaterial:estMat,estLabor:estLab,updatedAt:new Date().toISOString()};
+        await sb.from('proposals').upsert(mergedProp);
+
+        // Immediate local state update — UI reflects margin before page refresh
+        setProposals(ps=>ps.map(p=>String(p.id)===propId?{...p,bidAmount:grandTotal,contractAmount:grandTotal,estMaterial:estMat,estLabor:estLab}:p));
+
+        // Final full refresh
+        const {data:fP2}=await sb.from('proposals').select('*').order('submitted',{ascending:false});
+        if(fP2) setProposals(fP2.map(p=>({...p,bidAmount:Number(p.bidAmount)||0,estMaterial:Number(p.estMaterial)||0,estLabor:Number(p.estLabor)||0})));
+
+        const marginPct=grandTotal>0?Math.round((grandTotal-estMat-estLab)/grandTotal*100):0;
+        setImportStatus({ok:true,message:'✓ Bidsheet imported — '+items.length+' items · '+money(grandTotal)+' total · Est. Margin '+marginPct+'% → proposal #'+propId+' "'+projName+'" ('+gcName+'). Open the project → Estimate / Bidsheet tab.'});
         return;
       }
       // ── END BIDSHEET DETECTION ───────────────────────────────────────────
