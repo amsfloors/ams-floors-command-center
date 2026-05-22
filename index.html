@@ -3872,8 +3872,16 @@ function App() {
   // Get-or-create an estimate for the selected proposal
   const selectedEstimate = useMemo(() => {
     if (!selectedId) return null;
-    return estimates.find(e => e.proposalId === selectedId) || null;
-  }, [estimates, selectedId]);
+    const matches = estimates.filter(e => e.proposalId === selectedId);
+    if (!matches.length) return null;
+    if (matches.length === 1) return matches[0];
+    // Prefer the estimate that has the most items (avoids showing empty placeholder)
+    return matches.reduce((best, e) => {
+      const cnt = estimateItems.filter(i => i.estimateId === e.id).length;
+      const bestCnt = estimateItems.filter(i => i.estimateId === best.id).length;
+      return cnt > bestCnt ? e : best;
+    });
+  }, [estimates, selectedId, estimateItems]);
 
   const selectedEstimateItems = useMemo(() => {
     if (!selectedEstimate) return [];
@@ -4102,8 +4110,14 @@ function App() {
           itemsToInsert.push(ni);
         }
         for(let i=0;i<itemsToInsert.length;i+=50) await sb.from('estimate_items').insert(itemsToInsert.slice(i,i+50));
-        setEstimateItems(eis=>[...eis.filter(i=>i.estimateId!==est.id),...itemsToInsert]);
-        setImportStatus({ok:true,message:`✓ Bidsheet imported — ${itemsToInsert.length} line items into proposal #${propId} "${projName}" (${gcName}). Open the project to see the Estimate tab.`});
+        // Full refresh from Supabase to guarantee UI is in sync
+        const [{data:freshEsts},{data:freshItems}] = await Promise.all([
+          sb.from('estimates').select('*'),
+          sb.from('estimate_items').select('*'),
+        ]);
+        if(freshEsts) setEstimates(freshEsts);
+        if(freshItems) setEstimateItems(freshItems);
+        setImportStatus({ok:true,message:`✓ Bidsheet imported — ${itemsToInsert.length} line items into proposal #${propId} "${projName}" (${gcName}). Open the project → Estimate tab.`});
         return;
       }
       // ── END BIDSHEET DETECTION ───────────────────────────────────────────
