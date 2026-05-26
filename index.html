@@ -2018,8 +2018,17 @@ window.genProposal=function(est,items,notes,proposal){
   var alts=items.filter(function(i){return i.isAlternate&&!i.isVeAlternative;});
   var calc=function(i){var q=Number(i.qty)||0,c=Number(i.costPerUnit)||0,f=Number(i.freight)||0,lr=Number(i.laborRate)||0,a=q*c,mat=a+a*tax+f+a*mu,lab=q*lr;return{mat:mat,lab:lab,tot:mat+lab};};
   var tM=0,tL=0;base.forEach(function(i){var r=calc(i);tM+=r.mat;tL+=r.lab;});
-  // Group by section
+  // Detect dominant display mode for header
+  var modes=base.map(function(i){return i.displayMode||'full';});
+  var allLump=modes.length>0&&modes.every(function(m){return m==='lump_sum';});
+  var allTotal=modes.length>0&&modes.every(function(m){return m==='total_only'||m==='lump_sum';});
   var sections=est.sections||[];
+  var makeRow=function(i,r){
+    var dm=i.displayMode||'full';
+    if(dm==='lump_sum') return"<tr><td colspan='"+(allLump?'3':'4')+"' style='padding:5px 8px'>"+(i.itemCode?'<b>'+i.itemCode+'</b> ':'')+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";
+    if(dm==='total_only') return"<tr><td style='padding:5px 8px'>"+(i.itemCode||'')+"</td><td style='padding:5px 8px'>"+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right'>"+(i.qty||'')+' '+(i.unit||'')+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";
+    return"<tr><td style='padding:5px 8px'>"+(i.itemCode||'')+"</td><td style='padding:5px 8px'>"+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right'>"+(i.qty||'')+' '+(i.unit||'')+"</td><td style='padding:5px 8px;text-align:right'>"+fmt(r.mat)+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";
+  };
   var makeRows=function(its){
     var rows='';
     if(sections.length>0){
@@ -2027,50 +2036,41 @@ window.genProposal=function(est,items,notes,proposal){
         var si=its.filter(function(i){return i.sectionId===sec.id;});
         if(!si.length)return;
         var st=si.reduce(function(s,i){return s+calc(i).tot;},0);
-        rows+="<tr><td colspan='5' style='background:#1c1917;color:#fff;padding:6px 10px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase'>"+(sec.code?sec.code+' \u2014 ':'')+( sec.name||'')+"<span style='float:right;color:#9ca3af'>"+fmt(st)+"</span></td></tr>";
-        si.forEach(function(i){var r=calc(i),dm=i.displayMode||'full';
-          if(dm==='lump_sum'){rows+="<tr><td colspan='4' style='padding:5px 8px'>"+(i.itemCode?'<b>'+i.itemCode+'</b> ':'')+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";}
-          else if(dm==='total_only'){rows+="<tr><td style='padding:5px 8px'>"+(i.itemCode||'')+"</td><td style='padding:5px 8px'>"+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right'>"+(i.qty||'')+' '+(i.unit||'')+"</td><td></td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";}
-          else{rows+="<tr><td style='padding:5px 8px'>"+(i.itemCode||'')+"</td><td style='padding:5px 8px'>"+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right'>"+(i.qty||'')+' '+(i.unit||'')+"</td><td style='padding:5px 8px;text-align:right'>"+fmt(r.mat)+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";}
-        });
+        rows+="<tr><td colspan='5' style='background:#1c1917;color:#fff;padding:6px 10px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase'>"+(sec.code?sec.code+' \u2014 ':'')+(sec.name||'')+"<span style='float:right;color:#9ca3af'>"+fmt(st)+"</span></td></tr>";
+        si.forEach(function(i){rows+=makeRow(i,calc(i));});
       });
     } else {
-      its.forEach(function(i){var r=calc(i),dm=i.displayMode||'full';
-        if(dm==='lump_sum'){rows+="<tr><td colspan='4' style='padding:5px 8px'>"+(i.itemCode?'<b>'+i.itemCode+'</b> ':'')+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";}
-        else{rows+="<tr><td style='padding:5px 8px'>"+(i.itemCode||'')+"</td><td style='padding:5px 8px'>"+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right'>"+(i.qty||'')+' '+(i.unit||'')+"</td><td style='padding:5px 8px;text-align:right'>"+fmt(r.mat)+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";}
-      });
+      its.forEach(function(i){rows+=makeRow(i,calc(i));});
     }
     return rows;
   };
+  // Dynamic table header based on display mode
+  var thead=allLump
+    ?"<thead><tr><th colspan='3'>Description</th><th style='text-align:right'>Total</th></tr></thead>"
+    :allTotal
+    ?"<thead><tr><th>Item</th><th>Description</th><th style='text-align:right'>QTY / Unit</th><th style='text-align:right'>Total</th></tr></thead>"
+    :"<thead><tr><th>Item</th><th>Description</th><th style='text-align:right'>QTY / Unit</th><th style='text-align:right'>Material</th><th style='text-align:right'>Total</th></tr></thead>";
   var H="<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Proposal "+propNum+"</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;color:#1c1917}.pg{max-width:850px;margin:0 auto;padding:36px}table{width:100%;border-collapse:collapse;margin:10px 0}th{background:#1c1917;color:#fff;padding:6px 8px;font-size:10px;text-transform:uppercase;text-align:left}td{border-bottom:1px solid #e7e5e4}.bar{background:#1c1917;color:#fff;padding:14px;display:grid;grid-template-columns:1fr 1fr 1fr;text-align:center;gap:10px;margin:16px 0}.bl{font-size:9px;text-transform:uppercase;color:#aaa;margin-bottom:3px}.bv{font-size:20px;font-family:Georgia,serif}@media print{.np{display:none}}</style></head><body>";
-  H+="<div class='np' style='background:#1c1917;color:#fff;padding:10px 20px;display:flex;justify-content:space-between;align-items:center'><span>"+projName+" — Proposal #"+propNum+"</span><button onclick='window.print()' style='background:#ea580c;color:#fff;border:none;padding:7px 18px;cursor:pointer;font-weight:700'>Print / Save PDF</button></div>";
+  H+="<div class='np' style='background:#1c1917;color:#fff;padding:10px 20px;display:flex;justify-content:space-between;align-items:center'><span>"+projName+" \u2014 Proposal #"+propNum+"</span><button onclick='window.print()' style='background:#ea580c;color:#fff;border:none;padding:7px 18px;cursor:pointer;font-weight:700'>Print / Save PDF</button></div>";
   H+="<div class='pg'>";
-  // Header
   H+="<div style='display:flex;justify-content:space-between;padding-bottom:14px;margin-bottom:14px;border-bottom:2px solid #1c1917'>";
-  H+="<div><img src='data:image/png;base64,"+_LOGO+"' style='height:52px;margin-bottom:6px'/><div style='font-size:11px;color:#666'>AMS Floors LLC &nbsp;·&nbsp; Sarasota, FL &nbsp;·&nbsp; (941) 740-1555 &nbsp;·&nbsp; peter@amsfloors.com</div></div>";
-  H+="<div style='text-align:right'><div style='font-size:22px;font-family:Georgia,serif;font-weight:700;letter-spacing:-0.5px'>PROPOSAL</div><div style='color:#888;font-size:10px;margin-top:3px'>#"+propNum+" &nbsp;·&nbsp; "+today+"</div></div></div>";
-  // TO / RE
+  H+="<div><img src='data:image/png;base64,"+_LOGO+"' style='height:52px;margin-bottom:6px'/><div style='font-size:11px;color:#666'>AMS Floors LLC &nbsp;\u00b7&nbsp; Sarasota, FL &nbsp;\u00b7&nbsp; (941) 740-1555 &nbsp;\u00b7&nbsp; peter@amsfloors.com</div></div>";
+  H+="<div style='text-align:right'><div style='font-size:22px;font-family:Georgia,serif;font-weight:700;letter-spacing:-0.5px'>PROPOSAL</div><div style='color:#888;font-size:10px;margin-top:3px'>#"+propNum+" &nbsp;\u00b7&nbsp; "+today+"</div></div></div>";
   H+="<div style='background:#f9fafb;border:1px solid #e7e5e4;padding:12px 16px;margin-bottom:12px;display:grid;grid-template-columns:1fr 1fr;gap:12px'>";
   H+="<div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:3px'>To</div><div style='font-weight:700;font-size:13px'>"+gc+"</div>"+(contact?"<div style='color:#444;margin-top:1px'>"+contact+"</div>":"")+(email?"<div style='color:#6b7280;font-size:11px'>"+email+"</div>":"")+"</div>";
   H+="<div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:3px'>Project</div><div style='font-weight:700;font-size:13px'>"+projName+"</div>"+(location?"<div style='color:#444;margin-top:1px'>"+location+"</div>":"")+"</div></div>";
-  // Scope
   H+="<div style='font-size:11px;color:#555;margin-bottom:12px;line-height:1.6;padding:10px 14px;border-left:3px solid #e7e5e4'>AMS Floors LLC proposes to furnish and install all flooring as detailed below for the above-referenced project, per plans and specifications provided. All work performed in accordance with industry standards. Assumes smooth, level subfloor free of debris. State &amp; Local Taxes included in material costs only.</div>";
-  // Items
-  H+="<table><thead><tr><th>Item</th><th>Description</th><th style='text-align:right'>QTY / Unit</th><th style='text-align:right'>Material</th><th style='text-align:right'>Total</th></tr></thead><tbody>"+makeRows(base)+"</tbody></table>";
-  // Alternates
+  H+="<table>"+thead+"<tbody>"+makeRows(base)+"</tbody></table>";
   if(alts.length>0){
     var altM=0,altL=0;alts.forEach(function(i){var r=calc(i);altM+=r.mat;altL+=r.lab;});
     H+="<div style='margin-top:16px'><div style='font-size:10px;font-weight:700;text-transform:uppercase;color:#888;margin-bottom:4px;letter-spacing:1px'>Alternates</div>";
     H+="<table><thead><tr style='background:#374151'><th>Item</th><th>Description</th><th style='text-align:right'>QTY / Unit</th><th style='text-align:right'>Material</th><th style='text-align:right'>Alt Total</th></tr></thead><tbody>"+makeRows(alts)+"</tbody>";
     H+="<tfoot><tr><td colspan='4' style='padding:6px 8px;background:#f5f5f4;font-weight:700'>Alternates Subtotal</td><td style='padding:6px 8px;text-align:right;background:#f5f5f4;font-weight:700'>"+fmt(altM+altL)+"</td></tr></tfoot></table></div>";
   }
-  // Totals bar
   H+="<div class='bar'><div><div class='bl'>Material</div><div class='bv'>"+fmt(tM)+"</div></div><div><div class='bl'>Labor</div><div class='bv'>"+fmt(tL)+"</div></div><div><div class='bl'>Base Bid Total</div><div class='bv' style='color:#6ee7b7'>"+fmt(tM+tL)+"</div></div></div>";
-  // Notes
-  H+="<div style='margin-top:12px;padding-top:10px;border-top:1px solid #e7e5e4;font-size:10px;color:#666'><b>Notes:</b> Proposal valid 30 days from date above. Price subject to change if scope is modified. Does not include concrete grinding, self-leveling, or moisture mitigation unless noted. This proposal does not constitute a contract until signed by both parties."+(notes?' '+notes:'')+"</div>";
-  // Signature block
+  H+="<div style='margin-top:12px;padding-top:10px;border-top:1px solid #e7e5e4;font-size:10px;color:#666'><b>Notes:</b> Proposal valid 30 days from date above. Price subject to change if scope is modified. Does not include concrete grinding, self-leveling, or moisture mitigation unless noted."+(notes?' '+notes:'')+"</div>";
   H+="<div style='margin-top:22px;padding-top:16px;border-top:1px solid #e7e5e4;display:grid;grid-template-columns:1fr 1fr;gap:24px;font-size:11px'>";
-  H+="<div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:10px'>AMS Floors LLC — Submitted by</div><div style='height:36px;border-bottom:1px solid #888;margin-bottom:4px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Date</div></div>";
+  H+="<div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:10px'>AMS Floors LLC \u2014 Submitted by</div><div style='height:36px;border-bottom:1px solid #888;margin-bottom:4px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Date</div></div>";
   H+="<div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:10px'>Accepted by: "+gc+"</div><div style='height:36px;border-bottom:1px solid #888;margin-bottom:4px'></div><div style='color:#888;font-size:10px'>Authorized Signature &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Date</div></div></div>";
   H+="</div></body></html>";
   return H;
