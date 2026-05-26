@@ -3185,6 +3185,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
   const [headerExpanded, setHeaderExpanded] = useState(false);
   const [editingHeader, setEditingHeader] = useState(false);
   const [draftHeader, setDraftHeader] = useState(estimate);
+  const [applyingDM, setApplyingDM] = useState(false);
 
   useEffect(() => { setDraftHeader(estimate); setEditingHeader(false); }, [estimate?.id]);
 
@@ -3580,19 +3581,28 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
       </>}
 
       <div className="bg-stone-50 border border-stone-200 p-3 text-xs text-stone-600">
-        <div className="font-semibold mb-1">Display Mode (DM) per line — controls what shows on proposal:</div>
-        <div className="grid grid-cols-3 gap-2">
-          {DISPLAY_MODES.map(d => (
-            <div key={d.value} className="flex items-start gap-2">
-              <span className={`text-[10px] px-1 py-0.5 rounded-sm font-bold flex-shrink-0 ${d.value === 'full' ? 'bg-stone-100 text-stone-700' : d.value === 'total_only' ? 'bg-sky-100 text-sky-800' : 'bg-amber-100 text-amber-800'}`}>
-                {d.value === 'full' ? 'F' : d.value === 'total_only' ? 'T' : 'L'}
-              </span>
-              <div>
-                <div className="font-semibold">{d.label}</div>
-                <div className="text-stone-500">{d.desc}</div>
-              </div>
-            </div>
-          ))}
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <div className="font-semibold text-stone-800 mb-0.5">Proposal Display Mode</div>
+            <div className="text-stone-500">Controls what GC sees on the PDF. Set globally below, or override per line.</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-stone-500 text-[10px] uppercase font-semibold tracking-wide mr-1">Set ALL lines to:</span>
+            {DISPLAY_MODES.map(d=>(
+              <button key={d.value} disabled={applyingDM}
+                onClick={async()=>{
+                  if(!window.confirm('Set ALL '+estimateItems.length+' line items to "'+d.label+'"?')) return;
+                  setApplyingDM(true);
+                  for(const it of estimateItems){ await onUpdateItem({...it,displayMode:d.value}); }
+                  setApplyingDM(false);
+                }}
+                className={`px-2.5 py-1 text-[11px] font-bold border transition-colors ${d.value==='full'?'border-stone-400 text-stone-700 hover:bg-stone-200':d.value==='total_only'?'border-sky-400 text-sky-800 hover:bg-sky-100':'border-amber-400 text-amber-800 hover:bg-amber-100'}`}
+                title={d.desc}>
+                {d.value==='full'?'F — Full Detail':d.value==='total_only'?'T — Total Only':'L — Lump Sum'}
+              </button>
+            ))}
+            {applyingDM&&<span className="text-stone-400 text-[10px] ml-1">Updating…</span>}
+          </div>
         </div>
       </div>
     </div>
@@ -3625,11 +3635,11 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
   const estTotal=sumCol(lineItems,'estTotal');
   const actTotal=sumCol(lineItems,'actTotal');
   const contract=draft.contractAmount||draft.bidAmount||0;
-  // Est. margin: use line_items if populated, else fall back to proposal.estMaterial/estLabor
+  // Est. margin: use proposal.estMaterial/estLabor (written by bidsheet import).
+  // line_items are PROCUREMENT ONLY — not used for cost tracking.
   const _estCosts=(draft.estMaterial||0)+(draft.estLabor||0)+(draft.estOther||0);
-  const _em=estTotal>0?(contract-estTotal)/contract:
-            (_estCosts>0&&contract>0)?(contract-_estCosts)/contract:null;
-  const _am=actTotal>0?(contract-actTotal)/contract:null;
+  const _em=_estCosts>0&&contract>0?(contract-_estCosts)/contract:null;
+  const _am=actMargin(draft);
   // Calculate estimate total to show on bid card
   const estimateItemsForThis=estimateItems||[];
   const estimateBidTotal=estimateItemsForThis.reduce((s,it)=>{
@@ -3825,7 +3835,8 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
               ['Installer Work Order','Labor scope with quantities and rates.',window.genInstallerPO,'Generate Work Order']
             ].map(([t,d,fn,lb])=><div key={lb} style={{background:'white',border:'1px solid #e7e5e4',padding:'16px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px'}}>
               <div><div style={{fontFamily:'Georgia,serif',fontSize:'15px',color:'#1c1917',marginBottom:'2px'}}>{t}</div><div style={{fontSize:'12px',color:'#a8a29e'}}>{d}</div></div>
-              <button onClick={()=>{if(!estimateItemsForThis||!estimateItemsForThis.length){alert('Add estimate items first — go to Estimate / Bidsheet tab and import Peter\'s Excel file.');return;}const w=window.open('','_blank');w.document.write(fn(estimate||{},estimateItemsForThis,'',draft));w.document.close();}} style={{background:'#1c1917',color:'white',border:'none',padding:'8px 14px',cursor:'pointer',fontSize:'12px',fontWeight:'600',flexShrink:0}}>{lb}</button>
+              <button onClick={async()=>{if(!estimateItemsForThis||!estimateItemsForThis.length){alert('Add estimate items first — go to Estimate / Bidsheet tab and import Peter\'s Excel file.');return;}const w=window.open('','_blank');w.document.write(fn(estimate||{},estimateItemsForThis,'',draft));w.document.close();// Audit log
+              try{await sb.from('proposal_documents').insert({proposalId:String(draft.id),documentType:lb,generatedAt:new Date().toISOString(),generatedBy:'AMS'});}catch(e){}}} style={{background:'#1c1917',color:'white',border:'none',padding:'8px 14px',cursor:'pointer',fontSize:'12px',fontWeight:'600',flexShrink:0}}>{lb}</button>
             </div>)}
           </div>}
         </div>
@@ -4145,12 +4156,18 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
   );
 };
 
-const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onImport,onExport,importStatus,setShowNewProject})=>{
+const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onImport,onExport,importStatus,setShowNewProject,onSaveProposal})=>{
   const fileRef=useRef();
   const handleFile=e=>{const f=e.target.files[0];if(f){onImport(f);e.target.value='';}};
+  const [bfReason,setBfReason]=useState({});
+  const [bfSaving,setBfSaving]=useState(false);
+  const [bfSaved,setBfSaved]=useState(0);
+  const lostUntagged=useMemo(()=>proposals.filter(p=>LOST_STATUSES.includes(p.status)&&!p.lostReason),[proposals]);
+  const LOST_REASONS=['Price','Relationship','Scope','Timing','No award','Unknown'];
+  const saveBfAll=async()=>{setBfSaving(true);let saved=0;for(const p of lostUntagged){const r=bfReason[p.id];if(r){await onSaveProposal({...p,lostReason:r});saved++;}}setBfSaved(saved);setBfSaving(false);};
   return (
     <div className="space-y-5 max-w-3xl">
-      <div><h2 className="font-serif text-2xl text-stone-900">Settings</h2><p className="text-sm text-stone-600 mt-1">SLA thresholds, margin targets, and data import/export.</p></div>
+      <div><h2 className="font-serif text-2xl text-stone-900">Settings</h2><p className="text-sm text-stone-600 mt-1">SLA thresholds, margin targets, data import/export, and data cleanup tools.</p></div>
       <section className="bg-white border border-stone-200 p-5">
         <h3 className="font-serif text-lg text-stone-800 mb-1">Follow-up SLAs</h3>
         <p className="text-sm text-stone-500 mb-3">SLA = your internal deadline for following up on bids. A bid shows as <span className="text-rose-700 font-semibold">overdue</span> in the queue once it exceeds this threshold with no logged contact. The clock resets every time you click "Log Call."</p>
@@ -4178,6 +4195,46 @@ const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onImport,onE
         {importStatus&&<div className={`mt-3 text-sm px-3 py-2 ${importStatus.ok?'bg-emerald-50 text-emerald-800 border border-emerald-200':'bg-rose-50 text-rose-800 border border-rose-200'}`}>{importStatus.message}</div>}
       </section>
       <section className="bg-stone-100 border border-stone-200 p-4 text-xs text-stone-600"><strong className="text-stone-900">Current data:</strong> {proposals.length} proposals · {lineItemsAll.length} line items · stored in Supabase (live sync)</section>
+      {/* Backfill: tag historical lost bids */}
+      {lostUntagged.length>0&&<section className="bg-white border border-rose-200">
+        <div className="px-5 py-4 border-b border-rose-100 flex items-center justify-between">
+          <div>
+            <h3 className="font-serif text-lg text-stone-800">Lost Reason Backfill</h3>
+            <p className="text-sm text-stone-500 mt-0.5">{lostUntagged.length} lost bids have no reason recorded. Tag them here to unlock the Lost Analysis view in Intelligence.</p>
+          </div>
+          <button onClick={saveBfAll} disabled={bfSaving||Object.keys(bfReason).length===0}
+            className="px-4 py-2 bg-stone-900 text-white text-sm font-semibold disabled:opacity-40 hover:bg-stone-700">
+            {bfSaving?'Saving…':'Save Tagged'}
+          </button>
+        </div>
+        {bfSaved>0&&<div className="px-5 py-2 bg-emerald-50 text-emerald-800 text-sm border-b border-emerald-200">✓ {bfSaved} bids tagged successfully</div>}
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="bg-stone-50"><TH>Project</TH><TH>GC</TH><TH className="text-right">Bid</TH><TH>Submitted</TH><TH>Tag Reason</TH></tr></thead>
+            <tbody>
+              {lostUntagged.slice(0,50).map(p=>(
+                <tr key={p.id} className="border-b border-stone-100">
+                  <td className="px-3 py-2"><div className="font-medium truncate max-w-[180px]">{p.project}</div><div className="text-xs text-stone-400">#{p.id}</div></td>
+                  <td className="px-3 py-2 text-stone-600 truncate max-w-[140px]">{p.gc||'—'}</td>
+                  <td className="px-3 py-2 text-right font-mono text-xs">{p.bidAmount?money(p.bidAmount):'—'}</td>
+                  <td className="px-3 py-2 text-stone-500 text-xs">{p.submitted?p.submitted.slice(0,7):'—'}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-wrap gap-1">
+                      {LOST_REASONS.map(r=>(
+                        <button key={r} onClick={()=>setBfReason(prev=>({...prev,[p.id]:prev[p.id]===r?null:r}))}
+                          className={`px-2 py-0.5 text-[11px] border rounded-sm transition-colors ${bfReason[p.id]===r?'bg-rose-700 text-white border-rose-700':'border-stone-300 text-stone-600 hover:border-rose-400 hover:text-rose-700'}`}>
+                          {r}
+                        </button>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {lostUntagged.length>50&&<tr><td colSpan={5} className="px-3 py-2 text-xs text-stone-400 text-center">Showing first 50 — save these then reload to tag more</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>}
     </div>
   );
 };
@@ -4837,7 +4894,7 @@ function App() {
         {view==='gcs'&&!selectedGC&&<GCIntelView gcStats={gcStats} proposals={proposals} onSelectGC={setSelectedGC} settings={settings}/>}
         {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
         {view==='active'&&<ActiveJobsView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
-        {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onImport={handleImport} onExport={handleExport} importStatus={importStatus} setShowNewProject={setShowNewProject}/>}
+        {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onImport={handleImport} onExport={handleExport} importStatus={importStatus} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal}/>}
         {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
       </main>
 
