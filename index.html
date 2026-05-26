@@ -3332,6 +3332,21 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
                 {gcIntel.gc.split(' ')[0]} · {pct(gcIntel.winRate)} WR · {gcIntel.won + gcIntel.lost} bids
               </span>
             )}
+            {/* Global display-mode toggle — overrides all line items at once */}
+            <div className="flex items-center gap-1 ml-2 border border-stone-200 rounded-sm overflow-hidden bg-white" title="Set display mode for all line items on proposal">
+              {[{v:'full',l:'F',t:'Full detail'},{v:'total_only',l:'T',t:'Total only'},{v:'lump_sum',l:'L',t:'Lump sum'}].map(({v,l,t})=>{
+                const allMatch=(estimateItems||[]).length>0&&(estimateItems||[]).every(i=>(i.displayMode||'full')===v);
+                return(
+                  <button key={v} title={t+' — apply to all items'}
+                    onClick={async()=>{
+                      const toUpdate=(estimateItems||[]).filter(i=>(i.displayMode||'full')!==v);
+                      await Promise.all(toUpdate.map(i=>onUpdateItem({...i,displayMode:v})));
+                    }}
+                    className="px-2 py-0.5 text-[10px] font-bold hover:bg-stone-100 transition-colors border-r border-stone-200 last:border-0"
+                    style={{background:allMatch?'#1c1917':'',color:allMatch?'white':'#78716c'}}>{l}</button>
+                );
+              })}
+            </div>
           </div>
           <button onClick={() => setHeaderExpanded(!headerExpanded)} className="text-xs text-stone-600 hover:text-stone-900 flex items-center gap-1">
             {headerExpanded ? 'Collapse' : 'Expand'} <Ico n={headerExpanded ? 'chevDown' : 'chevRight'} size={12} />
@@ -3856,7 +3871,7 @@ const NewProjectModal=({onClose,onSave,allGCs,proposals})=>{
 };
 
 
-const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onNavigate})=>{
+const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onNavigate,onSaveProposal})=>{
   const [tab,setTab]=useState('gcs');
   const today=new Date();
 
@@ -3930,6 +3945,7 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
     {id:'funnel',label:'Pipeline Funnel'},
     {id:'mfr',label:'Manufacturer Volume'},
     {id:'lost',label:'Lost Analysis'},
+    {id:'backfill',label:'Backfill Lost Reasons'},
   ];
 
   return(
@@ -4106,6 +4122,89 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
           </div>
         </div>
       )}
+
+      {/* Backfill Tool */}
+      {tab==='backfill'&&(()=>{
+        const untagged=proposals.filter(p=>LOST_STATUSES.includes(p.status)&&!p.lostReason);
+        const tagged=proposals.filter(p=>LOST_STATUSES.includes(p.status)&&p.lostReason);
+        return(
+          <div className="space-y-4">
+            <div className="bg-white border border-stone-200">
+              <div className="px-4 py-3 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
+                <div>
+                  <h3 className="font-serif text-base text-stone-800">Backfill Lost Reasons</h3>
+                  <p className="text-xs text-stone-500 mt-0.5">{untagged.length} untagged · {tagged.length} already tagged · Tag these to unlock Lost Analysis</p>
+                </div>
+                {untagged.length===0&&<span className="text-xs text-emerald-700 font-semibold bg-emerald-50 border border-emerald-200 px-2 py-1">✓ All tagged</span>}
+              </div>
+              {untagged.length===0?<Empty icon="check2" title="All lost bids are tagged" body="The Lost Analysis tab now has full data."/>:(
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead><tr className="bg-stone-50">
+                      <TH>Project</TH><TH>GC</TH><TH className="text-right">Bid</TH><TH>Submitted</TH><TH>Tag reason</TH>
+                    </tr></thead>
+                    <tbody>
+                      {untagged.sort((a,b)=>(b.bidAmount||0)-(a.bidAmount||0)).map(p=>(
+                        <tr key={p.id} className="border-b border-stone-100">
+                          <td className="px-3 py-2"><div className="font-medium text-stone-900 truncate max-w-[160px]">{p.project}</div><div className="text-xs text-stone-400">#{p.id}</div></td>
+                          <td className="px-3 py-2 text-stone-600 truncate max-w-[120px]">{p.gc||'—'}</td>
+                          <td className="px-3 py-2 text-right font-mono text-stone-700">{money(p.bidAmount,true)}</td>
+                          <td className="px-3 py-2 text-xs text-stone-500 whitespace-nowrap">{p.submitted?p.submitted.slice(0,7):'—'}</td>
+                          <td className="px-3 py-2">
+                            <div className="flex flex-wrap gap-1">
+                              {LOST_REASONS.map(r=>(
+                                <button key={r} onClick={()=>onSaveProposal({...p,lostReason:r})}
+                                  className="text-[10px] px-2 py-0.5 border border-rose-200 text-rose-800 bg-white hover:bg-rose-50 hover:border-rose-400 rounded-full transition-colors font-medium">
+                                  {r}
+                                </button>
+                              ))}
+                              <button onClick={()=>onSaveProposal({...p,lostReason:'Don\'t know'})}
+                                className="text-[10px] px-2 py-0.5 border border-stone-200 text-stone-500 bg-white hover:bg-stone-100 rounded-full transition-colors">
+                                Don't know
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            {tagged.length>0&&<div className="bg-white border border-stone-200">
+              <div className="px-4 py-3 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
+                <h3 className="text-sm font-medium text-stone-700">Already tagged ({tagged.length})</h3>
+                <span className="text-xs text-stone-400">Click a tag to change it</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead><tr className="bg-stone-50"><TH>Project</TH><TH>GC</TH><TH className="text-right">Bid</TH><TH>Reason</TH><TH>Change</TH></tr></thead>
+                  <tbody>
+                    {tagged.sort((a,b)=>(b.bidAmount||0)-(a.bidAmount||0)).slice(0,20).map(p=>(
+                      <tr key={p.id} className="border-b border-stone-100">
+                        <td className="px-3 py-2"><div className="font-medium text-stone-900 truncate max-w-[140px]">{p.project}</div></td>
+                        <td className="px-3 py-2 text-stone-500 text-xs truncate max-w-[100px]">{p.gc}</td>
+                        <td className="px-3 py-2 text-right font-mono text-stone-600 text-xs">{money(p.bidAmount,true)}</td>
+                        <td className="px-3 py-2"><span className="text-xs px-2 py-0.5 bg-rose-50 text-rose-700 border border-rose-100 rounded-full">{p.lostReason}</span></td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-wrap gap-1">
+                            {[...LOST_REASONS,"Don't know"].filter(r=>r!==p.lostReason).map(r=>(
+                              <button key={r} onClick={()=>onSaveProposal({...p,lostReason:r})}
+                                className="text-[9px] px-1.5 py-0.5 border border-stone-200 text-stone-500 hover:bg-stone-100 rounded-full">
+                                {r}
+                              </button>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>}
+          </div>
+        );
+      })()}
     </div>
   );
 };
@@ -4849,7 +4948,7 @@ function App() {
         {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
         {view==='active'&&<ActiveJobsView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
         {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onImport={handleImport} onExport={handleExport} importStatus={importStatus} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal}/>}
-        {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
+        {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSaveProposal={saveProposal}/>}
       </main>
 
       {selectedProposal&&<ProjectDrawer
