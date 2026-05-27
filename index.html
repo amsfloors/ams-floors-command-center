@@ -4259,251 +4259,109 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
  );
 };
 const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
- const [queue,setQueue]=useState([]);
- const [active,setActive]=useState(null);
+ const [status,setStatus]=useState('idle'); // idle|parsing|ready|importing|done|error
+ const [parsed,setParsed]=useState(null);
  const [gcMatch,setGcMatch]=useState('');
  const [outcome,setOutcome]=useState('Submitted');
  const [recent,setRecent]=useState([]);
- const [dragging,setDragging]=useState(false);
- const dropRef=useRef(null);
+ const [errMsg,setErrMsg]=useState('');
  const fileInputRef=useRef(null);
- const onDrop=async(e)=>{
-  e.preventDefault();
-  e.stopPropagation();
-  const files=[...e.dataTransfer.files].filter(f=>/\.xlsx?$/i.test(f.name));
-  if(!files.length){alert('Drop .xlsx files only');return;}
-  const newItems=files.map(f=>({file:f,parsed:null,status:'pending'}));
-  setQueue(q=>{const next=[...q,...newItems];if(active===null)setActive(q.length);return next;});
+ const processFile=async(file)=>{
+  if(!file||!/\.xlsx?$/i.test(file.name))return;
+  setStatus('parsing');setParsed(null);setErrMsg('');
+  try{
+   const result=await window.parseBidsheetFile(file);
+   if(result.ok){setParsed(result);setGcMatch(result.gc||'');setOutcome('Submitted');setStatus('ready');}
+   else{setErrMsg(result.warnings.join(' · ')||'No line items found');setStatus('error');}
+  }catch(e){setErrMsg(e.message||'Parse error');setStatus('error');}
  };
- const onFilePick=async(e)=>{
-  const files=[...e.target.files].filter(f=>/\.xlsx?$/i.test(f.name));
-  if(!files.length)return;
-  const newItems=files.map(f=>({file:f,parsed:null,status:'pending'}));
-  setQueue(q=>{const next=[...q,...newItems];if(active===null)setActive(q.length);return next;});
-  e.target.value='';
- };
-
- const parsingRef=useRef(new Set());
- useEffect(()=>{
-  if(active===null||!queue[active])return;
-  const item=queue[active];
-  if(item.status!=='pending'||parsingRef.current.has(active))return;
-  parsingRef.current.add(active);
-  setQueue(q=>q.map((x,i)=>i===active?{...x,status:'parsing'}:x));
-  parseBidsheetFile(item.file).then(parsed=>{
-   setQueue(q=>q.map((x,i)=>i===active?{...x,parsed,status:parsed.ok?'ready':'error',error:parsed.warnings.length?parsed.warnings.join('; '):'No line items found — check file has a Bidsheet tab with ITEM/MFR/COST columns'}:x));
-   setGcMatch(parsed.gc||'');
-   setOutcome('Submitted');
-  }).catch(err=>{
-   console.error('Parse error:',err);
-   setQueue(q=>q.map((x,i)=>i===active?{...x,status:'error',error:err.message||'Parse failed'}:x));
-  });
- },[active]);
- const cur=active!==null?queue[active]:null;
- const parsed=cur&&cur.parsed;
- const gcSuggestions=useMemo(()=>{
-  if(!parsed||!parsed.gc)return [];
-  const q=parsed.gc.toLowerCase().replace(/[^a-z0-9]/g,'');
-  return gcs.filter(g=>{const n=g.toLowerCase().replace(/[^a-z0-9]/g,'');return n.includes(q.slice(0,8))||q.includes(n.slice(0,8));}).slice(0,5);
- },[parsed,gcs]);
- const existingProposal=useMemo(()=>{
-  if(!parsed||!parsed.proposalId)return null;
-  return proposals.find(p=>String(p.id)===String(parsed.proposalId));
- },[parsed,proposals]);
+ const onFilePick=(e)=>{const f=e.target.files[0];if(f)processFile(f);e.target.value='';};
  const approve=async()=>{
-  if(!parsed||!parsed.ok)return;
+  if(!parsed)return;
+  setStatus('importing');
   const propId=String(parsed.proposalId);
   const gcName=gcMatch||parsed.gc;
-  const propRecord={
-   id:propId,
-   project:parsed.project||(existingProposal&&existingProposal.project)||'',
-   location:parsed.location||(existingProposal&&existingProposal.location)||'',
-   gc:gcName,
-   contact:parsed.contact||(existingProposal&&existingProposal.contact)||'',
-   email:parsed.email||(existingProposal&&existingProposal.email)||'',
-   phone:parsed.phone||(existingProposal&&existingProposal.phone)||'',
-   submitted:parsed.submittedDate||(existingProposal&&existingProposal.submitted)||new Date().toISOString().slice(0,10),
-   status:existingProposal?existingProposal.status:outcome,
-   bidAmount:parsed.totals.total||0,
-   estimator:'Peter',
-   bdOwner:(existingProposal&&existingProposal.bdOwner)||'Paul',
-   projectNumber:parsed.projectNumber||(existingProposal&&existingProposal.projectNumber)||'',
-   updatedAt:new Date().toISOString(),
-  };
-  if(!existingProposal){propRecord.status=outcome;}
+  const existingProp=proposals.find(p=>String(p.id)===propId);
   let sumMatCost=0,sumLab=0;
   parsed.items.forEach(it=>{const a=it.qty*it.costPerUnit;sumMatCost+=a+a*0.07+it.freight;sumLab+=it.qty*it.laborRate;});
-  propRecord.estMaterial=Math.round(sumMatCost);
-  propRecord.estLabor=Math.round(sumLab);
-  // Only set contractAmount if NEW proposal or existing has no contract amount yet
-  // Never overwrite a manually-set contract amount (e.g. partial scope award)
-  const existingContract=existingProposal&&existingProposal.contractAmount;
-  if(!existingContract){
-   propRecord.contractAmount=parsed.totals.total||(Math.round(sumMatCost*1.20+sumLab));
-  }
-  // bidAmount always reflects what Peter bid (the full scope)
-  propRecord.bidAmount=parsed.totals.total||propRecord.bidAmount;
+  const propRecord={
+   id:propId,project:parsed.project||(existingProp&&existingProp.project)||'',
+   location:parsed.location||(existingProp&&existingProp.location)||'',
+   gc:gcName,contact:parsed.contact||(existingProp&&existingProp.contact)||'',
+   email:parsed.email||(existingProp&&existingProp.email)||'',
+   phone:parsed.phone||(existingProp&&existingProp.phone)||'',
+   submitted:parsed.submittedDate||(existingProp&&existingProp.submitted)||new Date().toISOString().slice(0,10),
+   status:existingProp?existingProp.status:outcome,
+   bidAmount:parsed.totals.total||0,
+   estimator:'Peter',bdOwner:(existingProp&&existingProp.bdOwner)||'Paul',
+   projectNumber:parsed.projectNumber||(existingProp&&existingProp.projectNumber)||'',
+   updatedAt:new Date().toISOString(),
+   estMaterial:Math.round(sumMatCost),estLabor:Math.round(sumLab),
+  };
+  if(!existingProp) propRecord.status=outcome;
+  const existingContract=existingProp&&existingProp.contractAmount;
+  if(!existingContract) propRecord.contractAmount=parsed.totals.total||Math.round(sumMatCost*1.20+sumLab);
   try{
    await sb.from('proposals').upsert(propRecord);
    const estId='est_'+propId;
-   await sb.from('estimates').upsert({id:estId,proposalId:propId,proposalNumber:propId,projectName:parsed.project,gcName:gcName,taxRate:0.07,markupRate:0.20,plansDated:parsed.plansDated,updatedAt:new Date().toISOString()});
+   await sb.from('estimates').upsert({id:estId,proposalId:propId,proposalNumber:propId,projectName:parsed.project,gcName,taxRate:0.07,markupRate:0.20,plansDated:parsed.plansDated,updatedAt:new Date().toISOString()});
    await sb.from('estimate_items').delete().eq('estimateId',estId);
    const itemRows=parsed.items.map((it,idx)=>({id:estId+'_'+idx,estimateId:estId,proposalId:propId,itemCode:it.itemCode,size:it.size,manufacturer:it.manufacturer,description:it.description,color:it.color,qty:it.qty,unit:it.unit,sfPerCtn:it.sfPerCtn,costPerUnit:it.costPerUnit,freight:it.freight,laborRate:it.laborRate,sectionCode:it.sectionCode||'',sectionName:it.sectionName||'',displayMode:'full',sortOrder:idx,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}));
    if(itemRows.length) await sb.from('estimate_items').insert(itemRows);
-   setQueue(q=>q.map((x,i)=>i===active?{...x,status:'imported'}:x));
    setRecent(r=>[{id:propId,project:parsed.project,outcome,items:parsed.items.length,total:parsed.totals.total},...r].slice(0,15));
+   setStatus('done');setParsed(null);
    onImported&&onImported();
-   const nextIdx=queue.findIndex((x,i)=>i>active&&x.status==='pending');
-   setActive(nextIdx>=0?nextIdx:null);
-  }catch(err){
-   console.error('Import error',err);
-   alert('Import failed: '+err.message);
-  }
+  }catch(e){setErrMsg('Import failed: '+e.message);setStatus('error');}
  };
- const skip=()=>{
-  setQueue(q=>q.map((x,i)=>i===active?{...x,status:'skipped'}:x));
-  const nextIdx=queue.findIndex((x,i)=>i>active&&x.status==='pending');
-  setActive(nextIdx>=0?nextIdx:null);
- };
- const pending=queue.filter(q=>q.status==='pending'||q.status==='parsing').length;
- const done=queue.filter(q=>q.status==='imported').length;
- const failed=queue.filter(q=>q.status==='error').length;
+ const reset=()=>{setStatus('idle');setParsed(null);setErrMsg('');};
+ const existingProposal=parsed?proposals.find(p=>String(p.id)===String(parsed.proposalId)):null;
+ const gcSuggestions=parsed?gcs.filter(g=>{const a=g.toLowerCase().replace(/[^a-z0-9]/g,''),b=(parsed.gc||'').toLowerCase().replace(/[^a-z0-9]/g,'');return a.includes(b.slice(0,8))||b.includes(a.slice(0,8));}).slice(0,8):[];
  return(
   <div className="space-y-4">
-   <div className="bg-stone-900 text-white px-5 py-4">
-    <h2 className="font-serif text-2xl">Bulk Bidsheet Intake</h2>
-    <p className="text-sm text-stone-400 mt-1">Drag Peter's historical .xlsx files here. Each file gets matched to its proposal #, GC parsed, line items extracted. Confirm and approve one card at a time.</p>
+   {/* Drop zone — plain click-to-upload, no drag state complexity */}
+   <div onClick={()=>fileInputRef.current?.click()} style={{border:'2px dashed #d6d3d1',background:'#fafaf9',cursor:'pointer',padding:'20px',textAlign:'center'}}>
+    <Ico n="upload" size={24} className="text-stone-400 mx-auto mb-2"/>
+    <div className="text-sm text-stone-700">Click to select a .xlsx bidsheet file</div>
+    <div className="text-xs text-stone-400 mt-1">(drag-and-drop disabled — browser limitation on this site)</div>
+    <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={onFilePick} className="hidden"/>
    </div>
-   {/* Drop zone */}
-   <div ref={dropRef}
-    onDrop={e=>{e.preventDefault();e.stopPropagation();setDragging(false);onDrop(e);}}
-    onDragOver={e=>{e.preventDefault();e.stopPropagation();setDragging(true);}}
-    onDragEnter={e=>{e.preventDefault();e.stopPropagation();setDragging(true);}}
-    onDragLeave={e=>{e.preventDefault();if(!dropRef.current?.contains(e.relatedTarget))setDragging(false);}}
-    onClick={()=>fileInputRef.current?.click()}
-    style={{border:`2px dashed ${dragging?'#c2410c':'#d6d3d1'}`,background:dragging?'#fff7ed':'#fafaf9',cursor:'pointer',padding:'24px',textAlign:'center',transition:'all 0.15s'}}>
-    <Ico n="upload" size={28} className="text-stone-400 mx-auto mb-2" style={{pointerEvents:'none'}}/>
-    <div className="text-sm text-stone-700" style={{pointerEvents:'none'}}>
-     {dragging?<span className="text-orange-700 font-semibold">Drop to import</span>:<span>Drop .xlsx files anywhere here, or <span className="text-orange-700 underline">click to browse</span></span>}
+   {/* Status */}
+   {status==='parsing'&&<div className="bg-stone-50 border border-stone-200 p-4 text-sm text-stone-600 flex items-center gap-2"><Ico n="clock" size={16} className="text-stone-400"/>Parsing file...</div>}
+   {status==='error'&&<div className="bg-rose-50 border border-rose-200 p-4"><div className="font-medium text-rose-900 text-sm">Parse failed</div><div className="text-xs text-rose-700 mt-1">{errMsg}</div><button onClick={reset} className="mt-2 text-xs text-rose-700 underline">Try another file</button></div>}
+   {status==='done'&&<div className="bg-emerald-50 border border-emerald-200 p-4 flex items-center justify-between"><span className="text-emerald-800 font-medium text-sm">✓ Imported successfully</span><button onClick={reset} className="text-xs bg-emerald-700 text-white px-3 py-1.5">Import next file</button></div>}
+   {status==='ready'&&parsed&&<div className="bg-white border border-stone-200 p-4 space-y-3">
+    <div className="flex items-center gap-3 pb-3 border-b border-stone-100">
+     <div className="text-xl font-serif font-bold">#{parsed.proposalId}</div>
+     <div className="flex-1"><div className="font-semibold text-stone-900">{parsed.project}</div><div className="text-xs text-stone-500">{parsed.location}{parsed.projectNumber?' · Job #'+parsed.projectNumber:''}</div></div>
+     {existingProposal?<span className="text-[10px] px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full">⚠ Existing · {existingProposal.status}</span>:<span className="text-[10px] px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full">✓ New</span>}
     </div>
-    <div className="text-xs text-stone-500 mt-1" style={{pointerEvents:'none'}}>{queue.length===0?'No files queued yet.':`${pending} pending · ${done} imported · ${failed} errors`}</div>
-    <input ref={fileInputRef} type="file" multiple accept=".xlsx,.xls" onChange={onFilePick} className="hidden"/>
-   </div>
-   <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-    {/* Active card */}
-    <div className="lg:col-span-2">
-     {cur&&cur.status==='parsing'&&<div className="bg-white border border-stone-200 p-6 text-center text-stone-500"><Ico n="clock" size={20} className="text-stone-400 mx-auto mb-2"/>Parsing {cur.file.name}...</div>}
-     {cur&&cur.status==='error'&&<div className="bg-rose-50 border border-rose-200 p-5">
-      <div className="font-medium text-rose-900">Parse failed: {cur.file.name}</div>
-      <div className="text-xs text-rose-700 mt-2">{cur.error||'Unknown error'}</div>
-      <button onClick={skip} className="mt-3 px-3 py-1.5 text-xs bg-rose-700 text-white">Skip → next</button>
-     </div>}
-     {cur&&cur.status==='ready'&&parsed&&<div className="bg-white border border-stone-200">
-      <div className="px-4 py-2 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
-       <div className="font-mono text-xs text-stone-500 truncate">{cur.file.name}</div>
-       <button onClick={skip} className="text-xs text-stone-400 hover:text-rose-700 flex-shrink-0 ml-2">✕ skip</button>
-      </div>
-      <div className="p-4 space-y-3">
-       {/* Proposal # match */}
-       <div className="flex items-center gap-2 pb-2 border-b border-stone-100">
-        <div className="text-xl font-serif font-bold text-stone-900">#{parsed.proposalId}</div>
-        <div className="flex-1 min-w-0">
-         <div className="font-semibold text-stone-900 truncate">{parsed.project||'(no project name)'}</div>
-         <div className="text-xs text-stone-500 truncate">{parsed.location}{parsed.projectNumber?<span className="ml-2 font-mono text-[10px] px-1.5 py-0.5 bg-stone-100 text-stone-600 rounded">Job #{parsed.projectNumber}</span>:null}</div>
-        </div>
-        {existingProposal
-         ?<span className="text-[10px] px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-200 rounded-full flex-shrink-0">⚠ Exists · {existingProposal.status}</span>
-         :<span className="text-[10px] px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full flex-shrink-0">✓ New</span>
-        }
-       </div>
-       {/* GC */}
-       <div className="grid grid-cols-2 gap-4">
-        <div>
-         <label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold">GC</label>
-         <input value={gcMatch} onChange={e=>setGcMatch(e.target.value)} list="gc-suggest"
-          className="w-full px-2 py-1.5 text-sm border border-stone-300 focus:border-sky-400 focus:outline-none rounded-sm"/>
-         <datalist id="gc-suggest">
-          {gcSuggestions.map(g=><option key={g} value={g}/>)}
-          {gcs.slice(0,30).map(g=><option key={g} value={g}/>)}
-         </datalist>
-         {gcSuggestions.length>0&&gcMatch!==parsed.gc&&<div className="text-[10px] text-emerald-700 mt-1">✓ matches existing</div>}
-         {!gcSuggestions.length&&<div className="text-[10px] text-amber-700 mt-1">⚠ no match — will create new GC</div>}
-        </div>
-        <div>
-         <label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold">Contact</label>
-         <div className="text-sm">{parsed.contact||<span className="text-stone-300">—</span>}</div>
-         <div className="text-xs text-stone-500">{parsed.email||''}{parsed.phone?' · '+parsed.phone:''}</div>
-        </div>
-       </div>
-       {/* Line items summary */}
-       <div className="bg-stone-50 border border-stone-200 px-3 py-2">
-        <div className="text-xs text-stone-600">
-         <strong>{parsed.items.length} line items</strong> · {money(parsed.totals.total,true)} total
-        </div>
-        <div className="text-[11px] text-stone-500 mt-1">
-         Manufacturers: {Object.entries(parsed.items.reduce((m,i)=>{if(i.manufacturer){m[i.manufacturer]=(m[i.manufacturer]||0)+1;}return m;},{})).map(([k,v])=>`${k} (${v})`).join(', ')||'—'}
-        </div>
-        {parsed.warnings.length>0&&<div className="text-[11px] text-amber-700 mt-1">⚠ {parsed.warnings.join(' · ')}</div>}
-       </div>
-       {/* Outcome buttons */}
-       {!existingProposal&&<div>
-        <label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1 block">Outcome — select then click Approve ↓</label>
-        <div className="grid grid-cols-4 gap-2">
-         {['Won','Lost','Dead','Submitted'].map(o=>(
-          <button key={o} onClick={()=>{setOutcome(o);}}
-           style={{background:outcome===o?'#1c1917':'white',color:outcome===o?'white':'#44403c'}}
-           className="px-3 py-2 text-sm border border-stone-300 hover:bg-stone-100 transition-colors">{o}</button>
-         ))}
-        </div>
-       </div>}
-       {/* Approve — always visible, sticky at bottom */}
-       <button onClick={approve} autoFocus
-        onKeyDown={e=>{if(e.key==='Enter')approve();}}
-        className="w-full bg-orange-700 hover:bg-orange-800 text-white py-3 font-semibold text-sm transition-colors mt-1">
-        ✓ Approve + import
-       </button>
-      </div>
-     </div>}
-     {!cur&&queue.length===0&&<div className="bg-stone-50 border border-stone-200 p-12 text-center text-stone-400">
-      <Ico n="upload" size={32} className="mx-auto mb-2"/>
-      <div className="text-sm">Drop files above to begin.</div>
-     </div>}
-     {!cur&&queue.length>0&&<div className="bg-emerald-50 border border-emerald-200 p-8 text-center">
-      <Ico n="check2" size={24} className="text-emerald-700 mx-auto mb-2"/>
-      <div className="font-medium text-emerald-900">Queue complete</div>
-      <div className="text-xs text-emerald-700 mt-1">{done} imported · {failed} errors · {queue.filter(q=>q.status==='skipped').length} skipped</div>
-     </div>}
+    <div className="grid grid-cols-2 gap-3 text-sm">
+     <div>
+      <div className="text-[10px] uppercase text-stone-500 font-semibold mb-1">GC</div>
+      <input value={gcMatch} onChange={e=>setGcMatch(e.target.value)} list="gc-list" className="w-full px-2 py-1.5 text-sm border border-stone-300 focus:border-sky-400 focus:outline-none rounded-sm"/>
+      <datalist id="gc-list">{gcs.map(g=><option key={g} value={g}/>)}</datalist>
+      <div className="text-[10px] mt-1">{gcSuggestions.length?<span className="text-emerald-700">✓ matches existing GC</span>:<span className="text-amber-600">⚠ new GC will be created</span>}</div>
+     </div>
+     <div>
+      <div className="text-[10px] uppercase text-stone-500 font-semibold mb-1">Contact</div>
+      <div className="text-sm font-medium">{parsed.contact||'—'}</div>
+      <div className="text-xs text-stone-500">{parsed.email}</div>
+     </div>
     </div>
-    {/* Right column: queue + recent */}
-    <div className="space-y-3">
-     {queue.length>0&&<div className="bg-white border border-stone-200">
-      <div className="px-3 py-2 border-b border-stone-200 bg-stone-50 text-xs font-semibold text-stone-700">Queue ({queue.length})</div>
-      <div className="max-h-64 overflow-y-auto">
-       {queue.map((q,i)=>(
-        <button key={i} onClick={()=>setActive(i)}
-         className={`w-full text-left px-3 py-1.5 text-xs border-b border-stone-100 flex items-center gap-2 ${i===active?'bg-sky-50':'hover:bg-stone-50'}`}>
-         <span style={{width:'8px',height:'8px',borderRadius:'50%',background:q.status==='imported'?'#10b981':q.status==='error'?'#ef4444':q.status==='skipped'?'#a8a29e':q.status==='parsing'?'#f59e0b':'#d6d3d1',flexShrink:0}}/>
-         <span className="truncate flex-1">{q.file.name.replace('PROPOSAL_AMS_','').replace(/\.xlsx?$/i,'')}</span>
-        </button>
-       ))}
-      </div>
-     </div>}
-     {recent.length>0&&<div className="bg-white border border-stone-200">
-      <div className="px-3 py-2 border-b border-stone-200 bg-stone-50 text-xs font-semibold text-stone-700">Recently imported ({recent.length})</div>
-      <div className="max-h-96 overflow-y-auto">
-       {recent.map((r,i)=>(
-        <div key={i} className="px-3 py-2 border-b border-stone-100 text-xs">
-         <div className="font-medium text-stone-900 truncate">#{r.id} {r.project}</div>
-         <div className="text-stone-500">{r.items} items · {money(r.total,true)} · <span className={r.outcome==='Won'?'text-emerald-700':r.outcome==='Lost'?'text-rose-700':'text-stone-500'}>{r.outcome}</span></div>
-        </div>
-       ))}
-      </div>
-     </div>}
-    </div>
-   </div>
+    <div className="bg-stone-50 px-3 py-2 text-xs text-stone-700"><strong>{parsed.items.length} items</strong> · {money(parsed.totals.total,true)} · {Object.entries(parsed.items.reduce((m,i)=>{if(i.manufacturer)m[i.manufacturer]=(m[i.manufacturer]||0)+1;return m;},{})).map(([k,v])=>k+' ('+v+')').join(', ')}</div>
+    {!existingProposal&&<div>
+     <div className="text-[10px] uppercase text-stone-500 font-semibold mb-1">Outcome</div>
+     <div className="grid grid-cols-4 gap-2">{['Won','Lost','Dead','Submitted'].map(o=><button key={o} onClick={()=>setOutcome(o)} style={{background:outcome===o?'#1c1917':'white',color:outcome===o?'white':'#44403c'}} className="py-2 text-sm border border-stone-300">{o}</button>)}</div>
+    </div>}
+    <button onClick={approve} disabled={status==='importing'} className="w-full py-3 bg-orange-700 hover:bg-orange-800 text-white font-semibold text-sm disabled:opacity-50">
+     {status==='importing'?'Importing...':'✓ Approve + Import'}
+    </button>
+   </div>}
+   {recent.length>0&&<div className="bg-white border border-stone-200"><div className="px-3 py-2 border-b border-stone-100 text-xs font-semibold text-stone-600">Recently imported</div>{recent.map((r,i)=><div key={i} className="px-3 py-2 border-b border-stone-100 text-xs flex items-center justify-between"><span className="font-medium">#{r.id} {r.project}</span><span className="text-stone-500">{r.items} items · {money(r.total,true)} · <span className={r.outcome==='Won'?'text-emerald-700':r.outcome==='Lost'?'text-rose-700':'text-stone-500'}>{r.outcome}</span></span></div>)}</div>}
   </div>
  );
 };
+
 const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onExport,setShowNewProject,onSaveProposal,sb,onImported})=>{
  const [bfReason,setBfReason]=useState({});
  const [bfSaving,setBfSaving]=useState(false);
