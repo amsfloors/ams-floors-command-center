@@ -2093,16 +2093,16 @@ window.genSupplierPOs=function(est,items,proposal){
   var byS={};(items||[]).filter(function(i){return!i.isVeAlternative;}).forEach(function(i){var k=((i.manufacturer||i.supplierName||'Supplier').trim());if(!byS[k])byS[k]=[];byS[k].push(i);});
   var today=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}),n=1;
   var H="<!DOCTYPE html><html><head><meta charset='UTF-8'><style>body{font-family:Arial,sans-serif;font-size:11px;color:#1c1917}.pg{max-width:850px;margin:0 auto;padding:32px;page-break-after:always}.pg:last-child{page-break-after:auto}table{width:100%;border-collapse:collapse;margin:10px 0}th{background:#1c1917;color:#fff;padding:5px 8px;font-size:10px;text-transform:uppercase}td{padding:5px 8px;border-bottom:1px solid #e7e5e4}tfoot td{background:#f5f5f4;font-weight:700}@media print{.np{display:none}}</style></head><body>";
-  H+="<div class='np' style='background:#1c1917;color:#fff;padding:10px 20px;display:flex;justify-content:space-between;align-items:center'><span>Supplier POs — "+projName+"</span><button onclick='window.print()' style='background:#ea580c;color:#fff;border:none;padding:7px 18px;cursor:pointer;font-weight:700'>Print / Save PDF</button></div>";
+  H+="<div class='np' style='background:#1c1917;color:#fff;padding:10px 20px;display:flex;justify-content:space-between;align-items:center'><span>Supplier POs \u2014 "+projName+"</span><button onclick='window.print()' style='background:#ea580c;color:#fff;border:none;padding:7px 18px;cursor:pointer;font-weight:700'>Print / Save PDF</button></div>";
   Object.keys(byS).forEach(function(sup){
     var its=byS[sup],tot=its.reduce(function(s,i){var q=Number(i.qty)||0,c=Number(i.costPerUnit)||0,f=Number(i.freight)||0,a=q*c;return s+a+a*tax+f;},0);
     H+="<div class='pg'><div style='display:flex;justify-content:space-between;padding-bottom:12px;margin-bottom:14px;border-bottom:2px solid #1c1917'>";
-    H+="<div><img src='data:image/png;base64,"+_LOGO+"' style='height:40px'/><div style='font-size:16px;font-weight:700;margin-top:6px'>PO #"+String(n++).padStart(4,'0')+" \u2014 "+today+"</div><div style='font-size:11px;color:#666;margin-top:2px'>Proposal #"+propNum+(gc?' &nbsp;·&nbsp; GC: '+gc:'')+"</div></div>";
+    H+="<div><img src='data:image/png;base64,"+_LOGO+"' style='height:40px'/><div style='font-size:16px;font-weight:700;margin-top:6px'>PO #"+String(n++).padStart(4,'0')+" \u2014 "+today+"</div><div style='font-size:11px;color:#666;margin-top:2px'>Proposal #"+propNum+(gc?' &nbsp;&middot;&nbsp; GC: '+gc:'')+"</div></div>";
     H+="<div style='text-align:right'><div style='font-weight:700;font-size:13px'>"+sup+"</div><div style='color:#888;font-size:10px;margin-top:2px'>Ship to job site:</div><div style='font-weight:700'>"+projName+"</div>"+(location?"<div style='color:#666;font-size:11px'>"+location+"</div>":"")+"</div></div>";
     H+="<table><thead><tr><th>Item</th><th>Description</th><th>Color / Spec</th><th style='text-align:right'>Order Qty</th><th style='text-align:right'>Unit Cost</th><th style='text-align:right'>Amt</th></tr></thead><tbody>";
     its.forEach(function(i){var q=Number(i.qty)||0,c=Number(i.costPerUnit)||0,oq=i.sfPerCtn&&Number(i.sfPerCtn)>0?Math.ceil(q/Number(i.sfPerCtn))+' CTN':q+' '+(i.unit||'SF');H+="<tr><td>"+(i.itemCode||'')+"</td><td>"+(i.description||'')+"</td><td>"+(i.color||'')+"</td><td style='text-align:right'>"+oq+"</td><td style='text-align:right'>"+fmt(c)+"</td><td style='text-align:right'>"+fmt(q*c)+"</td></tr>";});
     H+="</tbody><tfoot><tr><td colspan='4'></td><td>Subtotal</td><td style='text-align:right'>"+fmt(tot)+"</td></tr></tfoot></table>";
-    H+="<div style='margin-top:20px;padding-top:12px;border-top:1px solid #e7e5e4;display:grid;grid-template-columns:1fr 1fr;gap:20px;font-size:11px'><div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>AMS Floors LLC — Ordered by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date</div></div><div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>"+sup+" — Confirmed by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date &nbsp;&nbsp;&nbsp;&nbsp; ETA: ____________</div></div></div>";
+    H+="<div style='margin-top:20px;padding-top:12px;border-top:1px solid #e7e5e4;display:grid;grid-template-columns:1fr 1fr;gap:20px;font-size:11px'><div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>AMS Floors LLC -- Ordered by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date</div></div><div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>"+sup+" -- Confirmed by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date &nbsp;&nbsp;&nbsp;&nbsp; ETA: ____________</div></div></div>";
     H+="</div>";
   });
   return H+"</body></html>";
@@ -2117,7 +2117,7 @@ window.genInstallerPO=function(est,items,proposal){
   var tL=its.reduce(function(s,i){return s+(Number(i.qty)||0)*(Number(i.laborRate)||0);},0);
   var today=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
   var H="<!DOCTYPE html><html><head><meta charset='UTF-8'><style>body{font-family:Arial,sans-serif;font-size:11px;color:#1c1917}.pg{max-width:850px;margin:0 auto;padding:32px}table{width:100%;border-collapse:collapse;margin:10px 0}th{background:#1c1917;color:#fff;padding:5px 8px;font-size:10px;text-transform:uppercase}td{padding:5px 8px;border-bottom:1px solid #e7e5e4}tfoot td{background:#f5f5f4;font-weight:700}@media print{.np{display:none}}</style></head><body>";
-  H+="<div class='np' style='background:#1c1917;color:#fff;padding:10px 20px;display:flex;justify-content:space-between;align-items:center'><span>Work Order — "+projName+"</span><button onclick='window.print()' style='background:#ea580c;color:#fff;border:none;padding:7px 18px;cursor:pointer;font-weight:700'>Print / Save PDF</button></div>";
+  H+="<div class='np' style='background:#1c1917;color:#fff;padding:10px 20px;display:flex;justify-content:space-between;align-items:center'><span>Work Order -- "+projName+"</span><button onclick='window.print()' style='background:#ea580c;color:#fff;border:none;padding:7px 18px;cursor:pointer;font-weight:700'>Print / Save PDF</button></div>";
   H+="<div class='pg'>";
   H+="<div style='display:flex;justify-content:space-between;padding-bottom:12px;margin-bottom:16px;border-bottom:2px solid #1c1917'>";
   H+="<div><img src='data:image/png;base64,"+_LOGO+"' style='height:40px'/><div style='font-size:16px;font-weight:700;margin-top:6px;text-transform:uppercase;letter-spacing:0.5px'>Installer Work Order</div><div style='color:#666;font-size:11px;margin-top:2px'>"+today+"</div></div>";
@@ -2127,8 +2127,8 @@ window.genInstallerPO=function(est,items,proposal){
   its.forEach(function(i){var lab=(Number(i.qty)||0)*(Number(i.laborRate)||0);H+="<tr><td>"+(i.itemCode||'')+"</td><td>"+(i.description||'')+"</td><td style='text-align:right'>"+(i.qty||'')+"</td><td>"+(i.unit||'')+"</td><td style='text-align:right'>"+fmt(i.laborRate)+"</td><td style='text-align:right'>"+fmt(lab)+"</td></tr>";});
   H+="</tbody><tfoot><tr><td colspan='4'></td><td style='font-weight:700'>TOTAL LABOR</td><td style='text-align:right;font-weight:700'>"+fmt(tL)+"</td></tr></tfoot></table>";
   H+="<div style='margin-top:22px;padding-top:14px;border-top:1px solid #e7e5e4;display:grid;grid-template-columns:1fr 1fr;gap:24px;font-size:11px'>";
-  H+="<div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>AMS Floors — Issued by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date</div></div>";
-  H+="<div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>Installer — Accepted by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date &nbsp;&nbsp;&nbsp;&nbsp; Start Date: ____________</div></div></div>";
+  H+="<div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>AMS Floors -- Issued by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date</div></div>";
+  H+="<div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>Installer -- Accepted by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date &nbsp;&nbsp;&nbsp;&nbsp; Start Date: ____________</div></div></div>";
   H+="</div></body></html>";
   return H;
 };
@@ -2219,8 +2219,8 @@ window.parseBidsheetFile=async(file)=>{
   // Build column map from cleaned header names
   const hdrs=(data[hdrRow]||[]).map(clean);
   const col=(name)=>{const i=hdrs.indexOf(name);return i>=0?i:-1;};
-  const cols={item:col('ITEM'),size:col('SIZE'),mfr:col('MFR'),desc:col('DESCRIPTION'),color:col('COLOR'),qty:col('QTY'),unit:col('UNIT'),sfctn:col('SF/CTN'),syctn:col('SY/CTN'),order:col('ORDER'),cost:col('COST'),amount:col('AMOUNT'),tax:col('SALES TAX'),freight:col('FREIGHT'),laborRate:col('LABOR RATE'),labor:col('LABOR'),total:col('TOTAL')};
-  // Auto-detect markup rate from column header e.g. "30% MARKUP" → 0.30
+  const cols={item:col('ITEM'),size:col('SIZE'),mfr:col('MFR'),desc:col('DESCRIPTION'),color:col('COLOR'),qty:col('QTY'),unit:col('UNIT'),sfctn:col('SF/CTN'),syctn:col('SY/CTN'),order:col('ORDER'),cost:col('COST'),amount:col('AMOUNT'),tax:col('SALES TAX'),freight:col('FREIGHT'),material:col('MATERIAL'),laborRate:col('LABOR RATE'),labor:col('LABOR'),total:col('TOTAL')};
+  const hasMaterialCol=cols.material>=0;0% MARKUP" -> 0.30
   var detectedMarkup=0.20;
   for(var hi=0;hi<hdrs.length;hi++){var hm=hdrs[hi].match(/^(\d+(?:\.\d+)?)\s*%\s*MARKUP$/i);if(hm){detectedMarkup=parseFloat(hm[1])/100;break;}}
   result.markupRate=detectedMarkup;
@@ -2249,16 +2249,27 @@ window.parseBidsheetFile=async(file)=>{
       }
     }
     const qty=Number(rawQty)||0;
-    // CRITICAL: use AMOUNT/QTY not raw COST column
-    // Peter's COST column is sometimes per-carton while QTY is in SF/EA
-    // AMOUNT is always Peter's correct pre-calculated total for this line
+    // Use MATERIAL column (Peter's final sell price incl. markup+tax+freight) as costPerUnit.
+    // This gives exact per-item match to Peter's numbers regardless of his multiplier formula.
+    // When MATERIAL is used: store freight=0, and estimate taxRate=0/markupRate=0 so
+    // system total = qty x costPerUnit = Peter's MATERIAL exactly.
+    const rawMaterial=hasMaterialCol?row[cols.material]:null;
     const rawAmount=cols.amount>=0?row[cols.amount]:null;
+    const rawCostCol=row[cols.cost];
     let costPerUnit=0;
+    let freightForItem=0;
+    let usedMaterial=false;
     if(qty>0){
-      if(rawAmount!=null&&Number(rawAmount)>0){
+      if(rawMaterial!=null&&Number(rawMaterial)>0){
+        costPerUnit=Number(rawMaterial)/qty;
+        freightForItem=0; // already baked into MATERIAL
+        usedMaterial=true;
+      } else if(rawAmount!=null&&Number(rawAmount)>0){
         costPerUnit=Number(rawAmount)/qty;
+        freightForItem=cols.freight>=0?Number(row[cols.freight])||0:0;
       } else {
-        costPerUnit=Number(rawCost)||0;
+        costPerUnit=Number(rawCostCol)||0;
+        freightForItem=cols.freight>=0?Number(row[cols.freight])||0:0;
       }
     }
     if(qty<=0||costPerUnit<=0)continue;
@@ -2268,15 +2279,16 @@ window.parseBidsheetFile=async(file)=>{
     result.items.push({
       itemCode:itemVal||'',
       size:clean(row[cols.size]),
-      manufacturer:cols.mfr>=0?String(row[cols.mfr]||'').replace(/^'+/,'').replace(/'+$/,'').trim():'',
-      description:cols.desc>=0?String(row[cols.desc]||'').replace(/^'+/,'').replace(/'+$/,'').trim():'',
-      color:cols.color>=0?String(row[cols.color]||'').replace(/^'+/,'').replace(/'+$/,'').trim():'',
+      manufacturer:cols.mfr>=0?String(row[cols.mfr]||'').replace(/^'+/g,'').replace(/'+$/g,'').trim():'',
+      description:cols.desc>=0?String(row[cols.desc]||'').replace(/^'+/g,'').replace(/'+$/g,'').trim():'',
+      color:cols.color>=0?String(row[cols.color]||'').replace(/^'+/g,'').replace(/'+$/g,'').trim():'',
       qty,
-      unit:cols.unit>=0?String(row[cols.unit]||'SF').replace(/^'+/,'').replace(/'+$/,'').trim():'SF',
+      unit:cols.unit>=0?String(row[cols.unit]||'SF').replace(/^'+/g,'').replace(/'+$/g,'').trim():'SF',
       sfPerCtn:cols.sfctn>=0?Number(row[cols.sfctn])||null:null,
       costPerUnit,
-      freight:cols.freight>=0?Number(row[cols.freight])||0:0,
+      freight:freightForItem,
       laborRate:cols.laborRate>=0?Number(row[cols.laborRate])||0:0,
+      usedMaterial,
       sectionCode:curSection?curSection.code:null,
       sectionName:curSection?curSection.name:null,
     });
@@ -4293,9 +4305,16 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
   const propId=String(parsed.proposalId);
   const gcName=gcMatch||parsed.gc;
   const existingProp=proposals.find(p=>String(p.id)===propId);
-  const detTax=parsed.taxRate||0.07;
+  // When MATERIAL col used: costPerUnit already is sell price, no tax/markup to add
+  const allUsedMat=parsed.items.length>0&&parsed.items.every(i=>i.usedMaterial);
+  const detTax=allUsedMat?0:(parsed.taxRate||0.07);
+  const detMu=allUsedMat?0:(parsed.markupRate||0.20);
   let sumMatCost=0,sumLab=0;
-  parsed.items.forEach(it=>{const a=it.qty*it.costPerUnit;sumMatCost+=a+a*detTax+it.freight;sumLab+=it.qty*it.laborRate;});
+  parsed.items.forEach(it=>{
+   const a=it.qty*it.costPerUnit;
+   sumMatCost+=a+a*detTax+it.freight+a*detMu;
+   sumLab+=it.qty*it.laborRate;
+  });
   const propRecord={
    id:propId,project:parsed.project||(existingProp&&existingProp.project)||'',
    location:parsed.location||(existingProp&&existingProp.location)||'',
@@ -4316,7 +4335,11 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
   try{
    await sb.from('proposals').upsert(propRecord);
    const estId='est_'+propId;
-   await sb.from('estimates').upsert({id:estId,proposalId:propId,proposalNumber:propId,projectName:parsed.project,gcName,taxRate:parsed.taxRate||0.07,markupRate:parsed.markupRate||0.20,plansDated:parsed.plansDated,updatedAt:new Date().toISOString()});
+   // If MATERIAL col was used, tax/markup are baked into costPerUnit → store 0 so formula = qty×cost×1
+   const allUsedMaterial=parsed.items.length>0&&parsed.items.every(i=>i.usedMaterial);
+   const estTaxRate=allUsedMaterial?0:(parsed.taxRate||0.07);
+   const estMarkupRate=allUsedMaterial?0:(parsed.markupRate||0.20);
+   await sb.from('estimates').upsert({id:estId,proposalId:propId,proposalNumber:propId,projectName:parsed.project,gcName,taxRate:estTaxRate,markupRate:estMarkupRate,plansDated:parsed.plansDated,updatedAt:new Date().toISOString()});
    // Delete ALL items for this proposal (by proposalId, not estimateId - catches any format)
    await sb.from('estimate_items').delete().eq('proposalId',propId);
    await new Promise(r=>setTimeout(r,300)); // brief pause to ensure delete completes
