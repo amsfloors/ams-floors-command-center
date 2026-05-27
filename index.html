@@ -2256,17 +2256,25 @@ window.parseBidsheetFile=async(file)=>{
     // system total = qty x costPerUnit = Peter's MATERIAL exactly.
     const rawMaterial=hasMaterialCol?row[cols.material]:null;
     const rawAmount=cols.amount>=0?row[cols.amount]:null;
+    const rawOrderQty=cols.order>=0?row[cols.order]:null;
     const rawCostCol=row[cols.cost];
     let costPerUnit=0;
     let freightForItem=0;
     let usedMaterial=false;
     if(qty>0){
       if(rawMaterial!=null&&Number(rawMaterial)>0){
+        // MATERIAL col = Peter's final sell price per line (markup+tax+freight baked in)
+        // Store as costPerUnit so qty*costPerUnit = MATERIAL exactly. No tax/markup applied.
         costPerUnit=Number(rawMaterial)/qty;
-        freightForItem=0; // already baked into MATERIAL
+        freightForItem=0;
         usedMaterial=true;
       } else if(rawAmount!=null&&Number(rawAmount)>0){
+        // AMOUNT = ORDER*COST (Peter's formula). Use this as AMS cost basis.
         costPerUnit=Number(rawAmount)/qty;
+        freightForItem=cols.freight>=0?Number(row[cols.freight])||0:0;
+      } else if(rawOrderQty!=null&&Number(rawOrderQty)>0&&Number(rawCostCol)>0){
+        // Fallback: ORDER*COST
+        costPerUnit=(Number(rawOrderQty)*Number(rawCostCol))/qty;
         freightForItem=cols.freight>=0?Number(row[cols.freight])||0:0;
       } else {
         costPerUnit=Number(rawCostCol)||0;
