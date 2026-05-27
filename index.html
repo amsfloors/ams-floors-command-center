@@ -4339,7 +4339,7 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
    phone:parsed.phone||(existingProp&&existingProp.phone)||'',
    submitted:parsed.submittedDate||(existingProp&&existingProp.submitted)||new Date().toISOString().slice(0,10),
    status:existingProp?existingProp.status:outcome,
-   bidAmount:parsed.totals.total||0,
+   bidAmount:parsed.totals.total||Math.round(sumMatCost+sumLab)||0,
    estimator:'Peter',bdOwner:(existingProp&&existingProp.bdOwner)||'Paul',
    projectNumber:parsed.projectNumber||(existingProp&&existingProp.projectNumber)||'',
    updatedAt:new Date().toISOString(),
