@@ -3744,7 +3744,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
     <div className="p-5 space-y-5">
      {activeTab==='details' && <>
      <div className="grid grid-cols-4 gap-3">
-      {[['Bid (Estimate)',money(estimateBidTotal||contract,true),null],['Contract',money(contract,true),null],['Est. Margin',_em!==null?pct(_em,1):'—',_em],['Actual Margin',_am!==null?pct(_am,1):'—',_am]].map(([lbl,val,m])=>(
+      {[['Bid (Estimate)',money(draft.bidAmount||estimateBidTotal||contract,true),null],['Contract',money(contract,true),null],['Est. Margin',_em!==null?pct(_em,1):'—',_em],['Actual Margin',_am!==null?pct(_am,1):'—',_am]].map(([lbl,val,m])=>(
        <div key={lbl} className="bg-white border border-stone-200 p-3"><div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold">{lbl}</div><div className={`font-serif text-2xl mt-1 ${m===null?'text-stone-400':m<0.05?'text-rose-700':m>=0.18?'text-emerald-700':'text-amber-700'}`}>{val}</div></div>
       ))}
      </div>
