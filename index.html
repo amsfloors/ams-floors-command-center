@@ -4243,6 +4243,9 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
  const [gcMatch,setGcMatch]=useState('');
  const [outcome,setOutcome]=useState('Submitted');
  const [recent,setRecent]=useState([]);
+ const [dragging,setDragging]=useState(false);
+ const dropRef=useRef(null);
+ const fileInputRef=useRef(null);
  const onDrop=async(e)=>{
   e.preventDefault();
   e.stopPropagation();
@@ -4258,13 +4261,11 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
   setQueue(q=>{const next=[...q,...newItems];if(active===null)setActive(q.length);return next;});
   e.target.value='';
  };
- // Block browser from navigating when files are dragged outside the drop zone
+ // Block browser navigation on file drop OUTSIDE our drop zone
  useEffect(()=>{
   const block=(e)=>{
-    // Only block if the drop target is NOT inside our drop zone
-    if(!e.target.closest||!e.target.closest('[data-dropzone]')){
-      e.preventDefault();e.stopPropagation();
-    }
+    const inZone=dropRef.current&&(dropRef.current===e.target||dropRef.current.contains(e.target));
+    if(!inZone){e.preventDefault();e.stopPropagation();}
   };
   window.addEventListener('dragover',block);
   window.addEventListener('drop',block);
@@ -4359,11 +4360,19 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
     <p className="text-sm text-stone-400 mt-1">Drag Peter's historical .xlsx files here. Each file gets matched to its proposal #, GC parsed, line items extracted. Confirm and approve one card at a time.</p>
    </div>
    {/* Drop zone */}
-   <div data-dropzone="true" onDrop={onDrop} onDragOver={e=>{e.preventDefault();e.stopPropagation();}} onDragEnter={e=>{e.preventDefault();e.stopPropagation();}}
-    className="border-2 border-dashed border-stone-300 bg-stone-50 px-5 py-6 text-center hover:border-orange-400 hover:bg-orange-50 transition-colors cursor-copy">
-    <Ico n="upload" size={28} className="text-stone-400 mx-auto mb-2"/>
-    <div className="text-sm text-stone-700">Drop .xlsx files here, or <label className="text-orange-700 hover:underline cursor-pointer">browse<input type="file" multiple accept=".xlsx,.xls" onChange={onFilePick} className="hidden"/></label></div>
-    <div className="text-xs text-stone-500 mt-1">{queue.length===0?'No files queued yet.':`${pending} pending · ${done} imported · ${failed} errors`}</div>
+   <div ref={dropRef}
+    onDrop={e=>{e.preventDefault();e.stopPropagation();setDragging(false);onDrop(e);}}
+    onDragOver={e=>{e.preventDefault();e.stopPropagation();setDragging(true);}}
+    onDragEnter={e=>{e.preventDefault();e.stopPropagation();setDragging(true);}}
+    onDragLeave={e=>{e.preventDefault();if(!dropRef.current?.contains(e.relatedTarget))setDragging(false);}}
+    onClick={()=>fileInputRef.current?.click()}
+    style={{border:`2px dashed ${dragging?'#c2410c':'#d6d3d1'}`,background:dragging?'#fff7ed':'#fafaf9',cursor:'pointer',padding:'24px',textAlign:'center',transition:'all 0.15s'}}>
+    <Ico n="upload" size={28} className="text-stone-400 mx-auto mb-2" style={{pointerEvents:'none'}}/>
+    <div className="text-sm text-stone-700" style={{pointerEvents:'none'}}>
+     {dragging?<span className="text-orange-700 font-semibold">Drop to import</span>:<span>Drop .xlsx files anywhere here, or <span className="text-orange-700 underline">click to browse</span></span>}
+    </div>
+    <div className="text-xs text-stone-500 mt-1" style={{pointerEvents:'none'}}>{queue.length===0?'No files queued yet.':`${pending} pending · ${done} imported · ${failed} errors`}</div>
+    <input ref={fileInputRef} type="file" multiple accept=".xlsx,.xls" onChange={onFilePick} className="hidden"/>
    </div>
    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
     {/* Active card */}
