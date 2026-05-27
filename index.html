@@ -4283,9 +4283,12 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
   e.target.value='';
  };
 
+ const parsingRef=useRef(new Set());
  useEffect(()=>{
-  if(active===null||!queue[active]||queue[active].parsed)return;
+  if(active===null||!queue[active])return;
   const item=queue[active];
+  if(item.status!=='pending'||parsingRef.current.has(active))return;
+  parsingRef.current.add(active);
   setQueue(q=>q.map((x,i)=>i===active?{...x,status:'parsing'}:x));
   parseBidsheetFile(item.file).then(parsed=>{
    setQueue(q=>q.map((x,i)=>i===active?{...x,parsed,status:parsed.ok?'ready':'error',error:parsed.warnings.length?parsed.warnings.join('; '):'No line items found — check file has a Bidsheet tab with ITEM/MFR/COST columns'}:x));
@@ -4293,9 +4296,9 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
    setOutcome('Submitted');
   }).catch(err=>{
    console.error('Parse error:',err);
-   setQueue(q=>q.map((x,i)=>i===active?{...x,status:'error',error:err.message||'Parse failed — check browser console for details'}:x));
+   setQueue(q=>q.map((x,i)=>i===active?{...x,status:'error',error:err.message||'Parse failed'}:x));
   });
- },[active,queue]);
+ },[active]);
  const cur=active!==null?queue[active]:null;
  const parsed=cur&&cur.parsed;
  const gcSuggestions=useMemo(()=>{
