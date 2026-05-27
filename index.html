@@ -2197,11 +2197,18 @@ window.parseBidsheetFile=async(file)=>{
     const row=(data[r]||[]).map(x=>String(x||'').toUpperCase().trim());
     if(row.includes('ITEM')&&(row.includes('MFR')||row.includes('DESCRIPTION'))){hdrRow=r;break;}
   }
-  if(hdrRow<0){result.warnings.push('Could not find line item header (ITEM/MFR/DESCRIPTION)');return result;}
+  if(hdrRow<0){
+    // Debug: show what rows 0-14 actually contain
+    const preview=data.slice(0,15).map((r,i)=>`R${i+1}:[${(r||[]).filter(Boolean).slice(0,6).join('|')}]`).join(' ');
+    result.warnings.push('Could not find header row. First 15 rows: '+preview);
+    return result;
+  }
   // Build column map from header names
   const hdrs=(data[hdrRow]||[]).map(x=>String(x||'').toUpperCase().trim());
+  result.warnings.push('DEBUG headers at R'+(hdrRow+1)+': '+hdrs.filter(Boolean).join(' | '));
   const col=(name)=>{const i=hdrs.indexOf(name);return i>=0?i:-1;};
   const cols={item:col('ITEM'),size:col('SIZE'),mfr:col('MFR'),desc:col('DESCRIPTION'),color:col('COLOR'),qty:col('QTY'),unit:col('UNIT'),sfctn:col('SF/CTN'),syctn:col('SY/CTN'),order:col('ORDER'),cost:col('COST'),amount:col('AMOUNT'),tax:col('SALES TAX'),freight:col('FREIGHT'),laborRate:col('LABOR RATE'),labor:col('LABOR'),total:col('TOTAL')};
+  result.warnings.push('DEBUG cols: item='+cols.item+' qty='+cols.qty+' cost='+cols.cost+' mfr='+cols.mfr+' freight='+cols.freight+' laborRate='+cols.laborRate);
   Object.entries(cols).forEach(([k,v])=>{if(v<0&&['item','mfr','desc','qty','cost'].includes(k))result.warnings.push('Missing column: '+k);});
   // Parse line items - rows after header, skip empty rows and totals row
   let curSection=null;
