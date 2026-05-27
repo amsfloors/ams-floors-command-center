@@ -3905,7 +3905,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
         try{
          const html=fn(estimate||{},estimateItemsForThis,'',draft);
          setPreviewHtml(html);
-         sb.from('proposal_documents').insert({proposalId:String(draft.id),documentType:lb,generatedAt:new Date().toISOString(),generatedBy:'AMS'}).catch(()=>{});
+         sb.from('proposal_documents').insert({proposalId:String(draft.id),documentType:lb,generatedAt:new Date().toISOString(),generatedBy:'AMS'}).then(()=>{},()=>{});
         }catch(err){alert('Generator error: '+err.message);}
        }} style={{background:'#1c1917',color:'white',border:'none',padding:'8px 14px',cursor:'pointer',fontSize:'12px',fontWeight:'600',flexShrink:0}}>{lb}</button>
       </div>)}
@@ -4349,8 +4349,15 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
    estMaterial:Math.round(sumMatCost),estLabor:Math.round(sumLab),
   };
   if(!existingProp) propRecord.status=outcome;
+  const newBidTotal=parsed.totals.total||Math.round(sumMatCost*(1+(parsed.markupRate!=null?parsed.markupRate:0.20))+sumLab);
   const existingContract=existingProp&&existingProp.contractAmount;
-  if(!existingContract) propRecord.contractAmount=parsed.totals.total||Math.round(sumMatCost*(1+(parsed.markupRate!=null?parsed.markupRate:0.20))+sumLab);
+  const existingBid=existingProp&&existingProp.bidAmount;
+  // Update contractAmount if: no existing contract, OR existing contract looks like it was auto-set
+  // (within 5% of old bid amount = likely a calculation artifact, not a real award document)
+  const contractLooksAutoSet=existingContract&&existingBid&&Math.abs(existingContract-existingBid)/existingBid<0.05;
+  if(!existingContract||contractLooksAutoSet){
+   propRecord.contractAmount=newBidTotal;
+  }
   try{
    await sb.from('proposals').upsert(propRecord);
    const estId='est_'+propId;
