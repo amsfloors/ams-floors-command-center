@@ -2220,7 +2220,19 @@ window.parseBidsheetFile=async(file)=>{
   const hdrs=(data[hdrRow]||[]).map(clean);
   const col=(name)=>{const i=hdrs.indexOf(name);return i>=0?i:-1;};
   const cols={item:col('ITEM'),size:col('SIZE'),mfr:col('MFR'),desc:col('DESCRIPTION'),color:col('COLOR'),qty:col('QTY'),unit:col('UNIT'),sfctn:col('SF/CTN'),syctn:col('SY/CTN'),order:col('ORDER'),cost:col('COST'),amount:col('AMOUNT'),tax:col('SALES TAX'),freight:col('FREIGHT'),laborRate:col('LABOR RATE'),labor:col('LABOR'),total:col('TOTAL')};
-  Object.entries(cols).forEach(([k,v])=>{if(v<0&&['item','mfr','desc','qty','cost'].includes(k))result.warnings.push('Missing column: '+k);});
+  // Auto-detect markup rate from column header e.g. "30% MARKUP" → 0.30
+  var detectedMarkup=0.20;
+  for(var hi=0;hi<hdrs.length;hi++){var hm=hdrs[hi].match(/^(\d+(?:\.\d+)?)\s*%\s*MARKUP$/i);if(hm){detectedMarkup=parseFloat(hm[1])/100;break;}}
+  result.markupRate=detectedMarkup;
+  // Auto-detect tax rate from SALES TAX column: tax/amount ratio on first data row
+  var detectedTax=0.07;
+  for(var ri=hdrRow+1;ri<Math.min(data.length,hdrRow+10);ri++){
+    var row0=data[ri]||[];
+    var a0=cols.amount>=0?Number(row0[cols.amount]):0;
+    var t0=cols.tax>=0?Number(row0[cols.tax]):0;
+    if(a0>0&&t0>0){detectedTax=Math.round((t0/a0)*1000)/1000;break;}
+  }
+  result.taxRate=detectedTax;
   // Parse line items - rows after header
   let curSection=null;
   for(let r=hdrRow+1;r<data.length;r++){
@@ -3556,15 +3568,15 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
    <div className="bg-stone-900 text-white p-5 grid grid-cols-3 gap-4 text-center sticky bottom-0 shadow-2xl">
     <div>
      <div className="text-[10px] uppercase tracking-widest text-stone-400">Base Bid</div>
-     <div className="font-serif text-3xl mt-1">{money(totals.baseBidTotal, true)}</div>
+     <div className="font-serif text-3xl mt-1">{money(totals.baseBidTotal)}</div>
     </div>
     <div>
      <div className="text-[10px] uppercase tracking-widest text-stone-400">Alternates</div>
-     <div className="font-serif text-3xl mt-1 text-amber-300">{totals.alternatesTotal ? money(totals.alternatesTotal, true) : '—'}</div>
+     <div className="font-serif text-3xl mt-1 text-amber-300">{totals.alternatesTotal ? money(totals.alternatesTotal) : '—'}</div>
     </div>
     <div>
      <div className="text-[10px] uppercase tracking-widest text-stone-400">Grand Total</div>
-     <div className="font-serif text-3xl mt-1 text-emerald-300">{money(totals.baseBidTotal + totals.alternatesTotal, true)}</div>
+     <div className="font-serif text-3xl mt-1 text-emerald-300">{money(totals.baseBidTotal + totals.alternatesTotal)}</div>
     </div>
    </div>
    {}
@@ -4281,8 +4293,9 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
   const propId=String(parsed.proposalId);
   const gcName=gcMatch||parsed.gc;
   const existingProp=proposals.find(p=>String(p.id)===propId);
+  const detTax=parsed.taxRate||0.07;
   let sumMatCost=0,sumLab=0;
-  parsed.items.forEach(it=>{const a=it.qty*it.costPerUnit;sumMatCost+=a+a*0.07+it.freight;sumLab+=it.qty*it.laborRate;});
+  parsed.items.forEach(it=>{const a=it.qty*it.costPerUnit;sumMatCost+=a+a*detTax+it.freight;sumLab+=it.qty*it.laborRate;});
   const propRecord={
    id:propId,project:parsed.project||(existingProp&&existingProp.project)||'',
    location:parsed.location||(existingProp&&existingProp.location)||'',
@@ -4299,11 +4312,11 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
   };
   if(!existingProp) propRecord.status=outcome;
   const existingContract=existingProp&&existingProp.contractAmount;
-  if(!existingContract) propRecord.contractAmount=parsed.totals.total||Math.round(sumMatCost*1.20+sumLab);
+  if(!existingContract) propRecord.contractAmount=parsed.totals.total||Math.round(sumMatCost*(1+(parsed.markupRate||0.20))+sumLab);
   try{
    await sb.from('proposals').upsert(propRecord);
    const estId='est_'+propId;
-   await sb.from('estimates').upsert({id:estId,proposalId:propId,proposalNumber:propId,projectName:parsed.project,gcName,taxRate:0.07,markupRate:0.20,plansDated:parsed.plansDated,updatedAt:new Date().toISOString()});
+   await sb.from('estimates').upsert({id:estId,proposalId:propId,proposalNumber:propId,projectName:parsed.project,gcName,taxRate:parsed.taxRate||0.07,markupRate:parsed.markupRate||0.20,plansDated:parsed.plansDated,updatedAt:new Date().toISOString()});
    // Delete ALL items for this proposal (by proposalId, not estimateId - catches any format)
    await sb.from('estimate_items').delete().eq('proposalId',propId);
    await new Promise(r=>setTimeout(r,300)); // brief pause to ensure delete completes
@@ -4811,6 +4824,13 @@ function App() {
      taxRate:0.07, markupRate:0.20,
      preparedByName:'Peter Laitres', preparedByEmail:'peter@amsfloors.com', preparedByPhone:'9417401555'
     };
+    // Auto-detect markup from column header e.g. "30% MARKUP"
+    const hdrsForMu=(bsRaw[bsHdrIdx]||[]).map(v=>String(v||'').replace(/^'+/g,'').replace(/'+$/g,'').trim().toUpperCase());
+    const muHdr=hdrsForMu.find(h=>/^\d+(\.\d+)?%\s*MARKUP$/.test(h));
+    if(muHdr){const muPct=parseFloat(muHdr.match(/^(\d+(?:\.\d+)?)/)[1]);if(muPct>0&&muPct<100)freshEst.markupRate=muPct/100;}
+    // Auto-detect tax from AMOUNT/SALES TAX ratio on first data row
+    const amtIdx=hdrsForMu.indexOf('AMOUNT'),taxIdx=hdrsForMu.indexOf('SALES TAX');
+    if(amtIdx>=0&&taxIdx>=0){for(let ri=bsHdrIdx+1;ri<Math.min(bsRaw.length,bsHdrIdx+10);ri++){const r=bsRaw[ri]||[];const a=Number(r[amtIdx]),t=Number(r[taxIdx]);if(a>0&&t>0){freshEst.taxRate=Math.round((t/a)*1000)/1000;break;}}}
     await sb.from('estimates').insert(freshEst);
     const headers=(bsRaw[bsHdrIdx]||[]).map(v=>(v||'').toString().trim());
     const hC={};headers.forEach((h,i)=>{hC[h.toUpperCase()]=i;});
