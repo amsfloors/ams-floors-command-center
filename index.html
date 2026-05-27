@@ -4273,15 +4273,21 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
   setQueue(q=>{const next=[...q,...newItems];if(active===null)setActive(q.length);return next;});
   e.target.value='';
  };
- // Block browser navigation on file drop OUTSIDE our drop zone
+ // Prevent browser navigation on file drop — capture phase fires before browser default
  useEffect(()=>{
-  const block=(e)=>{
-    const inZone=dropRef.current&&(dropRef.current===e.target||dropRef.current.contains(e.target));
-    if(!inZone){e.preventDefault();e.stopPropagation();}
+  const blockDrag=(e)=>{e.preventDefault();};
+  const blockDrop=(e)=>{
+   e.preventDefault();
+   if(!dropRef.current||(!dropRef.current.contains(e.target)&&dropRef.current!==e.target)){
+    e.stopPropagation();
+   }
   };
-  window.addEventListener('dragover',block);
-  window.addEventListener('drop',block);
-  return()=>{window.removeEventListener('dragover',block);window.removeEventListener('drop',block);};
+  document.addEventListener('dragover',blockDrag,{capture:true});
+  document.addEventListener('drop',blockDrop,{capture:true});
+  return()=>{
+   document.removeEventListener('dragover',blockDrag,{capture:true});
+   document.removeEventListener('drop',blockDrop,{capture:true});
+  };
  },[]);
  useEffect(()=>{
   if(active===null||!queue[active]||queue[active].parsed)return;
