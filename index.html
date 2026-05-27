@@ -2,6 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+<script>
+// Prevent browser from navigating when files are dragged onto the page.
+// Must be in plain HTML (not React) so it's active from page load.
+(function(){
+  function blockNav(e){e.preventDefault();}
+  document.addEventListener('dragover', blockNav, false);
+  document.addEventListener('drop', blockNav, false);
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>AMS Floors Command Center</title>
 <style>/*
@@ -4273,22 +4282,7 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
   setQueue(q=>{const next=[...q,...newItems];if(active===null)setActive(q.length);return next;});
   e.target.value='';
  };
- // Prevent browser navigation on file drop — capture phase fires before browser default
- useEffect(()=>{
-  const blockDrag=(e)=>{e.preventDefault();};
-  const blockDrop=(e)=>{
-   e.preventDefault();
-   if(!dropRef.current||(!dropRef.current.contains(e.target)&&dropRef.current!==e.target)){
-    e.stopPropagation();
-   }
-  };
-  document.addEventListener('dragover',blockDrag,{capture:true});
-  document.addEventListener('drop',blockDrop,{capture:true});
-  return()=>{
-   document.removeEventListener('dragover',blockDrag,{capture:true});
-   document.removeEventListener('drop',blockDrop,{capture:true});
-  };
- },[]);
+
  useEffect(()=>{
   if(active===null||!queue[active]||queue[active].parsed)return;
   const item=queue[active];
