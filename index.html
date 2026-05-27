@@ -4443,7 +4443,7 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
   </div>
  );
 };
-const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onExport,setShowNewProject,onSaveProposal})=>{
+const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onExport,setShowNewProject,onSaveProposal,sb,onImported})=>{
  const [bfReason,setBfReason]=useState({});
  const [bfSaving,setBfSaving]=useState(false);
  const [bfSaved,setBfSaved]=useState(0);
@@ -4473,11 +4473,20 @@ const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onExport,set
     <p className="text-sm text-stone-600 mb-4">Use the <strong>Bulk Intake</strong> tab to import Peter's bidsheet files. From here you can add individual projects or export all data.</p>
     <div className="flex flex-wrap gap-3">
      <button onClick={()=>setShowNewProject(true)} className="inline-flex items-center gap-2 bg-orange-800 text-white px-4 py-2 rounded-sm hover:bg-orange-900 text-sm"><Ico n="plus" size={14}/>Add Single Project</button>
-     <a href="#" onClick={e=>{e.preventDefault();}} className="inline-flex items-center gap-2 text-sm text-stone-500 hover:text-orange-800" title="Use Bulk Intake tab to import bidsheet files"><Ico n="upload" size={14}/>For bidsheet imports → use Bulk Intake tab</a>
+     <button onClick={()=>document.getElementById('bulk-intake-section').scrollIntoView({behavior:'smooth'})} className="inline-flex items-center gap-2 bg-stone-900 text-white px-4 py-2 rounded-sm hover:bg-stone-800 text-sm"><Ico n="upload" size={14}/>Bulk Bidsheet Import ↓</button>
      <button onClick={onExport} className="inline-flex items-center gap-2 bg-white border border-stone-300 text-stone-900 px-4 py-2 rounded-sm hover:bg-stone-100 text-sm"><Ico n="download" size={14}/>Export Everything to Excel</button>
     </div>
    </section>
    <section className="bg-stone-100 border border-stone-200 p-4 text-xs text-stone-600"><strong className="text-stone-900">Current data:</strong> {proposals.length} proposals · {lineItemsAll.length} line items · stored in Supabase (live sync)</section>
+   <section id="bulk-intake-section" className="bg-white border border-stone-200">
+    <div className="px-5 py-4 border-b border-stone-200 bg-stone-50">
+     <h3 className="font-serif text-lg text-stone-800">Bulk Bidsheet Import</h3>
+     <p className="text-sm text-stone-500 mt-0.5">Drop Peter's historical .xlsx files here. Each file gets matched to its proposal #, GC parsed, and line items extracted.</p>
+    </div>
+    <div className="p-4">
+     <BulkIntakeView proposals={proposals} gcs={[...new Set(proposals.map(p=>p.gc).filter(Boolean))].sort()} sb={sb} onImported={onImported}/>
+    </div>
+   </section>
    {/* Backfill: tag historical lost bids */}
    {lostUntagged.length>0&&<section className="bg-white border border-rose-200">
     <div className="px-5 py-4 border-b border-rose-100 flex items-center justify-between">
@@ -5028,7 +5037,7 @@ function App() {
   window.XLSX.writeFile(wb,`AMS_Floors_${new Date().toISOString().slice(0,10)}.xlsx`);
  };
  const overdueCount=proposals.filter(p=>OPEN_STATUSES.includes(p.status)&&(overdueDays(p,settings)||0)>0).length;
- const navItems=[{id:'dashboard',label:'Dashboard',icon:'barChart'},{id:'followups',label:'Follow-Ups',icon:'phone',badge:overdueCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Active Jobs',icon:'flame'},{id:'gcs',label:'GC Intel',icon:'building2'},{id:'intelligence',label:'Intelligence',icon:'zap'},{id:'intake',label:'Bulk Intake',icon:'upload'},{id:'settings',label:'Settings',icon:'settings'}];
+ const navItems=[{id:'dashboard',label:'Dashboard',icon:'barChart'},{id:'followups',label:'Follow-Ups',icon:'phone',badge:overdueCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Active Jobs',icon:'flame'},{id:'gcs',label:'GC Intel',icon:'building2'},{id:'intelligence',label:'Intelligence',icon:'zap'},{id:'settings',label:'Settings',icon:'settings'}];
  if(!loaded) return (
   <div className="min-h-screen flex items-center justify-center bg-stone-100">
    <div className="text-center"><Ico n="loader" size={32} className="mx-auto mb-3 text-stone-400 animate-spin"/><p className="text-sm text-stone-600">Loading AMS Floors Command Center…</p>{syncing&&<p className="text-xs text-stone-500 mt-1">Setting up database for first time…</p>}</div>
@@ -5066,7 +5075,7 @@ function App() {
     {view==='gcs'&&!selectedGC&&<GCIntelView gcStats={gcStats} proposals={proposals} onSelectGC={setSelectedGC} settings={settings}/>}
     {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
     {view==='active'&&<ActiveJobsView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
-    {view==='intake'&&<BulkIntakeView proposals={proposals} gcs={[...new Set(proposals.map(p=>p.gc).filter(Boolean))].sort()} sb={sb} onImported={async()=>{
+    {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal} sb={sb} onImported={async()=>{
      const [{data:fP},{data:fE},{data:fI}]=await Promise.all([
       sb.from('proposals').select('*').order('submitted',{ascending:false}),
       sb.from('estimates').select('*'),
@@ -5076,7 +5085,6 @@ function App() {
      if(fE)setEstimates(fE);
      if(fI)setEstimateItems(fI);
     }}/>}
-    {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal}/>}
     {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSaveProposal={saveProposal}/>}
    </main>
    {selectedProposal&&<ProjectDrawer
