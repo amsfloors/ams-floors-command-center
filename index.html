@@ -2127,7 +2127,9 @@ window.genInstallerPO=function(est,items,proposal){
 window.parseBidsheetFile=async(file)=>{
   // Universal Peter bidsheet parser - header-name lookups, layout-tolerant
   const buf=await file.arrayBuffer();
-  const wb=window.XLSX.read(buf,{type:'array',cellDates:true});
+  let wb;
+  try{wb=window.XLSX.read(buf,{type:'array',cellDates:true});}
+  catch(e){try{wb=window.XLSX.read(buf,{type:'array'});}catch(e2){result.warnings.push('Cannot read file: '+e2.message);return result;}}
   const result={file:file.name,ok:false,warnings:[],proposalId:null,projectNumber:'',project:'',location:'',gc:'',gcAddress:'',contact:'',email:'',phone:'',plansDated:null,submittedDate:null,items:[],totals:{material:0,labor:0,total:0}};
   // Pull metadata from "Proposal Summary" or any sheet with "Proposal #"
   let meta=null;
@@ -4225,6 +4227,7 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
  const [recent,setRecent]=useState([]);
  const onDrop=async(e)=>{
   e.preventDefault();
+  e.stopPropagation();
   const files=[...e.dataTransfer.files].filter(f=>/\.xlsx?$/i.test(f.name));
   if(!files.length){alert('Drop .xlsx files only');return;}
   const newItems=files.map(f=>({file:f,parsed:null,status:'pending'}));
@@ -4237,14 +4240,24 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
   setQueue(q=>{const next=[...q,...newItems];if(active===null)setActive(q.length);return next;});
   e.target.value='';
  };
+ // Block browser from navigating when files are dragged anywhere on the page
+ useEffect(()=>{
+  const block=(e)=>{e.preventDefault();e.stopPropagation();};
+  window.addEventListener('dragover',block);
+  window.addEventListener('drop',block);
+  return()=>{window.removeEventListener('dragover',block);window.removeEventListener('drop',block);};
+ },[]);
  useEffect(()=>{
   if(active===null||!queue[active]||queue[active].parsed)return;
   const item=queue[active];
   setQueue(q=>q.map((x,i)=>i===active?{...x,status:'parsing'}:x));
   parseBidsheetFile(item.file).then(parsed=>{
-   setQueue(q=>q.map((x,i)=>i===active?{...x,parsed,status:parsed.ok?'ready':'error',error:parsed.warnings.join('; ')}:x));
+   setQueue(q=>q.map((x,i)=>i===active?{...x,parsed,status:parsed.ok?'ready':'error',error:parsed.warnings.length?parsed.warnings.join('; '):'No line items found — check file has a Bidsheet tab with ITEM/MFR/COST columns'}:x));
    setGcMatch(parsed.gc||'');
    setOutcome('Submitted');
+  }).catch(err=>{
+   console.error('Parse error:',err);
+   setQueue(q=>q.map((x,i)=>i===active?{...x,status:'error',error:err.message||'Parse failed — check browser console for details'}:x));
   });
  },[active,queue]);
  const cur=active!==null?queue[active]:null;
@@ -4323,8 +4336,8 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
     <p className="text-sm text-stone-400 mt-1">Drag Peter's historical .xlsx files here. Each file gets matched to its proposal #, GC parsed, line items extracted. Confirm and approve one card at a time.</p>
    </div>
    {/* Drop zone */}
-   <div onDrop={onDrop} onDragOver={e=>e.preventDefault()} onDragEnter={e=>e.preventDefault()}
-    className="border-2 border-dashed border-stone-300 bg-stone-50 px-5 py-6 text-center hover:border-stone-500 hover:bg-stone-100 transition-colors">
+   <div onDrop={onDrop} onDragOver={e=>{e.preventDefault();e.stopPropagation();}} onDragEnter={e=>{e.preventDefault();e.stopPropagation();}}
+    className="border-2 border-dashed border-stone-300 bg-stone-50 px-5 py-6 text-center hover:border-orange-400 hover:bg-orange-50 transition-colors cursor-copy">
     <Ico n="upload" size={28} className="text-stone-400 mx-auto mb-2"/>
     <div className="text-sm text-stone-700">Drop .xlsx files here, or <label className="text-orange-700 hover:underline cursor-pointer">browse<input type="file" multiple accept=".xlsx,.xls" onChange={onFilePick} className="hidden"/></label></div>
     <div className="text-xs text-stone-500 mt-1">{queue.length===0?'No files queued yet.':`${pending} pending · ${done} imported · ${failed} errors`}</div>
