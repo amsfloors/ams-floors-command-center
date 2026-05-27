@@ -2220,7 +2220,8 @@ window.parseBidsheetFile=async(file)=>{
   const hdrs=(data[hdrRow]||[]).map(clean);
   const col=(name)=>{const i=hdrs.indexOf(name);return i>=0?i:-1;};
   const cols={item:col('ITEM'),size:col('SIZE'),mfr:col('MFR'),desc:col('DESCRIPTION'),color:col('COLOR'),qty:col('QTY'),unit:col('UNIT'),sfctn:col('SF/CTN'),syctn:col('SY/CTN'),order:col('ORDER'),cost:col('COST'),amount:col('AMOUNT'),tax:col('SALES TAX'),freight:col('FREIGHT'),material:col('MATERIAL'),laborRate:col('LABOR RATE'),labor:col('LABOR'),total:col('TOTAL')};
-  const hasMaterialCol=cols.material>=0;0% MARKUP" -> 0.30
+  const hasMaterialCol=cols.material>=0;
+  // Auto-detect markup rate from column header e.g. "30% MARKUP" -> 0.30
   var detectedMarkup=0.20;
   for(var hi=0;hi<hdrs.length;hi++){var hm=hdrs[hi].match(/^(\d+(?:\.\d+)?)\s*%\s*MARKUP$/i);if(hm){detectedMarkup=parseFloat(hm[1])/100;break;}}
   result.markupRate=detectedMarkup;
