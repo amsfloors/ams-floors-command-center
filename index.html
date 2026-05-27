@@ -4443,9 +4443,7 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
   </div>
  );
 };
-const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onImport,onExport,importStatus,setShowNewProject,onSaveProposal})=>{
- const fileRef=useRef();
- const handleFile=e=>{const f=e.target.files[0];if(f){onImport(f);e.target.value='';}};
+const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onExport,setShowNewProject,onSaveProposal})=>{
  const [bfReason,setBfReason]=useState({});
  const [bfSaving,setBfSaving]=useState(false);
  const [bfSaved,setBfSaved]=useState(0);
@@ -4472,14 +4470,12 @@ const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onImport,onE
    </section>
    <section className="bg-white border border-stone-200 p-5">
     <h3 className="font-serif text-lg text-stone-800 mb-2">Import / Export</h3>
-    <p className="text-sm text-stone-600 mb-4">Import from any Excel file — columns auto-mapped, duplicates skipped. Only Project and/or GC columns are required. All other fields are optional.</p>
+    <p className="text-sm text-stone-600 mb-4">Use the <strong>Bulk Intake</strong> tab to import Peter's bidsheet files. From here you can add individual projects or export all data.</p>
     <div className="flex flex-wrap gap-3">
      <button onClick={()=>setShowNewProject(true)} className="inline-flex items-center gap-2 bg-orange-800 text-white px-4 py-2 rounded-sm hover:bg-orange-900 text-sm"><Ico n="plus" size={14}/>Add Single Project</button>
-     <button onClick={()=>fileRef.current?.click()} className="inline-flex items-center gap-2 bg-stone-900 text-white px-4 py-2 rounded-sm hover:bg-stone-800 text-sm"><Ico n="upload" size={14}/>Import Excel (bulk)</button>
+     <a href="#" onClick={e=>{e.preventDefault();}} className="inline-flex items-center gap-2 text-sm text-stone-500 hover:text-orange-800" title="Use Bulk Intake tab to import bidsheet files"><Ico n="upload" size={14}/>For bidsheet imports → use Bulk Intake tab</a>
      <button onClick={onExport} className="inline-flex items-center gap-2 bg-white border border-stone-300 text-stone-900 px-4 py-2 rounded-sm hover:bg-stone-100 text-sm"><Ico n="download" size={14}/>Export Everything to Excel</button>
     </div>
-    <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} className="hidden"/>
-    {importStatus&&<div className={`mt-3 text-sm px-3 py-2 ${importStatus.ok?'bg-emerald-50 text-emerald-800 border border-emerald-200':'bg-rose-50 text-rose-800 border border-rose-200'}`}>{importStatus.message}</div>}
    </section>
    <section className="bg-stone-100 border border-stone-200 p-4 text-xs text-stone-600"><strong className="text-stone-900">Current data:</strong> {proposals.length} proposals · {lineItemsAll.length} line items · stored in Supabase (live sync)</section>
    {/* Backfill: tag historical lost bids */}
@@ -5080,7 +5076,7 @@ function App() {
      if(fE)setEstimates(fE);
      if(fI)setEstimateItems(fI);
     }}/>}
-    {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onImport={handleImport} onExport={handleExport} importStatus={importStatus} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal}/>}
+    {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal}/>}
     {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSaveProposal={saveProposal}/>}
    </main>
    {selectedProposal&&<ProjectDrawer
