@@ -2135,11 +2135,11 @@ window.parseBidsheetFile=async(file)=>{
   let meta=null;
   for(const sn of wb.SheetNames){
     const ws=wb.Sheets[sn];
-    const data=window.XLSX.utils.sheet_to_json(ws,{header:1,defval:null,raw:false});
+    const data=window.XLSX.utils.sheet_to_json(ws,{header:1,defval:null,raw:true});
     for(let r=0;r<Math.min(data.length,20);r++){
       const row=data[r]||[];
       for(let c=0;c<row.length;c++){
-        const v=String(row[c]||'').trim();
+        const v=String(row[c]||'').replace(/^'+/,'').replace(/'+$/,'').trim();
         if(v==='Proposal #'){
           const num=row[c+1]||data[r][c+1];
           if(num){meta={sheet:sn,data,startRow:r};result.proposalId=String(num).replace(/\D/g,'');break;}
@@ -2155,8 +2155,11 @@ window.parseBidsheetFile=async(file)=>{
     for(let r=0;r<Math.min(md.length,scanRows);r++){
       const row=md[r]||[];
       for(let c=0;c<row.length;c++){
-        if(String(row[c]||'').trim().toLowerCase()===label.toLowerCase()){
-          for(let cc=c+1;cc<row.length;cc++) if(row[cc]) return row[cc];
+        const cv=String(row[c]||'').replace(/^'+/,'').replace(/'+$/,'').trim();
+        if(cv.toLowerCase()===label.toLowerCase()){
+          for(let cc=c+1;cc<row.length;cc++){
+            if(row[cc]!=null){return String(row[cc]).replace(/^'+/,'').replace(/'+$/,'').trim();}
+          }
         }
       }
     }
@@ -2170,7 +2173,7 @@ window.parseBidsheetFile=async(file)=>{
   // Row 12: prep email | contact email
   // Row 13: prep phone | contact phone
   const safeRow=(r)=>md[r]||[];
-  const safeCell=(r,c)=>{const row=safeRow(r);return row[c]!=null?String(row[c]).trim():'';};
+  const safeCell=(r,c)=>{const row=safeRow(r);return String(row[c]!=null?row[c]:'').replace(/^'+/g,'').replace(/'+$/g,'').trim();};
   result.project=safeCell(5,0)||safeCell(5,1);
   const addr1=safeCell(6,0),addr2=safeCell(7,0);
   result.location=[addr1,addr2].filter(Boolean).join(', ');
@@ -2190,46 +2193,54 @@ window.parseBidsheetFile=async(file)=>{
   const bidSheet=wb.SheetNames.find(n=>/bidsheet/i.test(n));
   if(!bidSheet){result.warnings.push('No "Bidsheet" tab found');return result;}
   const ws=wb.Sheets[bidSheet];
-  const data=window.XLSX.utils.sheet_to_json(ws,{header:1,defval:null,raw:false});
+  const data=window.XLSX.utils.sheet_to_json(ws,{header:1,defval:null,raw:true});
+  // Strip leading apostrophes Excel adds for text-formatted cells
+  const clean=(v)=>String(v||'').replace(/^'+/,'').replace(/'+$/,'').trim().toUpperCase();
   // Find header row - contains both "ITEM" and "MFR" or "DESCRIPTION"
   let hdrRow=-1;
   for(let r=0;r<Math.min(data.length,30);r++){
-    const row=(data[r]||[]).map(x=>String(x||'').toUpperCase().trim());
+    const row=(data[r]||[]).map(clean);
     if(row.includes('ITEM')&&(row.includes('MFR')||row.includes('DESCRIPTION'))){hdrRow=r;break;}
   }
   if(hdrRow<0){
-    // Debug: show what rows 0-14 actually contain
-    const preview=data.slice(0,15).map((r,i)=>`R${i+1}:[${(r||[]).filter(Boolean).slice(0,6).join('|')}]`).join(' ');
-    result.warnings.push('Could not find header row. First 15 rows: '+preview);
+    const preview=data.slice(0,15).map((r,i)=>`R${i+1}:[${(r||[]).filter(Boolean).slice(0,5).map(clean).join('|')}]`).join(' ');
+    result.warnings.push('Could not find header row. Rows: '+preview);
     return result;
   }
-  // Build column map from header names
-  const hdrs=(data[hdrRow]||[]).map(x=>String(x||'').toUpperCase().trim());
-  result.warnings.push('DEBUG headers at R'+(hdrRow+1)+': '+hdrs.filter(Boolean).join(' | '));
+  // Build column map from cleaned header names
+  const hdrs=(data[hdrRow]||[]).map(clean);
   const col=(name)=>{const i=hdrs.indexOf(name);return i>=0?i:-1;};
   const cols={item:col('ITEM'),size:col('SIZE'),mfr:col('MFR'),desc:col('DESCRIPTION'),color:col('COLOR'),qty:col('QTY'),unit:col('UNIT'),sfctn:col('SF/CTN'),syctn:col('SY/CTN'),order:col('ORDER'),cost:col('COST'),amount:col('AMOUNT'),tax:col('SALES TAX'),freight:col('FREIGHT'),laborRate:col('LABOR RATE'),labor:col('LABOR'),total:col('TOTAL')};
-  result.warnings.push('DEBUG cols: item='+cols.item+' qty='+cols.qty+' cost='+cols.cost+' mfr='+cols.mfr+' freight='+cols.freight+' laborRate='+cols.laborRate);
   Object.entries(cols).forEach(([k,v])=>{if(v<0&&['item','mfr','desc','qty','cost'].includes(k))result.warnings.push('Missing column: '+k);});
-  // Parse line items - rows after header, skip empty rows and totals row
+  // Parse line items - rows after header
   let curSection=null;
   for(let r=hdrRow+1;r<data.length;r++){
     const row=data[r]||[];
-    const itemVal=cols.item>=0?String(row[cols.item]||'').trim():'';
-    // Section header row: just an item code like "93000" and a section name in next col, no qty/cost
-    if(itemVal&&!row[cols.qty]&&!row[cols.cost]){
-      if(/^\d{4,6}/.test(itemVal)){curSection={code:itemVal,name:String(row[cols.size]||row[cols.desc]||'').trim()};continue;}
+    const rawItem=row[cols.item];
+    const itemVal=clean(rawItem);
+    // Section header: numeric CSI code in ITEM col, no cost
+    const rawCost=row[cols.cost];
+    const rawQty=row[cols.qty];
+    if(itemVal&&!rawCost&&!rawQty){
+      if(/^\d{4,6}/.test(itemVal)){
+        curSection={code:itemVal,name:clean(row[cols.size]||row[cols.desc]||'')};
+        continue;
+      }
     }
-    const qty=Number(row[cols.qty])||0;
-    const costPerUnit=Number(row[cols.cost])||0;
+    const qty=Number(rawQty)||0;
+    const costPerUnit=Number(rawCost)||0;
     if(qty<=0||costPerUnit<=0)continue;
+    const mfr=clean(row[cols.mfr]);
+    const desc=clean(row[cols.desc]);
+    if(!mfr&&!desc)continue;
     result.items.push({
-      itemCode:itemVal,
-      size:cols.size>=0?String(row[cols.size]||''):'',
-      manufacturer:cols.mfr>=0?String(row[cols.mfr]||'').trim():'',
-      description:cols.desc>=0?String(row[cols.desc]||''):'',
-      color:cols.color>=0?String(row[cols.color]||''):'',
+      itemCode:itemVal||'',
+      size:clean(row[cols.size]),
+      manufacturer:cols.mfr>=0?String(row[cols.mfr]||'').replace(/^'+/,'').replace(/'+$/,'').trim():'',
+      description:cols.desc>=0?String(row[cols.desc]||'').replace(/^'+/,'').replace(/'+$/,'').trim():'',
+      color:cols.color>=0?String(row[cols.color]||'').replace(/^'+/,'').replace(/'+$/,'').trim():'',
       qty,
-      unit:cols.unit>=0?String(row[cols.unit]||'SF'):'SF',
+      unit:cols.unit>=0?String(row[cols.unit]||'SF').replace(/^'+/,'').replace(/'+$/,'').trim():'SF',
       sfPerCtn:cols.sfctn>=0?Number(row[cols.sfctn])||null:null,
       costPerUnit,
       freight:cols.freight>=0?Number(row[cols.freight])||0:0,
@@ -4247,9 +4258,14 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
   setQueue(q=>{const next=[...q,...newItems];if(active===null)setActive(q.length);return next;});
   e.target.value='';
  };
- // Block browser from navigating when files are dragged anywhere on the page
+ // Block browser from navigating when files are dragged outside the drop zone
  useEffect(()=>{
-  const block=(e)=>{e.preventDefault();e.stopPropagation();};
+  const block=(e)=>{
+    // Only block if the drop target is NOT inside our drop zone
+    if(!e.target.closest||!e.target.closest('[data-dropzone]')){
+      e.preventDefault();e.stopPropagation();
+    }
+  };
   window.addEventListener('dragover',block);
   window.addEventListener('drop',block);
   return()=>{window.removeEventListener('dragover',block);window.removeEventListener('drop',block);};
@@ -4343,7 +4359,7 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
     <p className="text-sm text-stone-400 mt-1">Drag Peter's historical .xlsx files here. Each file gets matched to its proposal #, GC parsed, line items extracted. Confirm and approve one card at a time.</p>
    </div>
    {/* Drop zone */}
-   <div onDrop={onDrop} onDragOver={e=>{e.preventDefault();e.stopPropagation();}} onDragEnter={e=>{e.preventDefault();e.stopPropagation();}}
+   <div data-dropzone="true" onDrop={onDrop} onDragOver={e=>{e.preventDefault();e.stopPropagation();}} onDragEnter={e=>{e.preventDefault();e.stopPropagation();}}
     className="border-2 border-dashed border-stone-300 bg-stone-50 px-5 py-6 text-center hover:border-orange-400 hover:bg-orange-50 transition-colors cursor-copy">
     <Ico n="upload" size={28} className="text-stone-400 mx-auto mb-2"/>
     <div className="text-sm text-stone-700">Drop .xlsx files here, or <label className="text-orange-700 hover:underline cursor-pointer">browse<input type="file" multiple accept=".xlsx,.xls" onChange={onFilePick} className="hidden"/></label></div>
