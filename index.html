@@ -2241,11 +2241,10 @@ window.parseBidsheetFile=async(file)=>{
     // Peter's COST column is sometimes per-carton while QTY is in SF/EA
     // AMOUNT is always Peter's correct pre-calculated total for this line
     const rawAmount=cols.amount>=0?row[cols.amount]:null;
-    const rawCost=row[cols.cost];
     let costPerUnit=0;
     if(qty>0){
       if(rawAmount!=null&&Number(rawAmount)>0){
-        costPerUnit=Number(rawAmount)/qty; // most reliable: back-calc from Peter's total
+        costPerUnit=Number(rawAmount)/qty;
       } else {
         costPerUnit=Number(rawCost)||0;
       }
