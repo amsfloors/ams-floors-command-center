@@ -4304,7 +4304,9 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
    await sb.from('proposals').upsert(propRecord);
    const estId='est_'+propId;
    await sb.from('estimates').upsert({id:estId,proposalId:propId,proposalNumber:propId,projectName:parsed.project,gcName,taxRate:0.07,markupRate:0.20,plansDated:parsed.plansDated,updatedAt:new Date().toISOString()});
-   await sb.from('estimate_items').delete().eq('estimateId',estId);
+   // Delete ALL items for this proposal (by proposalId, not estimateId - catches any format)
+   await sb.from('estimate_items').delete().eq('proposalId',propId);
+   await new Promise(r=>setTimeout(r,300)); // brief pause to ensure delete completes
    const itemRows=parsed.items.map((it,idx)=>({id:estId+'_'+idx,estimateId:estId,proposalId:propId,itemCode:it.itemCode,size:it.size,manufacturer:it.manufacturer,description:it.description,color:it.color,qty:it.qty,unit:it.unit,sfPerCtn:it.sfPerCtn,costPerUnit:it.costPerUnit,freight:it.freight,laborRate:it.laborRate,sectionCode:it.sectionCode||'',sectionName:it.sectionName||'',displayMode:'full',sortOrder:idx,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}));
    if(itemRows.length) await sb.from('estimate_items').insert(itemRows);
    setRecent(r=>[{id:propId,project:parsed.project,outcome,items:parsed.items.length,total:parsed.totals.total},...r].slice(0,15));
@@ -4328,33 +4330,36 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
    {status==='parsing'&&<div className="bg-stone-50 border border-stone-200 p-4 text-sm text-stone-600 flex items-center gap-2"><Ico n="clock" size={16} className="text-stone-400"/>Parsing file...</div>}
    {status==='error'&&<div className="bg-rose-50 border border-rose-200 p-4"><div className="font-medium text-rose-900 text-sm">Parse failed</div><div className="text-xs text-rose-700 mt-1">{errMsg}</div><button onClick={reset} className="mt-2 text-xs text-rose-700 underline">Try another file</button></div>}
    {status==='done'&&<div className="bg-emerald-50 border border-emerald-200 p-4 flex items-center justify-between"><span className="text-emerald-800 font-medium text-sm">✓ Imported successfully</span><button onClick={reset} className="text-xs bg-emerald-700 text-white px-3 py-1.5">Import next file</button></div>}
-   {status==='ready'&&parsed&&<div className="bg-white border border-stone-200 p-4 space-y-3">
-    <div className="flex items-center gap-3 pb-3 border-b border-stone-100">
-     <div className="text-xl font-serif font-bold">#{parsed.proposalId}</div>
-     <div className="flex-1"><div className="font-semibold text-stone-900">{parsed.project}</div><div className="text-xs text-stone-500">{parsed.location}{parsed.projectNumber?' · Job #'+parsed.projectNumber:''}</div></div>
-     {existingProposal?<span className="text-[10px] px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full">⚠ Existing · {existingProposal.status}</span>:<span className="text-[10px] px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full">✓ New</span>}
+   {status==='ready'&&parsed&&<div className="bg-white border border-stone-200">
+    {/* Approve button FIRST — always visible without scrolling */}
+    <div className="p-3 border-b border-stone-200 bg-orange-50 flex items-center gap-3">
+     {!existingProposal&&<div className="flex gap-1 flex-shrink-0">{['Won','Lost','Dead','Submitted'].map(o=><button key={o} onClick={()=>setOutcome(o)} style={{background:outcome===o?'#1c1917':'white',color:outcome===o?'white':'#44403c',fontSize:'11px',padding:'3px 8px',border:'1px solid #d6d3d1'}}>{o}</button>)}</div>}
+     <button onClick={approve} disabled={status==='importing'} style={{background:'#c2410c',color:'white',padding:'8px 20px',fontWeight:700,fontSize:'14px',border:'none',cursor:'pointer',flex:1,opacity:status==='importing'?0.5:1}}>
+      {status==='importing'?'Importing...' : '✓ APPROVE + IMPORT'}
+     </button>
     </div>
-    <div className="grid grid-cols-2 gap-3 text-sm">
-     <div>
-      <div className="text-[10px] uppercase text-stone-500 font-semibold mb-1">GC</div>
-      <input value={gcMatch} onChange={e=>setGcMatch(e.target.value)} list="gc-list" className="w-full px-2 py-1.5 text-sm border border-stone-300 focus:border-sky-400 focus:outline-none rounded-sm"/>
-      <datalist id="gc-list">{gcs.map(g=><option key={g} value={g}/>)}</datalist>
-      <div className="text-[10px] mt-1">{gcSuggestions.length?<span className="text-emerald-700">✓ matches existing GC</span>:<span className="text-amber-600">⚠ new GC will be created</span>}</div>
+    {/* Card details below */}
+    <div className="p-4 space-y-3">
+     <div className="flex items-center gap-3 pb-2 border-b border-stone-100">
+      <div className="text-xl font-serif font-bold">#{parsed.proposalId}</div>
+      <div className="flex-1"><div className="font-semibold text-stone-900">{parsed.project}</div><div className="text-xs text-stone-500">{parsed.location}{parsed.projectNumber?' · Job #'+parsed.projectNumber:''}</div></div>
+      {existingProposal?<span className="text-[10px] px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full">⚠ Existing · will overwrite line items</span>:<span className="text-[10px] px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full">✓ New</span>}
      </div>
-     <div>
-      <div className="text-[10px] uppercase text-stone-500 font-semibold mb-1">Contact</div>
-      <div className="text-sm font-medium">{parsed.contact||'—'}</div>
-      <div className="text-xs text-stone-500">{parsed.email}</div>
+     <div className="grid grid-cols-2 gap-3 text-sm">
+      <div>
+       <div className="text-[10px] uppercase text-stone-500 font-semibold mb-1">GC</div>
+       <input value={gcMatch} onChange={e=>setGcMatch(e.target.value)} list="gc-list" className="w-full px-2 py-1.5 text-sm border border-stone-300 focus:border-sky-400 focus:outline-none rounded-sm"/>
+       <datalist id="gc-list">{gcs.map(g=><option key={g} value={g}/>)}</datalist>
+       <div className="text-[10px] mt-1">{gcSuggestions.length?<span className="text-emerald-700">✓ matches existing GC</span>:<span className="text-amber-600">⚠ new GC will be created</span>}</div>
+      </div>
+      <div>
+       <div className="text-[10px] uppercase text-stone-500 font-semibold mb-1">Contact</div>
+       <div className="text-sm font-medium">{parsed.contact||'—'}</div>
+       <div className="text-xs text-stone-500">{parsed.email}</div>
+      </div>
      </div>
+     <div className="bg-stone-50 px-3 py-2 text-xs text-stone-700 rounded"><strong>{parsed.items.length} items</strong> · {money(parsed.totals.total,true)} · {Object.entries(parsed.items.reduce((m,i)=>{if(i.manufacturer)m[i.manufacturer]=(m[i.manufacturer]||0)+1;return m;},{})).map(([k,v])=>k+' ('+v+')').join(', ')}</div>
     </div>
-    <div className="bg-stone-50 px-3 py-2 text-xs text-stone-700"><strong>{parsed.items.length} items</strong> · {money(parsed.totals.total,true)} · {Object.entries(parsed.items.reduce((m,i)=>{if(i.manufacturer)m[i.manufacturer]=(m[i.manufacturer]||0)+1;return m;},{})).map(([k,v])=>k+' ('+v+')').join(', ')}</div>
-    {!existingProposal&&<div>
-     <div className="text-[10px] uppercase text-stone-500 font-semibold mb-1">Outcome</div>
-     <div className="grid grid-cols-4 gap-2">{['Won','Lost','Dead','Submitted'].map(o=><button key={o} onClick={()=>setOutcome(o)} style={{background:outcome===o?'#1c1917':'white',color:outcome===o?'white':'#44403c'}} className="py-2 text-sm border border-stone-300">{o}</button>)}</div>
-    </div>}
-    <button onClick={approve} disabled={status==='importing'} className="w-full py-3 bg-orange-700 hover:bg-orange-800 text-white font-semibold text-sm disabled:opacity-50">
-     {status==='importing'?'Importing...':'✓ Approve + Import'}
-    </button>
    </div>}
    {recent.length>0&&<div className="bg-white border border-stone-200"><div className="px-3 py-2 border-b border-stone-100 text-xs font-semibold text-stone-600">Recently imported</div>{recent.map((r,i)=><div key={i} className="px-3 py-2 border-b border-stone-100 text-xs flex items-center justify-between"><span className="font-medium">#{r.id} {r.project}</span><span className="text-stone-500">{r.items} items · {money(r.total,true)} · <span className={r.outcome==='Won'?'text-emerald-700':r.outcome==='Lost'?'text-rose-700':'text-stone-500'}>{r.outcome}</span></span></div>)}</div>}
   </div>
