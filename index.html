@@ -3892,12 +3892,14 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
        :<div style={{background:'#1c1917',color:'white',padding:'14px',display:'grid',gridTemplateColumns:'1fr 1fr 1fr',textAlign:'center',gap:'10px',marginBottom:'4px'}}>
         {(()=>{const tax=(estimate&&estimate.taxRate)||0.07,base=(estimateItemsForThis||[]).filter(x=>!x.isAlternate&&!x.isVeAlternative),tM=base.reduce((s,x)=>{const q=Number(x.qty)||0,c=Number(x.costPerUnit)||0,f=Number(x.freight)||0,a=q*c;return s+a+a*(mu!=null?mu:0.20)+f;},0),tL=base.reduce((s,x)=>s+(Number(x.qty)||0)*(Number(x.laborRate)||0),0),$=n=>'$'+Math.round(n||0).toLocaleString('en-US');return[['Material',tM],['Labor',tL],['Base Bid',tM+tL]].map(([l,v],i)=><div key={l}><div style={{fontSize:'10px',textTransform:'uppercase',color:'#a8a29e'}}>{l}</div><div style={{fontFamily:'Georgia,serif',fontSize:'20px',color:i===2?'#6ee7b7':'white'}}>{$(v)}</div></div>);})()}
        </div>}
-      {[['Proposal Document','Full PDF with logo, GC info, line items and totals.',window.genProposal,'Generate Proposal'],
-       ['Supplier Purchase Orders','One PO per supplier shipped to job site.',window.genSupplierPOs,'Generate POs'],
-       ['Installer Work Order','Labor scope with quantities and rates.',window.genInstallerPO,'Generate Work Order']
-      ].map(([t,d,fn,lb])=><div key={lb} style={{background:'white',border:'1px solid #e7e5e4',padding:'16px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px'}}>
+      {[['Proposal Document','Full PDF with logo, GC info, line items and totals.','genProposal','Generate Proposal'],
+       ['Supplier Purchase Orders','One PO per supplier shipped to job site.','genSupplierPOs','Generate POs'],
+       ['Installer Work Order','Labor scope with quantities and rates.','genInstallerPO','Generate Work Order']
+      ].map(([t,d,fnName,lb])=><div key={lb} style={{background:'white',border:'1px solid #e7e5e4',padding:'16px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px'}}>
        <div><div style={{fontFamily:'Georgia,serif',fontSize:'15px',color:'#1c1917',marginBottom:'2px'}}>{t}</div><div style={{fontSize:'12px',color:'#a8a29e'}}>{d}</div></div>
        <button onClick={async()=>{
+        const fn=window[fnName];
+        if(typeof fn!=='function'){alert('Generator not loaded — please refresh the page.');return;}
         if(!estimateItemsForThis||!estimateItemsForThis.length){alert('Add estimate items first — go to Estimate / Bidsheet tab and import Peter\'s Excel file.');return;}
         try{
          const html=fn(estimate||{},estimateItemsForThis,'',draft);
