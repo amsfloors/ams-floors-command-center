@@ -2228,7 +2228,19 @@ window.parseBidsheetFile=async(file)=>{
       }
     }
     const qty=Number(rawQty)||0;
-    const costPerUnit=Number(rawCost)||0;
+    // CRITICAL: use AMOUNT/QTY not raw COST column
+    // Peter's COST column is sometimes per-carton while QTY is in SF/EA
+    // AMOUNT is always Peter's correct pre-calculated total for this line
+    const rawAmount=cols.amount>=0?row[cols.amount]:null;
+    const rawCost=row[cols.cost];
+    let costPerUnit=0;
+    if(qty>0){
+      if(rawAmount!=null&&Number(rawAmount)>0){
+        costPerUnit=Number(rawAmount)/qty; // most reliable: back-calc from Peter's total
+      } else {
+        costPerUnit=Number(rawCost)||0;
+      }
+    }
     if(qty<=0||costPerUnit<=0)continue;
     const mfr=clean(row[cols.mfr]);
     const desc=clean(row[cols.desc]);
@@ -4445,7 +4457,7 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
        <button onClick={approve} autoFocus
         onKeyDown={e=>{if(e.key==='Enter')approve();}}
         className="w-full bg-orange-700 hover:bg-orange-800 text-white py-3 font-semibold text-sm transition-colors mt-1">
-        ✓ Approve &amp; import
+        ✓ Approve + import
        </button>
       </div>
      </div>}
