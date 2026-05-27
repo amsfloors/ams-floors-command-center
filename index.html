@@ -3688,6 +3688,7 @@ const FldSel=({label,value,edit,options,onChange,render})=>(
 const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLineItem,onDeleteLineItem,onAddNote,onSelectGC,estimate,estimateItems,onSaveEstimate,onAddEstimateItem,onUpdateEstimateItem,onDeleteEstimateItem,onAddVEAlternative,allEstimateItems,suppliers,installers,allGCs,gcs,gcStats})=>{
  const [edit,setEdit]=useState(false);
  const [draft,setDraft]=useState(proposal);
+ const [previewHtml,setPreviewHtml]=useState(null);
  const [noteText,setNoteText]=useState('');
  const [activeTab,setActiveTab]=useState('details');
  useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('details');},[proposal]);
@@ -3897,21 +3898,27 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
        ['Installer Work Order','Labor scope with quantities and rates.','genInstallerPO','Generate Work Order']
       ].map(([t,d,fnName,lb])=><div key={lb} style={{background:'white',border:'1px solid #e7e5e4',padding:'16px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px'}}>
        <div><div style={{fontFamily:'Georgia,serif',fontSize:'15px',color:'#1c1917',marginBottom:'2px'}}>{t}</div><div style={{fontSize:'12px',color:'#a8a29e'}}>{d}</div></div>
-       <button onClick={async()=>{
+       <button onClick={()=>{
         const fn=window[fnName];
         if(typeof fn!=='function'){alert('Generator not loaded — please refresh the page.');return;}
-        if(!estimateItemsForThis||!estimateItemsForThis.length){alert('Add estimate items first — go to Estimate / Bidsheet tab and import Peter\'s Excel file.');return;}
+        if(!estimateItemsForThis||!estimateItemsForThis.length){alert('No line items found. Import Peter\'s bidsheet first.');return;}
         try{
          const html=fn(estimate||{},estimateItemsForThis,'',draft);
-         const blob=new Blob([html],{type:'text/html'});
-         const url=URL.createObjectURL(blob);
-         const w=window.open(url,'_blank');
-         if(!w){alert('Popup blocked — please allow popups for this site, then try again.');return;}
-         setTimeout(()=>URL.revokeObjectURL(url),60000);
+         setPreviewHtml(html);
          sb.from('proposal_documents').insert({proposalId:String(draft.id),documentType:lb,generatedAt:new Date().toISOString(),generatedBy:'AMS'}).catch(()=>{});
-        }catch(err){console.error('Generator error:',err);alert('Error: '+err.message);}
+        }catch(err){alert('Generator error: '+err.message);}
        }} style={{background:'#1c1917',color:'white',border:'none',padding:'8px 14px',cursor:'pointer',fontSize:'12px',fontWeight:'600',flexShrink:0}}>{lb}</button>
       </div>)}
+      {previewHtml&&<div style={{position:'fixed',inset:0,background:'white',zIndex:9999,display:'flex',flexDirection:'column'}}>
+       <div style={{background:'#1c1917',color:'white',padding:'10px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+        <span style={{fontSize:'13px',fontWeight:600}}>{draft.project} — Preview</span>
+        <div style={{display:'flex',gap:'8px'}}>
+         <button onClick={()=>{const f=document.querySelector('#proposal-frame');if(f)f.contentWindow.print();}} style={{background:'#ea580c',color:'white',border:'none',padding:'7px 16px',cursor:'pointer',fontWeight:700,fontSize:'12px'}}>Print / Save PDF</button>
+         <button onClick={()=>setPreviewHtml(null)} style={{background:'#44403c',color:'white',border:'none',padding:'7px 16px',cursor:'pointer',fontSize:'12px'}}>✕ Close</button>
+        </div>
+       </div>
+       <iframe id="proposal-frame" srcDoc={previewHtml} style={{flex:1,border:'none',width:'100%'}} title="Proposal Preview"/>
+      </div>}
      </div>}
     </div>
    </aside>
