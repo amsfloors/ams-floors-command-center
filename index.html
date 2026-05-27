@@ -3904,9 +3904,10 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
          const blob=new Blob([html],{type:'text/html'});
          const url=URL.createObjectURL(blob);
          const w=window.open(url,'_blank');
+         if(!w){alert('Popup blocked — please allow popups for this site, then try again.');return;}
          setTimeout(()=>URL.revokeObjectURL(url),60000);
-         await sb.from('proposal_documents').insert({proposalId:String(draft.id),documentType:lb,generatedAt:new Date().toISOString(),generatedBy:'AMS'}).then(()=>{}).catch(()=>{});
-        }catch(err){console.error('Generator error:',err);alert('Error generating document: '+err.message);}
+         sb.from('proposal_documents').insert({proposalId:String(draft.id),documentType:lb,generatedAt:new Date().toISOString(),generatedBy:'AMS'}).catch(()=>{});
+        }catch(err){console.error('Generator error:',err);alert('Error: '+err.message);}
        }} style={{background:'#1c1917',color:'white',border:'none',padding:'8px 14px',cursor:'pointer',fontSize:'12px',fontWeight:'600',flexShrink:0}}>{lb}</button>
       </div>)}
      </div>}
