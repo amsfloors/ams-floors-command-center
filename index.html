@@ -2098,13 +2098,17 @@ window.genSupplierPOs=function(est,items,proposal){
   var today=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}),n=1;
   var H="<!DOCTYPE html><html><head><meta charset='UTF-8'><style>body{font-family:Arial,sans-serif;font-size:11px;color:#1c1917}.pg{max-width:850px;margin:0 auto;padding:32px;page-break-after:always}.pg:last-child{page-break-after:auto}table{width:100%;border-collapse:collapse;margin:10px 0}th{background:#1c1917;color:#fff;padding:5px 8px;font-size:10px;text-transform:uppercase}td{padding:5px 8px;border-bottom:1px solid #e7e5e4}tfoot td{background:#f5f5f4;font-weight:700}@media print{.np{display:none}}</style></head><body>";
     Object.keys(byS).forEach(function(sup){
-    // PATCH (Bug #2): supplier PO totals use orderQty so on-paper math reconciles (40 CTN × $30 = $1,200, not 1000 SF × $30 = $30,000)
-    var its=byS[sup],tot=its.reduce(function(s,i){var oq=window._ordQ(i),c=Number(i.costPerUnit)||0,f=Number(i.freight)||0,a=oq*c;var effTax=i.usedMaterial?0:tax;return s+a+a*effTax+f;},0);
+    // PATCH (v37.1a): supplier PO arithmetic must reconcile on the page.
+    //   • Raw-COST items: costPerUnit is already per-order-unit → use as-is.
+    //   • MATERIAL-path items: costPerUnit is per-SF → multiply by sfPerCtn to get per-carton price.
+    // Either way: line amount = orderQty × per-order-unit cost (what the supplier invoices).
+    var perOrderCost=function(i){var c=Number(i.costPerUnit)||0;if(i.usedMaterial&&i.sfPerCtn&&Number(i.sfPerCtn)>0)return c*Number(i.sfPerCtn);return c;};
+    var its=byS[sup],tot=its.reduce(function(s,i){var oq=window._ordQ(i),c=perOrderCost(i),f=Number(i.freight)||0,a=oq*c;var effTax=i.usedMaterial?0:tax;return s+a+a*effTax+f;},0);
     H+="<div class='pg'><div style='display:flex;justify-content:space-between;padding-bottom:12px;margin-bottom:14px;border-bottom:2px solid #1c1917'>";
     H+="<div><img src='data:image/png;base64,"+_LOGO+"' style='height:40px'/><div style='font-size:16px;font-weight:700;margin-top:6px'>PO #"+String(n++).padStart(4,'0')+" \u2014 "+today+"</div><div style='font-size:11px;color:#666;margin-top:2px'>Proposal #"+propNum+(gc?' &nbsp;&middot;&nbsp; GC: '+gc:'')+"</div></div>";
     H+="<div style='text-align:right'><div style='font-weight:700;font-size:13px'>"+sup+"</div><div style='color:#888;font-size:10px;margin-top:2px'>Ship to job site:</div><div style='font-weight:700'>"+projName+"</div>"+(location?"<div style='color:#666;font-size:11px'>"+location+"</div>":"")+"</div></div>";
     H+="<table><thead><tr><th>Item</th><th>Description</th><th>Color / Spec</th><th style='text-align:right'>Order Qty</th><th style='text-align:right'>Unit Cost</th><th style='text-align:right'>Amt</th></tr></thead><tbody>";
-    its.forEach(function(i){var oq=window._ordQ(i),c=Number(i.costPerUnit)||0;var oqDisplay=i.sfPerCtn&&Number(i.sfPerCtn)>0?oq+' CTN':oq+' '+(i.unit||'SF');H+="<tr><td>"+(i.itemCode||'')+"</td><td>"+(i.description||'')+"</td><td>"+(i.color||'')+"</td><td style='text-align:right'>"+oqDisplay+"</td><td style='text-align:right'>"+fmt(c)+"</td><td style='text-align:right'>"+fmt(oq*c)+"</td></tr>";});
+    its.forEach(function(i){var oq=window._ordQ(i),c=perOrderCost(i);var oqDisplay=i.sfPerCtn&&Number(i.sfPerCtn)>0?oq+' CTN':oq+' '+(i.unit||'SF');H+="<tr><td>"+(i.itemCode||'')+"</td><td>"+(i.description||'')+"</td><td>"+(i.color||'')+"</td><td style='text-align:right'>"+oqDisplay+"</td><td style='text-align:right'>"+fmt(c)+"</td><td style='text-align:right'>"+fmt(oq*c)+"</td></tr>";});
     H+="</tbody><tfoot><tr><td colspan='4'></td><td>Subtotal</td><td style='text-align:right'>"+fmt(tot)+"</td></tr></tfoot></table>";
     H+="<div style='margin-top:20px;padding-top:12px;border-top:1px solid #e7e5e4;display:grid;grid-template-columns:1fr 1fr;gap:20px;font-size:11px'><div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>AMS Floors LLC -- Ordered by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date</div></div><div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>"+sup+" -- Confirmed by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date &nbsp;&nbsp;&nbsp;&nbsp; ETA: ____________</div></div></div>";
     H+="</div>";
@@ -3025,8 +3029,12 @@ const calcEstimateItem = (item, taxRate, markupRate) => {
   orderQty = Math.ceil(effectiveQty / item.sfPerCtn);
   orderUnit = item.syPerCtn ? 'SY' : 'CTN';
  }
- // FIX (Bug #1): amount = orderQty × costPerUnit — supplier sells per CTN/bag, not per SF
- const amount = orderQty * costPerUnit;
+ // PATCH (v37.1a — HOTFIX): qty basis depends on how costPerUnit was stored.
+ //   • MATERIAL-path import (usedMaterial=true): costPerUnit = MATERIAL / qty → already per installed unit (SF/LF). Use effectiveQty.
+ //   • Raw-COST path / manual entry: costPerUnit is per-order-unit (per carton/bag). Use orderQty.
+ // Picking the wrong basis breaks all imported totals (Aspinwall $232K → $160K observed).
+ const qtyForAmount = item.usedMaterial ? effectiveQty : orderQty;
+ const amount = qtyForAmount * costPerUnit;
  // FIX (Bug #3): if item came from MATERIAL-column import (parser already baked in tax+markup), skip both
  const effTaxRate    = item.usedMaterial ? 0 : (taxRate!=null    ? taxRate    : 0.07);
  const effMarkupRate = item.usedMaterial ? 0 : (markupRate!=null ? markupRate : 0.20);
