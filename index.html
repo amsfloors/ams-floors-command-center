@@ -2084,6 +2084,10 @@ window.genProposal=function(est,items,notes,proposal){
   H+="</div></body></html>";
   return H;
 };
+// PATCH (v37.1): Shared helpers — effectiveQty respects multiplier/deduction/height; orderQty respects sfPerCtn
+// Defaults of 1/0/0/null mean existing line items behave identically to pre-patch
+window._effQ=function(i){var q=Number(i.qty)||0,m=Number(i.multiplier)||1,d=Number(i.deduction)||0,h=Number(i.height)||0;var e=q;if(d>0)e=Math.max(0,e-d);if(m!==1)e=e*m;if(h>0)e=e*h;return e;};
+window._ordQ=function(i){var e=window._effQ(i);if(i.sfPerCtn&&Number(i.sfPerCtn)>0&&e>0)return Math.ceil(e/Number(i.sfPerCtn));return e;};
 window.genSupplierPOs=function(est,items,proposal){
   var tax=(est.taxRate!=null?est.taxRate:0.07),fmt=function(n){return'$'+Math.round(n||0).toLocaleString('en-US');};
   var projName=(proposal&&proposal.project)||est.projectName||'';
@@ -2094,12 +2098,13 @@ window.genSupplierPOs=function(est,items,proposal){
   var today=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}),n=1;
   var H="<!DOCTYPE html><html><head><meta charset='UTF-8'><style>body{font-family:Arial,sans-serif;font-size:11px;color:#1c1917}.pg{max-width:850px;margin:0 auto;padding:32px;page-break-after:always}.pg:last-child{page-break-after:auto}table{width:100%;border-collapse:collapse;margin:10px 0}th{background:#1c1917;color:#fff;padding:5px 8px;font-size:10px;text-transform:uppercase}td{padding:5px 8px;border-bottom:1px solid #e7e5e4}tfoot td{background:#f5f5f4;font-weight:700}@media print{.np{display:none}}</style></head><body>";
     Object.keys(byS).forEach(function(sup){
-    var its=byS[sup],tot=its.reduce(function(s,i){var q=Number(i.qty)||0,c=Number(i.costPerUnit)||0,f=Number(i.freight)||0,a=q*c;return s+a+a*tax+f;},0);
+    // PATCH (Bug #2): supplier PO totals use orderQty so on-paper math reconciles (40 CTN × $30 = $1,200, not 1000 SF × $30 = $30,000)
+    var its=byS[sup],tot=its.reduce(function(s,i){var oq=window._ordQ(i),c=Number(i.costPerUnit)||0,f=Number(i.freight)||0,a=oq*c;var effTax=i.usedMaterial?0:tax;return s+a+a*effTax+f;},0);
     H+="<div class='pg'><div style='display:flex;justify-content:space-between;padding-bottom:12px;margin-bottom:14px;border-bottom:2px solid #1c1917'>";
     H+="<div><img src='data:image/png;base64,"+_LOGO+"' style='height:40px'/><div style='font-size:16px;font-weight:700;margin-top:6px'>PO #"+String(n++).padStart(4,'0')+" \u2014 "+today+"</div><div style='font-size:11px;color:#666;margin-top:2px'>Proposal #"+propNum+(gc?' &nbsp;&middot;&nbsp; GC: '+gc:'')+"</div></div>";
     H+="<div style='text-align:right'><div style='font-weight:700;font-size:13px'>"+sup+"</div><div style='color:#888;font-size:10px;margin-top:2px'>Ship to job site:</div><div style='font-weight:700'>"+projName+"</div>"+(location?"<div style='color:#666;font-size:11px'>"+location+"</div>":"")+"</div></div>";
     H+="<table><thead><tr><th>Item</th><th>Description</th><th>Color / Spec</th><th style='text-align:right'>Order Qty</th><th style='text-align:right'>Unit Cost</th><th style='text-align:right'>Amt</th></tr></thead><tbody>";
-    its.forEach(function(i){var q=Number(i.qty)||0,c=Number(i.costPerUnit)||0,oq=i.sfPerCtn&&Number(i.sfPerCtn)>0?Math.ceil(q/Number(i.sfPerCtn))+' CTN':q+' '+(i.unit||'SF');H+="<tr><td>"+(i.itemCode||'')+"</td><td>"+(i.description||'')+"</td><td>"+(i.color||'')+"</td><td style='text-align:right'>"+oq+"</td><td style='text-align:right'>"+fmt(c)+"</td><td style='text-align:right'>"+fmt(q*c)+"</td></tr>";});
+    its.forEach(function(i){var oq=window._ordQ(i),c=Number(i.costPerUnit)||0;var oqDisplay=i.sfPerCtn&&Number(i.sfPerCtn)>0?oq+' CTN':oq+' '+(i.unit||'SF');H+="<tr><td>"+(i.itemCode||'')+"</td><td>"+(i.description||'')+"</td><td>"+(i.color||'')+"</td><td style='text-align:right'>"+oqDisplay+"</td><td style='text-align:right'>"+fmt(c)+"</td><td style='text-align:right'>"+fmt(oq*c)+"</td></tr>";});
     H+="</tbody><tfoot><tr><td colspan='4'></td><td>Subtotal</td><td style='text-align:right'>"+fmt(tot)+"</td></tr></tfoot></table>";
     H+="<div style='margin-top:20px;padding-top:12px;border-top:1px solid #e7e5e4;display:grid;grid-template-columns:1fr 1fr;gap:20px;font-size:11px'><div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>AMS Floors LLC -- Ordered by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date</div></div><div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>"+sup+" -- Confirmed by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date &nbsp;&nbsp;&nbsp;&nbsp; ETA: ____________</div></div></div>";
     H+="</div>";
@@ -2998,25 +3003,40 @@ const LineItemSection=({title,type,items,onAdd,onUpdate,onDelete})=>{
   </section>
  );
 };
+// PATCH (v37.1): calcEstimateItem now uses orderQty for amount (Bug #1) and respects usedMaterial flag (Bug #3)
+// Also supports new multiplier/deduction/height fields (defaults preserve existing behavior)
 const calcEstimateItem = (item, taxRate, markupRate) => {
  const qty = Number(item.qty) || 0;
  const costPerUnit = Number(item.costPerUnit) || 0;
  const freight = Number(item.freight) || 0;
  const laborRate = Number(item.laborRate) || 0;
- const amount = qty * costPerUnit;
- const salesTax = amount * (taxRate!=null?taxRate:0.07);
- const amsTotalCost = amount + salesTax + freight;
- const markup = amount * (markupRate!=null?markupRate:0.20);
- const material = amsTotalCost + markup;
- const labor = qty * laborRate;
- const total = material + labor;
- let orderQty = qty;
+ // Effective qty: takeoff qty after multiplier/deduction/height (defaults = no-op for existing data)
+ const multiplier = Number(item.multiplier) || 1;
+ const deduction  = Number(item.deduction)  || 0;
+ const height     = Number(item.height)     || 0;
+ let effectiveQty = qty;
+ if (deduction > 0)    effectiveQty = Math.max(0, effectiveQty - deduction);
+ if (multiplier !== 1) effectiveQty = effectiveQty * multiplier;
+ if (height > 0)       effectiveQty = effectiveQty * height;
+ // Order qty: what the supplier ships (cartons/bags). Defaults to effective qty.
+ let orderQty = effectiveQty;
  let orderUnit = item.unit || 'SF';
- if (item.sfPerCtn && item.sfPerCtn > 0 && qty > 0) {
-  orderQty = Math.ceil(qty / item.sfPerCtn);
+ if (item.sfPerCtn && item.sfPerCtn > 0 && effectiveQty > 0) {
+  orderQty = Math.ceil(effectiveQty / item.sfPerCtn);
   orderUnit = item.syPerCtn ? 'SY' : 'CTN';
  }
- return { amount, salesTax, amsTotalCost, markup, material, labor, total, orderQty, orderUnit };
+ // FIX (Bug #1): amount = orderQty × costPerUnit — supplier sells per CTN/bag, not per SF
+ const amount = orderQty * costPerUnit;
+ // FIX (Bug #3): if item came from MATERIAL-column import (parser already baked in tax+markup), skip both
+ const effTaxRate    = item.usedMaterial ? 0 : (taxRate!=null    ? taxRate    : 0.07);
+ const effMarkupRate = item.usedMaterial ? 0 : (markupRate!=null ? markupRate : 0.20);
+ const salesTax = amount * effTaxRate;
+ const amsTotalCost = amount + salesTax + freight;
+ const markup = amount * effMarkupRate;
+ const material = amsTotalCost + markup;
+ const labor = effectiveQty * laborRate;
+ const total = material + labor;
+ return { amount, salesTax, amsTotalCost, markup, material, labor, total, orderQty, orderUnit, effectiveQty };
 };
 const ACInput = ({ value, onChange, suggestions, placeholder, className = '', onBlur, type = 'text', listId, style }) => {
  const id = listId || `ac-${Math.random().toString(36).slice(2, 8)}`;
@@ -4367,7 +4387,7 @@ const BulkIntakeView=({proposals,gcs,onImported,sb})=>{
    // Delete ALL items for this proposal (by proposalId, not estimateId - catches any format)
    await sb.from('estimate_items').delete().eq('proposalId',propId);
    await new Promise(r=>setTimeout(r,300)); // brief pause to ensure delete completes
-   const itemRows=parsed.items.map((it,idx)=>({id:estId+'_'+idx,estimateId:estId,proposalId:propId,itemCode:it.itemCode,size:it.size,manufacturer:it.manufacturer,description:it.description,color:it.color,qty:it.qty,unit:it.unit,sfPerCtn:it.sfPerCtn,costPerUnit:it.costPerUnit,freight:it.freight,laborRate:it.laborRate,sectionCode:it.sectionCode||'',sectionName:it.sectionName||'',displayMode:'full',sortOrder:idx,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}));
+   const itemRows=parsed.items.map((it,idx)=>({id:estId+'_'+idx,estimateId:estId,proposalId:propId,itemCode:it.itemCode,size:it.size,manufacturer:it.manufacturer,description:it.description,color:it.color,qty:it.qty,unit:it.unit,sfPerCtn:it.sfPerCtn,costPerUnit:it.costPerUnit,freight:it.freight,laborRate:it.laborRate,sectionCode:it.sectionCode||'',sectionName:it.sectionName||'',displayMode:'full',usedMaterial:!!it.usedMaterial,source:'XLSX Import',multiplier:1,deduction:0,sortOrder:idx,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}));
    if(itemRows.length) await sb.from('estimate_items').insert(itemRows);
    setRecent(r=>[{id:propId,project:parsed.project,outcome,items:parsed.items.length,total:parsed.totals.total},...r].slice(0,15));
    setStatus('done');setParsed(null);
@@ -4722,6 +4742,8 @@ function App() {
    freight: 0,
    laborRate: 0,
    displayMode: 'full',
+   // PATCH (v37.1): new-field defaults preserve calc behavior for manually-added items
+   usedMaterial: false, source: 'Manual', multiplier: 1, deduction: 0,
   };
   setEstimateItems(eis => [...eis, newItem]);
   await sb.from('estimate_items').insert(newItem);
@@ -4765,6 +4787,8 @@ function App() {
    laborRate: parent.laborRate,
    displayMode: 'full',
    veNote: 'Same scope, value-engineered alternative',
+   // PATCH (v37.1): inherit parent's calc-adjustment fields so VE alternative matches its parent's math
+   usedMaterial: false, source: 'Manual', multiplier: Number(parent.multiplier)||1, deduction: Number(parent.deduction)||0,
   };
   setEstimateItems(eis => [...eis, newItem]);
   await sb.from('estimate_items').insert(newItem);
@@ -4912,6 +4936,8 @@ function App() {
       freight:parseFloat((row[iFreight]||'').toString().replace(/[^0-9.]/g,''))||0,
       laborRate:parseFloat((row[iLabRate]||'').toString().replace(/[^0-9.]/g,''))||0,
       displayMode:'full',
+      // PATCH (v37.1): persist new fields with safe defaults — this parser reads raw COST (not MATERIAL), so usedMaterial=false
+      usedMaterial:false, source:'Settings Reimport', multiplier:1, deduction:0,
      });
     }
     for(let i=0;i<items.length;i+=50) await sb.from('estimate_items').insert(items.slice(i,i+50));
