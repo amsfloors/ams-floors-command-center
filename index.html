@@ -3014,7 +3014,7 @@ const LineItemSection=({title,type,items,onAdd,onUpdate,onDelete})=>{
 // Also supports new multiplier/deduction/height fields (defaults preserve existing behavior)
 const calcEstimateItem = (item, taxRate, markupRate) => {
  const qty = Number(item.qty) || 0;
- const costPerUnit = Number(item.costPerUnit) || 0;
+const costPerUnit = Number(item.costPerUnit) || Number(item.unitCost) || 0;
  const freight = Number(item.freight) || 0;
  const laborRate = Number(item.laborRate) || 0;
  // Effective qty: takeoff qty after multiplier/deduction/height (defaults = no-op for existing data)
