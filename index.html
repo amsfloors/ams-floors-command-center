@@ -2141,6 +2141,9 @@ window.genInstallerPO=function(est,items,proposal){
 };
 
 window.parseBidsheetFile=async(file)=>{
+  alert('Bidsheet import has been disabled here. Use the verified migration process instead — ask before importing any bidsheet.');
+  return {file:file?.name||'',ok:false,warnings:['Parser disabled — use verified migration'],items:[],totals:{material:0,labor:0,total:0}};
+  // DISABLED: app parser retired — bidsheets import via verified migration only.
   // Universal Peter bidsheet parser - header-name lookups, layout-tolerant
   const buf=await file.arrayBuffer();
   let wb;
