@@ -2865,19 +2865,24 @@ const costPerUnit = Number(item.costPerUnit) || Number(item.unitCost) || 0;
  if (deduction > 0)    effectiveQty = Math.max(0, effectiveQty - deduction);
  if (multiplier !== 1) effectiveQty = effectiveQty * multiplier;
  if (height > 0)       effectiveQty = effectiveQty * height;
- // Order qty: what the supplier ships (cartons/bags). Defaults to effective qty.
- let orderQty = effectiveQty;
- let orderUnit = item.unit || 'SF';
- if (item.sfPerCtn && item.sfPerCtn > 0 && effectiveQty > 0) {
-  orderQty = Math.ceil(effectiveQty / item.sfPerCtn);
+ // PATCH (v38): §2 locked math — AMOUNT = ORDER × COST.
+ // ORDER is the stored order qty (already in the cost's unit, e.g. 120 SF), NOT a
+ // recomputed carton count. The prior v37.1a hotfix multiplied per-SF cost by the
+ // CARTON count (ceil(qty/sfPerCtn)), understating every SF/LF line by the SF-per-carton
+ // factor (CB $12,227.77 → $6,455). Use the stored orderQty; derive cartons only as a
+ // fallback for manual lines with no stored order qty.
+ let orderQty, orderUnit;
+ if (item.orderQty != null && Number(item.orderQty) > 0) {
+  orderQty  = Number(item.orderQty);
+  orderUnit = item.orderUnit || item.unit || 'SF';
+ } else if (item.sfPerCtn && item.sfPerCtn > 0 && effectiveQty > 0) {
+  orderQty  = Math.ceil(effectiveQty / item.sfPerCtn);
   orderUnit = item.syPerCtn ? 'SY' : 'CTN';
+ } else {
+  orderQty  = effectiveQty;
+  orderUnit = item.unit || 'SF';
  }
- // PATCH (v37.1a — HOTFIX): qty basis depends on how costPerUnit was stored.
- //   • MATERIAL-path import (usedMaterial=true): costPerUnit = MATERIAL / qty → already per installed unit (SF/LF). Use effectiveQty.
- //   • Raw-COST path / manual entry: costPerUnit is per-order-unit (per carton/bag). Use orderQty.
- // Picking the wrong basis breaks all imported totals (Aspinwall $232K → $160K observed).
- const qtyForAmount = item.usedMaterial ? effectiveQty : orderQty;
- const amount = qtyForAmount * costPerUnit;
+ const amount = orderQty * costPerUnit;
  // FIX (Bug #3): if item came from MATERIAL-column import (parser already baked in tax+markup), skip both
  const effTaxRate    = item.usedMaterial ? 0 : (taxRate!=null    ? taxRate    : 0.07);
  const effMarkupRate = item.usedMaterial ? 0 : (markupRate!=null ? markupRate : 0.20);
