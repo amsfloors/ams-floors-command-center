@@ -2152,6 +2152,26 @@ window._SEED = [{"id":1796,"project":"Infiniti Naples","location":"Naples, FL 34
 const SB_URL  = 'https://ohuuhomzhvcrvfghqlmu.supabase.co';
 const SB_KEY  = 'sb_publishable_n7mO5gZT8sDMHcfAFMYRtg_XmGR2KoV';
 const sb = window.supabase.createClient(SB_URL, SB_KEY);
+// [FIX 2026-06-05] Supabase/PostgREST caps every query at 1000 rows by default.
+// estimate_items has 2722 rows, so a single select('*') only returned the first
+// 1000 — which (ordered by sortOrder across all estimates) cut every estimate off
+// at ~6 lines. fetchAll pages through 1000 at a time until all rows are loaded.
+// Returns {data,error} to match Supabase's shape so call sites are unchanged.
+async function fetchAll(table, opts){
+ const pageSize=1000; let from=0; const all=[];
+ for(;;){
+  let q=sb.from(table).select('*');
+  if(opts&&opts.order) q=q.order(opts.order,{ascending:opts.ascending!==false});
+  q=q.order('id',{ascending:true}); // stable tiebreaker: offset paging can't skip/dupe rows
+  const {data,error}=await q.range(from,from+pageSize-1);
+  if(error) return {data:all.length?all:null,error};
+  if(!data||!data.length) break;
+  all.push(...data);
+  if(data.length<pageSize) break;
+  from+=pageSize;
+ }
+ return {data:all,error:null};
+}
 const SEED_PROPOSALS = window._SEED;
 const STATUS_CONFIG = {
  'Lead':        { color:'bg-stone-200 text-stone-700',       dot:'bg-stone-500',    pipeline:'open',    order:1 },
@@ -4274,7 +4294,7 @@ function App() {
     if(st) setSettings(prev=>({...prev,...st}));
     const {data:est}=await sb.from('estimates').select('*');
     if(est) setEstimates(est);
-    const {data:estIt}=await sb.from('estimate_items').select('*').order('sortOrder',{ascending:true});
+    const {data:estIt}=await fetchAll('estimate_items',{order:'sortOrder',ascending:true});
     if(estIt) setEstimateItems(estIt);
     const {data:sup}=await sb.from('suppliers').select('*').order('name');
     if(sup) setSuppliers(sup);
@@ -4638,7 +4658,7 @@ function App() {
     for(let i=0;i<items.length;i+=50) await sb.from('estimate_items').insert(items.slice(i,i+50));
     const [{data:fE},{data:fI},{data:fP}]=await Promise.all([
      sb.from('estimates').select('*'),
-     sb.from('estimate_items').select('*'),
+     fetchAll('estimate_items'),
      sb.from('proposals').select('*').order('submitted',{ascending:false}),
     ]);
     if(fE) setEstimates(fE);
@@ -4790,7 +4810,7 @@ function App() {
      const [{data:fP},{data:fE},{data:fI}]=await Promise.all([
       sb.from('proposals').select('*').order('submitted',{ascending:false}),
       sb.from('estimates').select('*'),
-      sb.from('estimate_items').select('*'),
+      fetchAll('estimate_items'),
      ]);
      if(fP)setProposals(fP.map(p=>({...p,bidAmount:Number(p.bidAmount)||0,estMaterial:Number(p.estMaterial)||0,estLabor:Number(p.estLabor)||0})));
      if(fE)setEstimates(fE);
