@@ -1,125 +1,211 @@
-[SCHEMA_TRUTH (2).md](https://github.com/user-attachments/files/28477451/SCHEMA_TRUTH.2.md)
-# AMS Floors — Module 1: SCHEMA TRUTH (verified single source of truth)
+# SCHEMA_TRUTH.md
 
-**Status:** VERIFIED against `Supabase_Snippet_Public_table_schema_summary.csv` (live schema, 18 tables) on the Module-1 audit. Every claim below names the columns it was checked against. This document RETIRES any prior schema description that disagrees with it. Project 3 does NOT rebuild this schema; it writes to it correctly.
+**Source of truth for the AMS Floors database schema, cost-column rules, and save-path contract.**
 
----
-
-## The 18 tables (confirmed count)
-app_settings, architects, estimate_items, estimates, gcs, installers, line_items, products, proposal_documents, proposal_note_templates, proposal_revisions, proposal_scenarios, proposals, purchase_order_items, purchase_orders, suppliers, ve_package_items, ve_packages.
-
----
-
-## The tables that carry the migration (verified column lists)
-
-### estimate_items (44 cols) — the line-item home; ALL bidsheet lines land here
-Capture fields confirmed present: `id, estimateId, proposalId, parentItemId, sortOrder, sectionCode, sectionName, isAlternate, alternateGroupName, itemCode, size, manufacturer, description, color, qty, unit, sfPerCtn, syPerCtn, orderQty, orderUnit, orderQtyOverride, unitCost, freight, laborRate, displayMode, supplierId, supplierName, installerId, installerName, isVeAlternative, veNote, notes, createdAt, updatedAt, usedMaterial, multiplier, deduction, height, source, coveragePerUnit, alternateType, scenarioId, materialActual, lineMarkupRate`.
-- Cost-per-unit column here is **`unitCost`** (NOT `costPerUnit`).
-- Multi-block/scenario support: `scenarioId`, `isAlternate`, `alternateGroupName`, `sectionCode`, `sectionName`.
-- Computed-with-raw-inputs support: `unitCost` (raw) + `materialActual` (computed) + `lineMarkupRate` can coexist — store all three, never collapse.
-
-### purchase_order_items (14 cols) — PO line home
-`id, purchaseOrderId, estimateItemId, sortOrder, itemCode, manufacturer, description, size, color, qty, unit, costPerUnit, amount, notes`.
-- Cost-per-unit column here is **`costPerUnit`** (NOT `unitCost`).
-
-### purchase_orders (29 cols) — full ship-to confirmed
-`shipToName, shipToAddressLine1, shipToAddressLine2, shipToCity, shipToState, shipToZip, shipToContact, shipToPhone` all present, plus `supplierId/Name`, `installerId/Name`, `freightAmount, taxAmount, subtotalAmount, totalAmount`. Supports the three-party PO (manufacturer → job site).
-
-### proposals (35 cols)
-`architectId, plansDate, bidAmount, contractAmountActual` confirmed. Also already present: labor-actuals fields `estMaterial/estLabor/estOther` + `actMaterial/actLabor/actOther` (Module 8), and follow-up fields `status, nextAction, nextActionDate, lostReason, lostToPrice, wonByPrice, lastTouched` (Modules 7/9). These modules need no new columns.
-
-### estimates (38 cols)
-Flat header fields incl. `projectAddressLine1..Zip` (ship-to source), `gcContactName/Email/Phone`, and the FLAT architect fields `architectName, architectAddress, architectEmail, architectPhone`. Also `taxRate, markupRate, baseBidTotal, alternatesTotal, plansDated, projectNumber`.
-
-### architects / proposal_scenarios / proposal_revisions
-- `architects`: full firm record (name, address, contact*) — authoritative architect home, linked via `proposals.architectId`.
-- `proposal_scenarios`: `scenarioName, isSubmitted, isBaseScenario, detectedFrom, detectionText, priceDelta` — multi-block AND multi-GC support (Modules 4/5).
-- `proposal_revisions`: `revisionNumber, addendumRef, addendumDate, summary, acknowledgedAt` — change-order/addendum support (Module 4).
+> **How to read this document.** Every fact is tagged:
+> - **[VERIFIED 2026-06-04]** — confirmed directly against the live Supabase `public` schema (column inventory of all 18 tables, 295 columns). The live DB wins over this doc if they ever disagree; re-verify after any migration.
+> - **[RULE]** — a decision/contract carried from prior project work. Not derivable from a column dump; must be honored by code.
+> - **[TO CONFIRM]** — not yet verified; flagged honestly rather than assumed. Do not treat as fact.
+>
+> Verification method: `select table_name, column_name, data_type, is_nullable from information_schema.columns where table_schema='public'`. Run via the **Supabase SQL editor** (the REST API / `information_schema` route does NOT work for column detection — forbidden trap). The editor caps at 100 rows by default; the full result is 296 rows incl. header — export must capture all of them.
 
 ---
 
-## MANDATORY column-name mapping facts (every module obeys)
+## 0. Session updates (read this first)
 
-1. **unitCost ≠ costPerUnit.** Cost-per-unit is `estimate_items.unitCost` but `purchase_order_items.costPerUnit`. PO generation READS `unitCost`, WRITES `costPerUnit`. Assuming they match = silent zero-cost POs = v10's bug. (Verified: `estimate_items` has no `costPerUnit`; `purchase_order_items` has no `unitCost`.)
+**[VERIFIED 2026-06-05 — Module 7 cutover DONE]**
+- The command center (`index.html`) now reads **only the live Supabase tables**. It deploys via **Netlify** (project `dapper-faun-fb14a0`, URL `dapper-faun-fb14a0.netlify.app`), auto-building from GitHub `main`. (Note: deploy host is Netlify, not GitHub Pages.)
+- Live read confirmed in-app: **$13.17M open pipeline / 154 active bids**, "Live sync" on.
+- **Removed:** `parseBidsheetFile` (retired parser) and `BulkIntakeView` (in-app bulk import UI). Both wrote `costPerUnit` into `estimate_items` — the v2/v10 corruption pattern. Gone wholesale.
+- **`_SEED` kept** as the offline fallback + rollback snapshot. Its auto-insert-if-empty branch was **neutralized** — an empty query no longer writes `_SEED` into `proposals`; it surfaces an error and shows `_SEED` read-only.
+- **Reversible:** revert the commit on GitHub `main`; Netlify redeploys. No DB rows/schema were changed by the cutover.
 
-2. **Architect data lives in TWO places.** `architects` table (FK `proposals.architectId`) AND flat `estimates.architectName/architectAddress/architectEmail/architectPhone`. RESOLVED: do NOT pick authoritative up front — capture both with provenance, defer the choice — see Authoritative-Source Policy (D1) below. Never let them diverge silently; a divergence is a Review-List flag.
+**[VERIFIED 2026-06-05 — migration data quality]**
+- `estimate_items`: **2,722** line items; **2,628** have a real `unitCost` (avg $41.90, range $0–$4,718.05). The ~94 without are header/labor lines (expected). `materialActual` populated on 2,659; `lineMarkupRate` on 2,300.
+- Markup varies per file as expected (e.g. AFC Urgent Care #1313 = 30%; U.S. Foodservice #1535.3 = 23%). Engine totals reconcile to the penny off the stored `unitCost`.
 
-3. **plansDate naming divergence (NEW, found in Module 1).** `proposals.plansDate` AND `estimates.plansDated` both exist (note the trailing "d"). Same divergence risk as the architect duplication. RESOLVED: capture both with provenance, defer authoritative choice — see Authoritative-Source Policy (D2) below.
-
-4. **projectNumber duplicated (NEW, found in Module 1).** Present on both `estimates.projectNumber` and `proposals.projectNumber`. Store as TEXT (malformed values like `51977.00`, `R1.204/28/23`). RESOLVED: capture both with provenance, defer authoritative choice — see Authoritative-Source Policy (D3) below.
-
----
-
-## RETIREMENTS (do not write to these)
-
-- **`line_items` ghost table — RETIRED.** Confirmed live (12 cols: `type, item, vendor, qty, unit, estUnit, estTotal, actUnit, actTotal, status`) as a parallel/competing line store alongside `estimate_items`. Project 3 uses ONLY `estimate_items`. Nothing writes to `line_items`.
-- **Baked-cost columns — RETIRED (live but never written).** `estimate_items.usedMaterial, multiplier, deduction, height`. Confirmed present; treat as dead. Store raw `unitCost` + computed `materialActual` + `lineMarkupRate` instead.
-
----
-
-## AUTHORITATIVE-SOURCE POLICY (RESOLVED — capture both, decide on data)
-
-**Decision (Peter, Module 1):** Do NOT choose an authoritative source up front. Choosing before we have seen how the values behave across ~500 files would be guessing, which the Prime Directive forbids. Instead, for each of the three duplicated concepts, CAPTURE BOTH SIDES with full provenance on each (file/sheet/cell/read-or-computed/timestamp), then let the data decide:
-
-- **D1 — Architect:** capture BOTH the `architects` table linkage (`proposals.architectId`) AND the flat `estimates.architectName/architectAddress/architectEmail/architectPhone`, each with its own provenance.
-- **D2 — Plans date:** capture BOTH `proposals.plansDate` AND `estimates.plansDated`, each with provenance.
-- **D3 — Project number:** capture BOTH `proposals.projectNumber` AND `estimates.projectNumber` (TEXT), each with provenance.
-
-**Per-file behavior:**
-- Both sides AGREE → no action, silent.
-- Both sides DISAGREE → raise a Review-List flag for that file showing BOTH values and their provenance. The accumulating pattern of disagreements across the batch is the EVIDENCE that tells Peter which source is reliable — the authoritative-source decision is then made on data, not assumption.
-
-**Non-blocking, always.** These three never stop a record from importing: both sides are stored regardless, so a disagreement is an ENRICHMENT-lane flag, not a BLOCKING quarantine. They are recorded as three OPEN DECISIONS in the Review List (Module 3), not as gate failures.
+**[RULE — STATUS SOURCE OF TRUTH] (added 2026-06-05)**
+Proposal **status is NOT stored in the bidsheets/proposals**, and **NOT reliably in `_SEED`** (that snapshot is a hand-kept pipeline list and may be ~2 months stale). The authoritative source is **which OneDrive folder the project file lives in**:
+```
+OneDrive - AMS Floors\AMS Floors - General\
+  1. Current Projects      -> Active
+  2. Currently Bidding     -> Negotiating / Open
+  3. Submitted Proposals   -> Submitted
+  4. Completed Projects    -> Won / Closed
+  5. Dead Projects         -> Dead / Lost
+```
+- **All 154 migrated proposals currently carry `status = "Submitted"` in the live DB** (placeholder; real statuses not yet assigned).
+- Proposal **numbers and names are both unique**, and filenames carry the number — so folder→file→`proposals.id` mapping is near-automatic (match on number; name as cross-check).
+- **[RULE]** When assigning status, derive it from the **folder**, not from `_SEED` or the bidsheet. Use `_SEED` only as a cross-check; where folder and `_SEED` disagree, flag for Peter — never silently pick. Do NOT bulk-map `_SEED` statuses onto the DB.
 
 ---
 
-## Module 1 done-criteria check
-- Live schema documented and trusted: YES — every fact verified against the LIVE database (all 18 tables, full column inventory), not just the CSV snapshot. (Earlier "only 4 tables" reading was a 100-row truncation of the column query; `Supabase_Snippet_List_Public_Tables.csv` confirms all 18 exist.)
-- `line_items` retired: YES (documented; only `estimate_items` used).
-- Column-name mapping facts recorded for every module to obey: YES (the facts above), with 2 newly discovered divergence traps added.
-- **Live reconciliation result:** 16/16 documented facts verified TRUE against the live DB, including the critical one: `estimate_items` has `unitCost` and NO `costPerUnit`; `purchase_order_items` has `costPerUnit` and NO `unitCost`.
+## 1. The cost-column law (prime directive — never re-litigate)
+
+These are the facts whose violation caused the v2/v10 silent corruption. All four are **[VERIFIED 2026-06-04]** against the live schema and **re-confirmed 2026-06-05**:
+
+| Fact | Status |
+|---|---|
+| `estimate_items.unitCost` **exists** (numeric) | ✅ VERIFIED |
+| `estimate_items.costPerUnit` **does NOT exist** | ✅ VERIFIED ABSENT |
+| `purchase_order_items.costPerUnit` **exists** (numeric) | ✅ VERIFIED |
+| `purchase_order_items.unitCost` **does NOT exist** | ✅ VERIFIED ABSENT |
+
+**[RULE]** POs **read** `unitCost` (from `estimate_items`) and **write** `costPerUnit` (to `purchase_order_items`). Writing `costPerUnit` to `estimate_items` = silent corruption (the v2/v10 bug). The schema enforces this structurally — the wrong column does not exist on either table — but code must still never attempt it.
+
+**[RULE]** Never use `information_schema` via the REST API for column detection. Use the SQL editor.
+
+### 1a. Module 12 finding — COST column reads the wrong field [VERIFIED 2026-06-05]
+The command center reads `item.costPerUnit` (which does not exist on migrated rows) in several places, so the **COST column renders blank** and the **PO generator would read $0** — even though `unitCost` holds real data and line **totals already reconcile** (the math fn falls back to `unitCost`). Only the display/PO layer is affected.
+
+Spots reading `item.costPerUnit` that need a `?? item.unitCost` fallback (re-grep for exact lines before editing):
+- COST cell — the editable input (`<ACInput value={item.costPerUnit} onChange={...updateField('costPerUnit',...)}`). **Also a write hazard:** its `onChange` writes `costPerUnit` back to `estimate_items` (a non-existent column) — editing a cost silently fails. Fix must redirect the write to **`unitCost`**.
+- PO generator `perOrderCost(i)` — reads `i.costPerUnit` only (why POs read $0).
+- Catalog price-drift hint history (two spots).
+- A PO calc helper (`var calc=...costPerUnit...`).
+
+**[RULE]** This is Module 12 work. Fixing cost math/reads requires **re-passing all 5 fixtures (§7)** to prove totals still reconcile before trusting it.
 
 ---
 
-# SAVE-PATH HAND-OFF CONTRACT (Module 4 deliverable)
+## 2. Peter's locked math (proven to the penny — never recompute differently)
 
-How a record produced by `ams_xlsx_reader.py` maps into the live tables the Command Center reads. This is the SPEC only — no writes happen here; the save path is built and dry-run as a separate, reviewable step. The reader stays the single trusted engine; the app's `parseBidsheetFile` is RETIRED (see "Why the app's parser retires" below).
+**[RULE]** These formulas are fixed. Any engine/save change must re-pass the fixture suite (§7).
 
-## Rule 0 — only verified records are written
-- `outcome == IMPORT` (both gates passed) → write per the mapping below.
-- `outcome == QUARANTINE` → write NOTHING to the data tables. The file becomes Review-List entries (Module 3) instead. No partial writes, ever.
+```
+AMOUNT   = ORDER × COST
+MATERIAL = AMOUNT + (AMOUNT × tax) + freight + (AMOUNT × markup)
+LABOR    = QTY × laborRate
+```
 
-## A verified BASE proposal writes three things
-1. **one `proposals` row** — pipeline/operational fields (status, bidAmount, follow-up + labor-actuals fields already present). `plansDate` and `projectNumber` captured here per D2/D3.
-2. **one `estimates` row** — header + tax/markup; flat architect block (`architectName/Address/Email/Phone`), `plansDated`, `projectNumber` — each captured WITH PROVENANCE per D1–D3 (both sides stored; disagreement = non-blocking Review flag, never a silent pick).
-3. **N `estimate_items` rows** — one per captured bidsheet line. Cost fields:
-   - WRITE **`unitCost`** = the raw per-unit cost read from the sheet. (Verified: estimate_items has `unitCost`, NOT `costPerUnit`.)
-   - WRITE `materialActual`, `lineMarkupRate` = the decoded-from-FORMULA markup rate (NOT the lying label).
-   - WRITE `qty`, `unit`, `itemCode`, `manufacturer` (registry-resolved), `description`, `sectionCode`, `sectionName`, `freight`, `laborRate`, `sortOrder`, and `source` (flag = migrated, reversible).
-   - NEVER write `costPerUnit` (does not exist on this table — silent insert rejection = v10 bug).
-   - NEVER write the baked-cost columns `usedMaterial / multiplier / deduction / height` (they exist but are RETIRED; writing baked math is the v1/v10 corruption pattern).
+- **Labor uses QTY; material uses ORDER.** (Do not cross them.)
+- **Store:** `unitCost` (raw COST), `materialActual` (computed MATERIAL), `lineMarkupRate` (markup decoded from the file's formula).
+- **Never write** the baked-cost columns: `usedMaterial`, `multiplier`, `deduction`, `height`. (They exist on `estimate_items` — see §4 — but are forbidden to write.)
+- **Markup VARIES per file** (10% Northside, 20% others; live examples 30% / 23%). Read it from the column header / decode from the formula. **Never assume a markup rate.**
 
-## A verified CHANGE-ORDER file (Module 4) writes the base PLUS revisions
-- Write the base proposal exactly as above (the base block reconciles internally to the penny).
-- For EACH change order, write **one `proposal_revisions` row**, linked by `proposalId`, carrying:
-  - the CO number (e.g. `1703-01`) — DISTINCT per CO even when sheet names collide;
-  - the CO's captured total (`co_total`) and its line provenance;
-  - `projectNumber` + `plansDate` from the CO sheet.
-- COs are NEVER merged into the base and NEVER summed across each other. Base + each CO are distinct linked records.
-- **CO reconciliation caveat:** these CO sheets carry NO stated CO total cell. `co_total` is an honest captured sum (section-row lump where present, else sum of item rows), flagged `recon_note = "no stated CO total on sheet — Peter confirms"`. CO totals import as PROVISIONAL pending Peter's confirmation — an enrichment-lane flag, not a claimed verification. If a section shows BOTH a section-row lump AND nonzero itemized rows that disagree, the conflict is surfaced for Peter (lump preferred).
+---
 
-## Idempotency (enforced by the save path, not this spec)
-- Re-importing the same file MUST NOT create duplicate rows (hardening rule 9). Keying/upsert strategy is defined when the save path is built; flagged here as a REQUIRED property to prove in the dry-run before any real write.
+## 3. Save-path contract
 
-## Sequencing (decided)
-- Populate the database FIRST; the Command Center keeps running on its in-browser `_SEED` until a DELIBERATE, reversible cutover from `_SEED` to live tables. Migrated rows are distinguishable via `estimate_items.source`.
+**[RULE]** Write order: `proposals` → `estimates` → `estimate_items`. Change orders / addendums attach as `proposal_revisions`; VE / alternate scenarios as `proposal_scenarios`. Generated proposal snapshots go to `proposal_documents`.
 
-## Why the app's parser retires (evidence, not preference)
-- The deployed Command Center inserts `costPerUnit` into `estimate_items`. The live table has NO such column → PostgREST rejects the insert → the app's bidsheet import has been SILENTLY FAILING to store costs. This is the v10 bug, live in production. The verified reader writing `unitCost` is the corrected path. The app keeps its operational UI (pipeline, follow-ups, PO/WO, PDFs) but STOPS parsing bidsheets; it reads clean data, it does not manufacture it.
+**[RULE]** Idempotency: define a stable key (e.g. source filename + projectNumber) so re-running the migration creates zero duplicates. (Specific key field **[TO CONFIRM]** — no natural unique constraint visible in the column inventory; FK/constraint dump needed.)
 
-## Module 4 done-criteria check
-- CO file imports base + N CO as DISTINCT LINKED records: YES (Residence Inn → base 293,983.10 + CO 1703-01 = 1,200.00 + CO 1703-02 = 2,970.00).
-- Each CO captured with provenance, none merged/summed-across: YES.
-- CO recon honesty (no stated total → Peter-confirms flag): YES.
-- 12-fixture regression after CO code added: outcomes UNCHANGED (5 IMPORT / 7 QUARANTINE).
-- Hand-off field mapping locked against LIVE schema (`unitCost`, not `costPerUnit`): YES.
+**[VERIFIED 2026-04]** Linking columns present: `estimates.proposalId`, `estimate_items.estimateId`, `estimate_items.proposalId`, `estimate_items.scenarioId`, `purchase_orders.proposalId`/`estimateId`, `purchase_order_items.purchaseOrderId`/`estimateItemId`, `proposal_revisions.proposalId`, `proposal_scenarios.proposalId`.
+**[TO CONFIRM]** Actual foreign-key *constraints* (vs. just columns) — the column inventory does not include FK relationships. Run a separate `key_column_usage` / `table_constraints` query to confirm enforced FKs and any unique constraints.
+
+---
+
+## 4. Verified table inventory [VERIFIED 2026-06-04]
+
+18 tables in `public`. Columns below are exact live names. `(type)` shown; all are nullable=YES except `id` (NO) unless noted.
+
+### proposals (35 cols) — pipeline/CRM record
+`id, project, location, gc, contact, email, phone, submitted(date), bidAmount, contractAmountActual, status, owner, notes, sharepoint, retainage, estMaterial, estLabor, estOther, actMaterial, actLabor, actOther, lastTouched(date), createdAt, updatedAt, nextAction, nextActionDate(date), lostReason, lostToPrice, wonByPrice, estimator, bdOwner, pm, projectNumber, architectId, plansDate(date)`
+- **`status`** lives here. All 154 migrated rows currently = `"Submitted"` (placeholder). Real status source = OneDrive folder (see §0).
+
+### estimates (38 cols) — proposal header / project + GC + prepared-by + rates
+`id, proposalId, proposalNumber, projectName, projectAddressLine1/2, projectCity/State/Zip, projectNumber, plansDated(date), addendum, gcId, gcName, gcAddressLine1/2, gcCity/State/Zip, gcContactName/Email/Phone, architectName/Address/Email/Phone, preparedByName/Email/Phone, taxRate, markupRate, baseBidNotes, alternatesNotes, proposalNotes, baseBidTotal, alternatesTotal, createdAt, updatedAt`
+- **Note:** `taxRate` and `markupRate` live here at the estimate level. Per §2, markup varies per file — this is where the decoded rate is stored.
+
+### estimate_items (44 cols) — the atomic line items
+`id, estimateId, proposalId, parentItemId, sortOrder, sectionCode, sectionName, isAlternate, alternateGroupName, itemCode, size, manufacturer, description, color, qty, unit, sfPerCtn, syPerCtn, orderQty, orderUnit, orderQtyOverride, `**`unitCost`**`, freight, laborRate, displayMode, supplierId, supplierName, installerId, installerName, isVeAlternative, veNote, notes, createdAt, updatedAt, `**`usedMaterial, multiplier, deduction, height`**` (FORBIDDEN TO WRITE), source, coveragePerUnit, alternateType, scenarioId, `**`materialActual, lineMarkupRate`**` (STORE THESE)`
+- Cost column: **`unitCost`** ✅. No `costPerUnit` ✅. (App reads `costPerUnit` first — see §1a, the Module 12 fix.)
+
+### purchase_orders (29 cols)
+`id, poNumber, proposalId, estimateId, type, supplierId, supplierName, installerId, installerName, shipToName, shipToAddressLine1/2, shipToCity/State/Zip, shipToContact, shipToPhone, status, subtotalAmount, taxAmount, freightAmount, totalAmount, neededByDate(date), sentAt, confirmedAt, receivedAt, notes, createdAt, updatedAt`
+- **Three-party ship-to** fields present (manufacturer → job site) for Module 12.
+
+### purchase_order_items (14 cols)
+`id, purchaseOrderId, estimateItemId, sortOrder, itemCode, manufacturer, description, size, color, qty, unit, `**`costPerUnit`**`, amount, notes`
+- Cost column: **`costPerUnit`** ✅. No `unitCost` ✅.
+
+### gcs (14 cols) — general contractors
+`id, name, addressLine1/2, city, state, zip, phone, email, website, paymentTerms, notes, createdAt, updatedAt`
+
+### suppliers (16 cols)
+`id, name, contactName/Email/Phone, addressLine1/2, city/state/zip, paymentTerms, leadTimeDays(int), defaultFreightRate, notes, createdAt, updatedAt`
+
+### installers (11 cols)
+`id, name, contactName/Email/Phone, specialties, defaultLaborRates(jsonb), paymentTerms, notes, createdAt, updatedAt`
+
+### proposal_revisions (9 cols) — addendums/COs
+`id, proposalId, revisionNumber(int), addendumRef, addendumDate(date), summary, acknowledgedAt, acknowledgedBy, createdAt`
+
+### proposal_scenarios (11 cols) — VE / alternates
+`id, proposalId, scenarioName, isSubmitted(bool), isBaseScenario(bool), detectedFrom, detectionText, priceDelta, notes, createdAt, updatedAt`
+
+### proposal_documents (10 cols) — generated snapshots
+`id, estimateId, proposalId, version(int), generatedBy, snapshot(jsonb), sentTo, sentAt, notes, createdAt`
+
+### ve_packages (6 cols)
+`id, estimateId, name, description, sortOrder, createdAt`
+
+### ve_package_items (3 cols)
+`id, vePackageId, estimateItemId`
+
+### line_items (13 cols) — est-vs-actual tracking (Phase 4)
+`id, proposalId, type, item, vendor, qty, unit, estUnit, estTotal, actUnit, actTotal, status, createdAt`
+
+### products (17 cols) — catalog
+`id, itemCode, manufacturer, supplierId, size, description, unit, sfPerCtn, syPerCtn, lastKnownCost, lastUsedDate(date), category, csiDivision, useCount(int), notes, createdAt, updatedAt`
+- Catalog "living statistics": `lastKnownCost`, `lastUsedDate`, `useCount`.
+
+### architects (15 cols)
+`id, name, addressLine1/2, city/state/zip, phone, email, contactName/Email/Phone, notes, createdAt, updatedAt`
+
+### proposal_note_templates (6 cols)
+`id, name, content, isDefault(bool), sortOrder, createdAt`
+
+### app_settings (5 cols)
+`id(int), slaSubmitted(int), slaNegotiating(int), targetMargin, riskMarginFloor`
+
+---
+
+## 5. Slice dimensions — corrected against live schema
+
+| Dimension | Status |
+|---|---|
+| GC | ✅ `proposals.gc`, `estimates.gcId`/`gcName`, table `gcs` |
+| Estimator | ✅ **`proposals.estimator` EXISTS** — NOT missing. Also `pm`, `bdOwner`. |
+| Material / supplier | ✅ `estimate_items.manufacturer`/`supplierName`, table `suppliers` |
+| CSI section | ✅ `estimate_items.sectionCode`/`sectionName`, `products.csiDivision` |
+| Crew / installer | ✅ `estimate_items.installerName`, table `installers` |
+| Time | ✅ `submitted`, `createdAt`, `lastTouched`, etc. |
+| Status | ✅ `proposals.status` — **but source of truth is the OneDrive folder; all 154 currently "Submitted" (placeholder).** See §0. |
+| Margin | ✅ derivable from cost/markup; `app_settings.targetMargin` |
+| **Project type** | ❌ **GENUINELY ABSENT** — no `projectType` column anywhere. Real gap to add at migration. |
+
+**[RULE]** Project type is the one slice dimension missing from the schema. Add it (likely `proposals.projectType`) before/at Module 5 migration so the intelligence layer can slice by it.
+
+---
+
+## 6. Engine & forbidden traps
+
+- **[RULE]** `ams_xlsx_reader.py` is the single trusted parser. The command center's `parseBidsheetFile` is **REMOVED as of 2026-06-05** (it corrupted — wrote `costPerUnit` to `estimate_items`). Salvage only UI/presentation from old versions — never parser/save code.
+- **[RULE] Do NOT reintroduce an in-app bidsheet parser/writer.** Historical files load via the verified Python migration pipeline; forward takeoffs come via Module 14 (Bluebeam CSV).
+- **[RULE] Forbidden:** `costPerUnit` on `estimate_items`; per-file parser heuristics; `information_schema` via REST API; "write both column names"; trusting on-screen reconciliation without checking actual DB rows; silent formula auto-adoption; auto-acted suggestions; **bulk-mapping `_SEED` statuses onto the DB** (status comes from the folder).
+
+---
+
+## 7. Fixture suite (regression — re-pass on every engine/save change)
+
+| File | Expected |
+|---|---|
+| PROPOSAL_AMS_Crash_Champions.xlsx | $25,537.38 |
+| PROPOSAL_AMS_Homewood_Suites_Cheshire.xlsx | base $533,954.08 / alt $552,533.90 |
+| PROPOSAL_AMS_FLOORS_Northside_Christian.xlsx | $68,534.35 (header 15%, **actual markup 10%**) |
+| PROPOSAL_AMS_FLOORS_Teachers_FCU.xlsx | $36,351.60 |
+| PROPOSAL_AMS_Aspinwall.xlsx | computed $232,023 / stated $232,110 (+$87 rounding) — **verify against the real file (`onedrive_live\1320 Aspinwall\`), not a screenshot** |
+
+---
+
+## 8. Outstanding to confirm (do not treat as done)
+
+1. **Foreign-key constraints & unique constraints** — column inventory only; run `table_constraints` + `key_column_usage` queries.
+2. **Idempotency key** — no natural unique constraint visible; decide and document in Module 3/4.
+3. **Authoritative reader** — `ams_xlsx_reader.py` vs `ams_reader_v2.py` (Module 2).
+4. **`projectType` column** — absent; add at migration.
+5. **Status assignment** — all 154 currently "Submitted." Real source = OneDrive folder (§0). Next task: dump folder→file listing, match on proposal number, generate `UPDATE`. `_SEED` is cross-check only.
+6. **Module 12 COST/PO fix** — app reads `costPerUnit`, data is in `unitCost`; fix ~5 spots + redirect the edit-write to `unitCost`; re-pass fixtures (§1a, §7).
+7. This doc reflects schema as of **2026-06-04**, with session updates **2026-06-05**. Re-verify after any migration or DDL change. Live DB wins.
