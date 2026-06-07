@@ -2025,7 +2025,7 @@ window.genProposal=function(est,items,notes,proposal){
   var propNum=(proposal&&proposal.id)||est.proposalNumber||'';
   var base=items.filter(function(i){return!i.isAlternate&&!i.isVeAlternative;});
   var alts=items.filter(function(i){return i.isAlternate&&!i.isVeAlternative;});
-  var calc=function(i){var q=Number(i.qty)||0,c=Number(i.costPerUnit)||0,f=Number(i.freight)||0,lr=Number(i.laborRate)||0,a=q*c,mat=a+a*tax+f+a*mu,lab=q*lr;return{mat:mat,lab:lab,tot:mat+lab};};
+  var calc=function(i){var q=Number(i.qty)||0,c=Number(i.costPerUnit)||Number(i.unitCost)||0,f=Number(i.freight)||0,lr=Number(i.laborRate)||0,a=q*c,mat=a+a*tax+f+a*mu,lab=q*lr;return{mat:mat,lab:lab,tot:mat+lab};};
   var tM=0,tL=0;base.forEach(function(i){var r=calc(i);tM+=r.mat;tL+=r.lab;});
   // Detect dominant display mode for header
   var modes=base.map(function(i){return i.displayMode||'full';});
@@ -2102,7 +2102,7 @@ window.genSupplierPOs=function(est,items,proposal){
     //   • Raw-COST items: costPerUnit is already per-order-unit → use as-is.
     //   • MATERIAL-path items: costPerUnit is per-SF → multiply by sfPerCtn to get per-carton price.
     // Either way: line amount = orderQty × per-order-unit cost (what the supplier invoices).
-    var perOrderCost=function(i){var c=Number(i.costPerUnit)||0;if(i.usedMaterial&&i.sfPerCtn&&Number(i.sfPerCtn)>0)return c*Number(i.sfPerCtn);return c;};
+    var perOrderCost=function(i){var c=Number(i.costPerUnit)||Number(i.unitCost)||0;if(i.usedMaterial&&i.sfPerCtn&&Number(i.sfPerCtn)>0)return c*Number(i.sfPerCtn);return c;};
     var its=byS[sup],tot=its.reduce(function(s,i){var oq=window._ordQ(i),c=perOrderCost(i),f=Number(i.freight)||0,a=oq*c;var effTax=i.usedMaterial?0:tax;return s+a+a*effTax+f;},0);
     H+="<div class='pg'><div style='display:flex;justify-content:space-between;padding-bottom:12px;margin-bottom:14px;border-bottom:2px solid #1c1917'>";
     H+="<div><img src='data:image/png;base64,"+_LOGO+"' style='height:40px'/><div style='font-size:16px;font-weight:700;margin-top:6px'>PO #"+String(n++).padStart(4,'0')+" \u2014 "+today+"</div><div style='font-size:11px;color:#666;margin-top:2px'>Proposal #"+propNum+(gc?' &nbsp;&middot;&nbsp; GC: '+gc:'')+"</div></div>";
@@ -2953,7 +2953,7 @@ const EstimateItemRow = ({ item, onUpdate, onDelete, onAddVE, taxRate, markupRat
     {calc.orderQty > 0 ? `${calc.orderQty} ${calc.orderUnit}` : '—'}
    </td>
    <td className="px-1 py-1">
-    <ACInput value={item.costPerUnit} onChange={v => updateField('costPerUnit', v)} type="number" className="text-right font-mono" style={{ minWidth: '60px' }} />
+    <ACInput value={item.costPerUnit ?? item.unitCost} onChange={v => updateField('unitCost', v)} type="number" className="text-right font-mono" style={{ minWidth: '60px' }} />
     {priceHint && priceHint.lastCost > 0 && (
      <div className={`text-[9px] font-mono text-right pr-2 mt-0.5 ${driftColor}`} title={`Last: $${priceHint.lastCost.toFixed(2)} · 60d avg: $${priceHint.avg60.toFixed(2)} · ${priceHint.count} prior bids`}>
       {driftIcon} ${priceHint.lastCost.toFixed(2)}{priceHint.daysAgo !== null ? ` · ${priceHint.daysAgo}d ago` : ''}
@@ -3151,7 +3151,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
   const today = new Date();
   allEstimateItems.forEach(item => {
    if (item.estimateId === thisEstId) return;
-   const cpu = Number(item.costPerUnit);
+   const cpu = Number(item.costPerUnit) || Number(item.unitCost);
    if (!cpu || cpu <= 0) return;
    const mfr = (item.manufacturer || '').trim().toLowerCase();
    const desc = (item.description || '').trim().toLowerCase();
@@ -3183,7 +3183,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
   const cutoff = Date.now() - 60 * 86400000;
   const recent = hist.filter(h => h.date && new Date(h.date) >= cutoff);
   const avg60 = recent.length > 0 ? recent.reduce((s, h) => s + h.costPerUnit, 0) / recent.length : lastCost;
-  const current = Number(item.costPerUnit) || 0;
+  const current = Number(item.costPerUnit) || Number(item.unitCost) || 0;
   const drift = current > 0 && avg60 > 0 ? (current - avg60) / avg60 : null;
   return { lastCost, daysAgo, avg60, drift, count: hist.length };
  };
@@ -3765,7 +3765,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
         No estimate items yet — go to <strong>Estimate / Bidsheet</strong> tab and add line items first.
        </div>
        :<div style={{background:'#1c1917',color:'white',padding:'14px',display:'grid',gridTemplateColumns:'1fr 1fr 1fr',textAlign:'center',gap:'10px',marginBottom:'4px'}}>
-        {(()=>{const tax=(estimate&&estimate.taxRate!=null?estimate.taxRate:0.07),mu=(estimate&&estimate.markupRate!=null?estimate.markupRate:0.20),base=(estimateItemsForThis||[]).filter(x=>!x.isAlternate&&!x.isVeAlternative),tM=base.reduce((s,x)=>{const q=Number(x.qty)||0,c=Number(x.costPerUnit)||0,f=Number(x.freight)||0,a=q*c;return s+a+a*tax+f+a*mu;},0),tL=base.reduce((s,x)=>s+(Number(x.qty)||0)*(Number(x.laborRate)||0),0),$=n=>'$'+Math.round(n||0).toLocaleString('en-US');const bidAmt=Number(proposal&&proposal.bidAmount)||Number(proposal&&proposal.contractAmount)||Number(draft&&draft.bidAmount)||0;const statedTotal=bidAmt>0?bidAmt:(tM+tL);return[['Material',tM],['Labor',tL],['Base Bid',statedTotal]].map(([l,v],i)=><div key={l}><div style={{fontSize:'10px',textTransform:'uppercase',color:'#a8a29e'}}>{l}</div><div style={{fontFamily:'Georgia,serif',fontSize:'20px',color:i===2?'#6ee7b7':'white'}}>{$(v)}</div></div>);})()}
+        {(()=>{const tax=(estimate&&estimate.taxRate!=null?estimate.taxRate:0.07),mu=(estimate&&estimate.markupRate!=null?estimate.markupRate:0.20),base=(estimateItemsForThis||[]).filter(x=>!x.isAlternate&&!x.isVeAlternative),tM=base.reduce((s,x)=>{const q=Number(x.qty)||0,c=Number(x.costPerUnit)||Number(x.unitCost)||0,f=Number(x.freight)||0,a=q*c;return s+a+a*tax+f+a*mu;},0),tL=base.reduce((s,x)=>s+(Number(x.qty)||0)*(Number(x.laborRate)||0),0),$=n=>'$'+Math.round(n||0).toLocaleString('en-US');const bidAmt=Number(proposal&&proposal.bidAmount)||Number(proposal&&proposal.contractAmount)||Number(draft&&draft.bidAmount)||0;const statedTotal=bidAmt>0?bidAmt:(tM+tL);return[['Material',tM],['Labor',tL],['Base Bid',statedTotal]].map(([l,v],i)=><div key={l}><div style={{fontSize:'10px',textTransform:'uppercase',color:'#a8a29e'}}>{l}</div><div style={{fontFamily:'Georgia,serif',fontSize:'20px',color:i===2?'#6ee7b7':'white'}}>{$(v)}</div></div>);})()}
        </div>}
       {[['Proposal Document','Full PDF with logo, GC info, line items and totals.','genProposal','Generate Proposal'],
        ['Supplier Purchase Orders','One PO per supplier shipped to job site.','genSupplierPOs','Generate POs'],
@@ -3879,7 +3879,7 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
    if(!map.has(mfr)) map.set(mfr,{manufacturer:mfr,items:0,totalAmt:0,proposals:new Set()});
    const m=map.get(mfr);
    m.items++;
-   m.totalAmt+=(Number(it.qty)||0)*(Number(it.costPerUnit)||0);
+   m.totalAmt+=(Number(it.qty)||0)*(Number(it.costPerUnit)||Number(it.unitCost)||0);
    if(it.proposalId) m.proposals.add(it.proposalId);
   });
   return [...map.values()]
@@ -4458,7 +4458,7 @@ function App() {
    color: '',
    qty: 0,
    unit: 'SF',
-   costPerUnit: 0,
+   unitCost: 0,
    freight: 0,
    laborRate: 0,
    displayMode: 'full',
@@ -4502,7 +4502,7 @@ function App() {
    color: '',
    qty: parent.qty,
    unit: parent.unit,
-   costPerUnit: 0,
+   unitCost: 0,
    freight: 0,
    laborRate: parent.laborRate,
    displayMode: 'full',
