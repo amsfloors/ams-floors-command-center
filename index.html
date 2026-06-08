@@ -3576,7 +3576,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onAd
  const [previewHtml,setPreviewHtml]=useState(null);
  const [noteText,setNoteText]=useState('');
  const [activeTab,setActiveTab]=useState('details');
- useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('details');},[proposal]);
+ useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('details');},[proposal?.id]);
  if(!proposal) return null;
  const save=()=>{onSave(draft);setEdit(false);};
  const materials=lineItems.filter(l=>l.type==='Material');
@@ -4759,17 +4759,32 @@ function App() {
   const src=proposals.find(p=>String(p.id)===oId);
   if(!src){ alert('Could not find project #'+oId+' to renumber.'); return; }
   const ce=async(label,p)=>{const{error}=await p; if(error) throw new Error(label+' — '+(error.message||error.details||error.code||'rejected by database'));};
+  let createdNew=false;
   try{
    await ce('create renumbered proposal',sb.from('proposals').insert(toDbProposal({...src,id:nId,updatedAt:new Date().toISOString()})));
+   createdNew=true;
    await ce('repoint estimates',sb.from('estimates').update({proposalId:nId,proposalNumber:nId}).eq('proposalId',oId));
-   await ce('repoint estimate_items',sb.from('estimate_items').update({proposalId:nId,projectNumber:nId}).eq('proposalId',oId));
+   await ce('repoint estimate_items',sb.from('estimate_items').update({proposalId:nId}).eq('proposalId',oId));
    await ce('repoint line items',sb.from('line_items').update({proposalId:nId}).eq('proposalId',oId));
    await ce('repoint documents',sb.from('proposal_documents').update({proposalId:nId}).eq('proposalId',oId));
    await ce('remove old proposal',sb.from('proposals').delete().eq('id',oId));
-  }catch(err){ alert('Renumber failed — '+err.message+'\n\nNo rows were deleted. Project #'+oId+' may now exist alongside #'+nId+' — check both in Supabase before retrying.'); return; }
+  }catch(err){
+   // Roll everything back to the old number. The old proposal is only deleted in the very
+   // last step, so on any earlier failure it still exists — move every child back to it and
+   // drop the half-created new row, leaving no duplicate and no orphan.
+   if(createdNew){
+    try{await sb.from('estimate_items').update({proposalId:oId}).eq('proposalId',nId);}catch(e){}
+    try{await sb.from('line_items').update({proposalId:oId}).eq('proposalId',nId);}catch(e){}
+    try{await sb.from('estimates').update({proposalId:oId,proposalNumber:oId}).eq('proposalId',nId);}catch(e){}
+    try{await sb.from('proposal_documents').update({proposalId:oId}).eq('proposalId',nId);}catch(e){}
+    try{await sb.from('proposals').delete().eq('id',nId);}catch(e){}
+   }
+   alert('Renumber failed — '+err.message+'\n\nThe change was rolled back: project #'+oId+' is unchanged, and nothing was duplicated or deleted.');
+   return;
+  }
   setProposals(ps=>ps.map(p=>String(p.id)===oId?{...p,id:nId}:p));
   setEstimates(es=>es.map(e=>String(e.proposalId)===oId?{...e,proposalId:nId,proposalNumber:nId}:e));
-  setEstimateItems(eis=>eis.map(i=>String(i.proposalId)===oId?{...i,proposalId:nId,projectNumber:nId}:i));
+  setEstimateItems(eis=>eis.map(i=>String(i.proposalId)===oId?{...i,proposalId:nId}:i));
   setLineItems(ls=>ls.map(l=>String(l.proposalId)===oId?{...l,proposalId:nId}:l));
   setSelectedId(nId);
  };
