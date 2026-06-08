@@ -3148,7 +3148,7 @@ const EstimateSection = ({ section, items, onUpdate, onDelete, onAddItem, onAddV
   </div>
  );
 };
-const EstimateView = ({ proposal, estimate, estimateItems, onImported, onSaveEstimate, onAddItem, onUpdateItem, onDeleteItem, onAddVE, allEstimateItems, onCloseEstimate, suppliers, installers, allGCs, gcs, gcStats }) => {
+const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onSaveEstimate, onAddItem, onUpdateItem, onDeleteItem, onAddVE, allEstimateItems, onCloseEstimate, suppliers, installers, allGCs, gcs, gcStats }) => {
  const [headerExpanded, setHeaderExpanded] = useState(false);
  const [showImport, setShowImport] = useState(false);
  const [editingHeader, setEditingHeader] = useState(false);
@@ -3302,6 +3302,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, onImported, onSaveEst
   );
  }
  return (
+  <fieldset disabled={!edit} style={{border:'0',padding:'0',margin:'0',minInlineSize:'auto'}}>
   <div className="space-y-3">
    {}
    <div className="bg-white border border-stone-200 px-4 py-2.5 flex items-center justify-between gap-3">
@@ -3564,6 +3565,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, onImported, onSaveEst
     </div>
    </div>
   </div>
+  </fieldset>
  );
 };
 const Fld=({label,value,edit,type='text',onChange,render})=>(
@@ -3685,6 +3687,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
       proposal={proposal}
       estimate={estimate}
       estimateItems={estimateItemsForThis}
+      edit={edit}
       allEstimateItems={allEstimateItems||[]}
       onImported={onImported}
       onSaveEstimate={onSaveEstimate}
