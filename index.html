@@ -4302,7 +4302,7 @@ function m15BuildPayloads({lines, job, propId, estId, isUpdate}){
   });
   const proposalRow={ id:propId, project:job.projectName, location:job.location||'', gc:job.gc||'',
     contact:job.contact||'', email:job.email||'', phone:job.phone||'', submitted:job.submitted,
-    bidAmount:Math.round(base), contractAmount:null, status:job.status||'Bidding',
+    bidAmount:Math.round(base), status:job.status||'Bidding',
     owner:'Peter', estimator:'Peter', bdOwner:'Paul', pm:'', projectNumber:propId,
     notes:'Takeoff intake from '+job.fileName, retainage:0.1,
     estMaterial:Math.round(estMat), estLabor:Math.round(estLab), estOther:null,
