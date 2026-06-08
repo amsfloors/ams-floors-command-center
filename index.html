@@ -3163,7 +3163,7 @@ const EstimateSection = ({ section, items, onUpdate, onDelete, onAddItem, onAddV
   </div>
  );
 };
-const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onSaveEstimate, onAddItem, onUpdateItem, onDeleteItem, onAddVE, allEstimateItems, onCloseEstimate, suppliers, installers, allGCs, gcs, gcStats }) => {
+const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onSaveEstimate, onSyncProposalFromHeader, onAddItem, onUpdateItem, onDeleteItem, onAddVE, allEstimateItems, onCloseEstimate, suppliers, installers, allGCs, gcs, gcStats }) => {
  const [headerExpanded, setHeaderExpanded] = useState(false);
  const [showImport, setShowImport] = useState(false);
  const [editingHeader, setEditingHeader] = useState(false);
@@ -3292,6 +3292,23 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
  };
  const saveHeader = () => {
   onSaveEstimate(draftHeader);
+  // [HEADER->PROPOSAL SYNC 2026-06-08] Push the fields shared with Project Details back to the
+  // proposal so header edits actually show up there. ?? keeps the proposal's value when a header
+  // field is undefined, but syncs an explicit clear (''). location<-projectAddressLine1 mirrors
+  // the existing seed convention (estimate creation maps proposal.location -> projectAddressLine1;
+  // reads fall back location || projectAddressLine1). Architect is intentionally NOT mapped: the
+  // header has free-text architectName, proposals has architectId (an id) — no clean mapping.
+  if (proposal && onSyncProposalFromHeader) {
+   onSyncProposalFromHeader({
+    project:  draftHeader.projectName        ?? proposal.project,
+    gc:       draftHeader.gcName             ?? proposal.gc,
+    contact:  draftHeader.gcContactName      ?? proposal.contact,
+    email:    draftHeader.gcContactEmail     ?? proposal.email,
+    phone:    draftHeader.gcContactPhone     ?? proposal.phone,
+    location: draftHeader.projectAddressLine1 ?? proposal.location,
+    plansDate:draftHeader.plansDated         ?? proposal.plansDate,
+   });
+  }
   setEditingHeader(false);
  };
  useEffect(() => {
@@ -3602,6 +3619,12 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
  useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('details');},[proposal?.id]);
  if(!proposal) return null;
  const save=()=>{onSave(draft);setEdit(false);};
+ // [HEADER->PROPOSAL SYNC 2026-06-08] Estimate Header writes the estimates table; Project Details
+ // reads/edits the proposals draft. When the header saves shared fields, merge them into this
+ // drawer's draft (so Details shows them immediately) and persist via onSave. Triggered by the
+ // header's discrete onBlur save — NOT a proposal-content effect — so it can't reintroduce the
+ // per-keystroke kick-out the [proposal?.id] reset effect was added to fix.
+ const syncProposalFromHeader=(fields)=>{const merged={...draft,...fields};setDraft(merged);onSave(merged);};
  const materials=lineItems.filter(l=>l.type==='Material');
  const labor=lineItems.filter(l=>l.type==='Labor');
  const other=lineItems.filter(l=>l.type==='Other');
@@ -3706,6 +3729,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
       allEstimateItems={allEstimateItems||[]}
       onImported={onImported}
       onSaveEstimate={onSaveEstimate}
+      onSyncProposalFromHeader={syncProposalFromHeader}
       onAddItem={onAddEstimateItem}
       onUpdateItem={onUpdateEstimateItem}
       onDeleteItem={onDeleteEstimateItem}
