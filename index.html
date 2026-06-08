@@ -4340,17 +4340,16 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
       const priceable=parsed.items.filter(i=>i.measure!=='none');
       const newLines=priceable.map(it=>{
         const exact = it.tag ? catalog.byCode[it.tag.toLowerCase()] : null;
-        const cands = m15Candidates(it.subject||it.tag, catalog.arr);
-        const seed = exact || null;
+        const kw = m15Candidates(it.subject||it.tag, catalog.arr);
+        // exact tag match is only a SUGGESTION (tags are project-local — never auto-fill/commit).
+        const cands = exact ? [exact, ...kw.filter(c=>c.key!==exact.key)] : kw;
         return {
           tag:it.tag, subject:it.subject, measured_qty:it.qty, measured_unit:it.unit, recon:it.recon_delta,
           candidates:cands,
-          product: seed?seed.label:'', manufacturer: seed?seed.manufacturer:'',
-          unitCost: seed?seed.unitCost:'', orderUnit: seed?(seed.orderUnit||it.unit):it.unit,
-          coverage: seed&&seed.coverageFactor?seed.coverageFactor:1,
-          laborRate: seed?seed.laborRate:0, freight: seed?seed.freight:0,
+          product:'', manufacturer:'', unitCost:'', orderUnit:it.unit,
+          coverage:1, laborRate:0, freight:0,
           sectionCode:'', sectionName:'Flooring',
-          include: !!seed,    // resolved lines default in; unresolved default out until Peter picks
+          include:true,   // full scope captured; each line flags until Peter confirms product+cost
           size:'',
         };
       });
@@ -4417,8 +4416,8 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
     }catch(e){ setSaving(false); setStatus({ok:false,msg:'Save failed: '+e.message+(/bigint|integer|invalid input syntax|numeric/i.test(e.message)?' — the project number must be numeric (match your existing project numbers, e.g. 1898).':'')}); }
   };
 
-  const cellCls='px-2 py-1 text-xs';
-  const inp='w-full border border-stone-300 rounded-sm px-1.5 py-1 text-xs focus:outline-none focus:border-orange-700';
+  const cellCls='px-2 py-1.5 align-top';
+  const inp='w-full border border-stone-300 rounded-sm px-1.5 py-1 text-sm focus:outline-none focus:border-orange-700';
   return (
     <div className="mt-4 border-t border-stone-200 pt-4">
       <h4 className="font-serif text-base text-stone-800 mb-1">New takeoff (Bluebeam CSV)</h4>
@@ -4428,82 +4427,97 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
           className="text-sm file:mr-3 file:px-3 file:py-1.5 file:border-0 file:bg-orange-800 file:text-white file:rounded-sm file:cursor-pointer hover:file:bg-orange-900"/>
         {lines&&<button onClick={resetAll} className="text-xs text-stone-500 underline hover:text-stone-800">Clear</button>}
       </div>
-      {status&&<div className={`text-sm mb-3 px-3 py-2 rounded-sm ${status.ok?'bg-emerald-50 text-emerald-800':'bg-rose-50 text-rose-800'}`}>{status.msg}</div>}
+      {status&&!lines&&<div className={`text-sm mb-3 px-3 py-2 rounded-sm ${status.ok?'bg-emerald-50 text-emerald-800':'bg-rose-50 text-rose-800'}`}>{status.msg}</div>}
 
-      {lines&&<>
-        <div className="overflow-x-auto border border-stone-200 rounded-sm">
-          <table className="w-full text-xs">
-            <thead><tr className="bg-stone-50 text-stone-500 text-left">
-              <th className={cellCls}>✓</th><th className={cellCls}>Tag</th><th className={cellCls}>Measured</th>
-              <th className={cellCls}>Product (confirm)</th><th className={cellCls}>Unit cost</th><th className={cellCls}>Cov.→Order</th>
-              <th className={cellCls}>Labor</th><th className={cellCls + ' text-right'}>Line $</th><th className={cellCls}>State</th><th className={cellCls}></th>
-            </tr></thead>
-            <tbody>
-              {lines.map((l,idx)=>{ const st=lineState(l); const pv=st.label==='ready'?linePreview(l):null;
-                return (<tr key={idx} className="border-t border-stone-100 align-top">
-                  <td className={cellCls}><input type="checkbox" checked={l.include} onChange={e=>updateLine(idx,{include:e.target.checked})}/></td>
-                  <td className={cellCls}><div className="font-mono">{l.tag}</div><div className="text-[10px] text-stone-400 max-w-[110px] truncate">{l.subject}</div></td>
-                  <td className={cellCls + ' font-mono whitespace-nowrap'}>{Number(l.measured_qty).toLocaleString()} {l.measured_unit}{l.recon!=null&&Math.abs(l.recon)>0.01?<span className="text-amber-600" title="detail vs Bluebeam subtotal"> ({l.recon>0?'+':''}{l.recon})</span>:null}</td>
-                  <td className={cellCls} style={{minWidth:'200px'}}>
-                    {(()=>{ const candKeys=new Set((l.candidates||[]).map(c=>c.key));
-                      const rest=catalog.arr.filter(e=>!candKeys.has(e.key));
-                      return (
-                      <select className={inp + ' mb-1'} value="" onChange={e=>e.target.value&&pickProduct(idx,e.target.value)}>
-                        <option value="">— pick a catalog product ({(l.candidates||[]).length} suggested · {catalog.arr.length} total) —</option>
-                        {l.candidates&&l.candidates.length>0&&<optgroup label="Suggested matches">
-                          {l.candidates.map(c=><option key={c.key} value={c.key}>{c.label.slice(0,60)} · {money(c.unitCost)}/{c.orderUnit||'?'}</option>)}
-                        </optgroup>}
-                        <optgroup label={'All catalog ('+rest.length+')'}>
-                          {rest.map(e=><option key={e.key} value={e.key}>{e.label.slice(0,60)} · {money(e.unitCost)}/{e.orderUnit||'?'}</option>)}
-                        </optgroup>
-                      </select>); })()}
-                    <input className={inp} placeholder="product / spec" value={l.product} onChange={e=>updateLine(idx,{product:e.target.value})}/>
-                  </td>
-                  <td className={cellCls}><input className={inp + ' text-right font-mono'} type="number" step="0.01" value={l.unitCost} onChange={e=>updateLine(idx,{unitCost:e.target.value})} style={{minWidth:'70px'}}/></td>
-                  <td className={cellCls}>
-                    <div className="flex items-center gap-1">
-                      <input className={inp + ' text-right font-mono'} type="number" step="0.01" value={l.coverage} onChange={e=>updateLine(idx,{coverage:e.target.value})} style={{width:'52px'}} title="ORDER = measured × coverage"/>
-                      <input className={inp} value={l.orderUnit} onChange={e=>updateLine(idx,{orderUnit:e.target.value})} style={{width:'42px'}} title="order unit"/>
-                    </div>
-                  </td>
-                  <td className={cellCls}><input className={inp + ' text-right font-mono'} type="number" step="0.01" value={l.laborRate} onChange={e=>updateLine(idx,{laborRate:e.target.value})} style={{width:'56px'}}/></td>
-                  <td className={cellCls + ' text-right font-mono'}>{pv?money(pv.total):'—'}</td>
-                  <td className={cellCls + ' ' + st.cls}>{st.label}</td>
-                  <td className={cellCls}><button onClick={()=>removeLine(idx)} className="text-stone-400 hover:text-rose-700">✕</button></td>
-                </tr>); })}
-            </tbody>
-          </table>
-        </div>
-        <button onClick={addLine} className="mt-2 text-xs text-orange-800 hover:text-orange-900">+ add a line the catalog is missing</button>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 bg-stone-50 border border-stone-200 p-3 rounded-sm">
-          <label className="text-xs text-stone-600">Project number <span className="text-rose-600">*</span><input className={inp} value={job.projectNumber} onChange={e=>{setCollision(null);setJob(j=>({...j,projectNumber:e.target.value}));}} placeholder="Peter assigns"/></label>
-          <label className="text-xs text-stone-600">Project name <span className="text-rose-600">*</span><input className={inp} value={job.projectName} onChange={e=>setJob(j=>({...j,projectName:e.target.value}))}/></label>
-          <label className="text-xs text-stone-600">GC<input className={inp} value={job.gc} onChange={e=>setJob(j=>({...j,gc:e.target.value}))}/></label>
-          <label className="text-xs text-stone-600">Status<select className={inp} value={job.status} onChange={e=>setJob(j=>({...j,status:e.target.value}))}>{M15_STATUS_OPTS.map(s=><option key={s}>{s}</option>)}</select></label>
-          <label className="text-xs text-stone-600">Tax rate<input className={inp + ' font-mono'} type="number" step="0.001" value={job.tax} onChange={e=>setJob(j=>({...j,tax:e.target.value}))}/></label>
-          <label className="text-xs text-stone-600">Markup rate<input className={inp + ' font-mono'} type="number" step="0.01" value={job.markup} onChange={e=>setJob(j=>({...j,markup:e.target.value}))}/></label>
-          <label className="text-xs text-stone-600">Contact<input className={inp} value={job.contact} onChange={e=>setJob(j=>({...j,contact:e.target.value}))}/></label>
-          <label className="text-xs text-stone-600">Email<input className={inp} value={job.email} onChange={e=>setJob(j=>({...j,email:e.target.value}))}/></label>
-        </div>
-
-        <div className="flex items-center justify-between mt-3">
-          <div className="text-sm text-stone-600">Base bid (ready lines): <span className="font-mono font-semibold text-stone-900">{money(totals.base)}</span> · {totals.nReady}/{totals.nIncl} ready · tax {Math.round(Number(job.tax)*100)}% markup {Math.round(Number(job.markup)*100)}%</div>
-          <button disabled={saving||blockers().length>0} onClick={()=>doSave(false)}
-            className="px-4 py-2 bg-orange-800 text-white text-sm rounded-sm disabled:opacity-40 hover:bg-orange-900">
-            {saving?'Saving…':'Save to Supabase'}
-          </button>
-        </div>
-        {blockers().length>0&&<div className="text-xs text-stone-500 mt-1 text-right">Before saving: {blockers().join(' · ')}</div>}
-
-        {collision&&<div className="mt-3 bg-amber-50 border border-amber-300 p-3 rounded-sm text-sm">
-          <div className="text-amber-900">Project number <strong>#{collision.existing.id}</strong> already exists: <strong>"{collision.existing.project}"</strong>. Saving will replace its estimate and line items.</div>
-          <div className="flex gap-2 mt-2">
-            <button onClick={()=>doSave(true)} className="px-3 py-1.5 bg-amber-700 text-white text-xs rounded-sm hover:bg-amber-800">Update "{collision.existing.project}"</button>
-            <button onClick={()=>setCollision(null)} className="px-3 py-1.5 bg-white border border-stone-300 text-xs rounded-sm hover:bg-stone-100">Cancel — I'll pick a different number</button>
+      {lines&&<div className="fixed inset-0 z-50 bg-stone-50 overflow-auto" style={{padding:'18px 24px'}}>
+        <div className="mx-auto" style={{maxWidth:'1640px'}}>
+          <div className="flex items-start justify-between mb-3">
+            <div>
+              <h3 className="font-serif text-xl text-stone-800">Takeoff intake — {job.fileName}</h3>
+              <p className="text-xs text-stone-500 mt-0.5 max-w-3xl">Each line is a candidate from the takeoff. For each: <strong>pick a catalog product</strong> from the dropdown, <strong>or type a brand-new product name</strong> in the field below it and enter its unit cost. Use <strong>“+ add a line”</strong> for accessories the takeoff never measures (clips, grout, mortar, adhesive, base). Nothing saves until you confirm — uncheck any line you’re not bidding.</p>
+            </div>
+            <button onClick={resetAll} className="px-3 py-1.5 bg-white border border-stone-300 text-sm rounded-sm hover:bg-stone-100 whitespace-nowrap">✕ Close</button>
           </div>
-        </div>}
-      </>}
+          {status&&<div className={`text-sm mb-3 px-3 py-2 rounded-sm ${status.ok?'bg-emerald-50 text-emerald-800':'bg-rose-50 text-rose-800'}`}>{status.msg}</div>}
+          <div className="bg-white border border-stone-200 rounded-sm overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="bg-stone-100 text-stone-500 text-left">
+                <th className={cellCls} style={{width:'34px'}}>✓</th>
+                <th className={cellCls} style={{width:'160px'}}>Tag / measured</th>
+                <th className={cellCls}>Product — pick from catalog, or type a new one</th>
+                <th className={cellCls} style={{width:'92px'}}>Unit cost</th>
+                <th className={cellCls} style={{width:'150px'}}>Cov. → Order</th>
+                <th className={cellCls} style={{width:'84px'}}>Labor rate</th>
+                <th className={cellCls + ' text-right'} style={{width:'104px'}}>Line $</th>
+                <th className={cellCls} style={{width:'124px'}}>State</th>
+                <th className={cellCls} style={{width:'30px'}}></th>
+              </tr></thead>
+              <tbody>
+                {lines.map((l,idx)=>{ const st=lineState(l); const pv=st.label==='ready'?linePreview(l):null;
+                  return (<tr key={idx} className="border-t border-stone-100 align-top">
+                    <td className={cellCls}><input type="checkbox" checked={l.include} onChange={e=>updateLine(idx,{include:e.target.checked})}/></td>
+                    <td className={cellCls}><div className="font-mono font-semibold text-stone-800">{l.tag}</div><div className="text-[11px] text-stone-400">{l.subject}</div><div className="font-mono text-stone-600 mt-0.5">{Number(l.measured_qty).toLocaleString()} {l.measured_unit}{l.recon!=null&&Math.abs(l.recon)>0.01?<span className="text-amber-600" title="detail vs Bluebeam subtotal"> ({l.recon>0?'+':''}{l.recon})</span>:null}</div></td>
+                    <td className={cellCls}>
+                      {(()=>{ const candKeys=new Set((l.candidates||[]).map(c=>c.key));
+                        const rest=catalog.arr.filter(e=>!candKeys.has(e.key));
+                        return (
+                        <select className={inp + ' mb-1'} value="" onChange={e=>e.target.value&&pickProduct(idx,e.target.value)}>
+                          <option value="">— pick from catalog ({(l.candidates||[]).length} suggested · {catalog.arr.length} total) —</option>
+                          {l.candidates&&l.candidates.length>0&&<optgroup label="Suggested for this tag/description">
+                            {l.candidates.map(c=><option key={c.key} value={c.key}>{c.label.slice(0,72)} · {money(c.unitCost)}/{c.orderUnit||'?'}</option>)}
+                          </optgroup>}
+                          <optgroup label={'All catalog ('+rest.length+')'}>
+                            {rest.map(e=><option key={e.key} value={e.key}>{e.label.slice(0,72)} · {money(e.unitCost)}/{e.orderUnit||'?'}</option>)}
+                          </optgroup>
+                        </select>); })()}
+                      <input className={inp} placeholder="…or type a NEW product (not in catalog) — then set its unit cost" value={l.product} onChange={e=>updateLine(idx,{product:e.target.value})}/>
+                    </td>
+                    <td className={cellCls}><input className={inp + ' text-right font-mono'} type="number" step="0.01" value={l.unitCost} onChange={e=>updateLine(idx,{unitCost:e.target.value})} placeholder="$/unit"/></td>
+                    <td className={cellCls}>
+                      <div className="flex items-center gap-1">
+                        <input className={inp + ' text-right font-mono'} type="number" step="0.01" value={l.coverage} onChange={e=>updateLine(idx,{coverage:e.target.value})} style={{width:'62px'}} title="ORDER = measured × coverage/waste"/>
+                        <input className={inp} value={l.orderUnit} onChange={e=>updateLine(idx,{orderUnit:e.target.value})} style={{width:'52px'}} title="order unit"/>
+                      </div>
+                      <div className="text-[10px] text-stone-400 mt-0.5 font-mono">= {(Number(l.measured_qty)*(Number(l.coverage)||1)).toLocaleString(undefined,{maximumFractionDigits:2})} {l.orderUnit}</div>
+                    </td>
+                    <td className={cellCls}><input className={inp + ' text-right font-mono'} type="number" step="0.01" value={l.laborRate} onChange={e=>updateLine(idx,{laborRate:e.target.value})}/></td>
+                    <td className={cellCls + ' text-right font-mono'}>{pv?money(pv.total):'—'}</td>
+                    <td className={cellCls + ' ' + st.cls}>{st.label}</td>
+                    <td className={cellCls}><button onClick={()=>removeLine(idx)} className="text-stone-400 hover:text-rose-700">✕</button></td>
+                  </tr>); })}
+              </tbody>
+            </table>
+          </div>
+          <button onClick={addLine} className="mt-2 text-sm text-orange-800 hover:text-orange-900 font-medium">+ add a line the takeoff didn’t measure (clips, grout, mortar, adhesive, base…)</button>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 bg-white border border-stone-200 p-3 rounded-sm">
+            <label className="text-xs text-stone-600">Project number <span className="text-rose-600">*</span><input className={inp} value={job.projectNumber} onChange={e=>{setCollision(null);setJob(j=>({...j,projectNumber:e.target.value}));}} placeholder="Peter assigns (numeric)"/></label>
+            <label className="text-xs text-stone-600">Project name <span className="text-rose-600">*</span><input className={inp} value={job.projectName} onChange={e=>setJob(j=>({...j,projectName:e.target.value}))}/></label>
+            <label className="text-xs text-stone-600">GC<input className={inp} value={job.gc} onChange={e=>setJob(j=>({...j,gc:e.target.value}))}/></label>
+            <label className="text-xs text-stone-600">Status<select className={inp} value={job.status} onChange={e=>setJob(j=>({...j,status:e.target.value}))}>{M15_STATUS_OPTS.map(s=><option key={s}>{s}</option>)}</select></label>
+            <label className="text-xs text-stone-600">Tax rate<input className={inp + ' font-mono'} type="number" step="0.001" value={job.tax} onChange={e=>setJob(j=>({...j,tax:e.target.value}))}/></label>
+            <label className="text-xs text-stone-600">Markup rate<input className={inp + ' font-mono'} type="number" step="0.01" value={job.markup} onChange={e=>setJob(j=>({...j,markup:e.target.value}))}/></label>
+            <label className="text-xs text-stone-600">Contact<input className={inp} value={job.contact} onChange={e=>setJob(j=>({...j,contact:e.target.value}))}/></label>
+            <label className="text-xs text-stone-600">Email<input className={inp} value={job.email} onChange={e=>setJob(j=>({...j,email:e.target.value}))}/></label>
+          </div>
+
+          <div className="flex items-center justify-between mt-3 pb-8">
+            <div className="text-sm text-stone-600">Base bid (ready lines): <span className="font-mono font-semibold text-stone-900">{money(totals.base)}</span> · {totals.nReady}/{totals.nIncl} ready · tax {Math.round(Number(job.tax)*100)}% markup {Math.round(Number(job.markup)*100)}%{blockers().length>0&&<span className="text-stone-500"> · before saving: {blockers().join(' · ')}</span>}</div>
+            <button disabled={saving||blockers().length>0} onClick={()=>doSave(false)}
+              className="px-5 py-2 bg-orange-800 text-white text-sm rounded-sm disabled:opacity-40 hover:bg-orange-900">
+              {saving?'Saving…':'Save to Supabase'}
+            </button>
+          </div>
+
+          {collision&&<div className="mb-8 bg-amber-50 border border-amber-300 p-3 rounded-sm text-sm">
+            <div className="text-amber-900">Project number <strong>#{collision.existing.id}</strong> already exists: <strong>"{collision.existing.project}"</strong>. Saving will replace its estimate and line items.</div>
+            <div className="flex gap-2 mt-2">
+              <button onClick={()=>doSave(true)} className="px-3 py-1.5 bg-amber-700 text-white text-xs rounded-sm hover:bg-amber-800">Update "{collision.existing.project}"</button>
+              <button onClick={()=>setCollision(null)} className="px-3 py-1.5 bg-white border border-stone-300 text-xs rounded-sm hover:bg-stone-100">Cancel — I'll pick a different number</button>
+            </div>
+          </div>}
+        </div>
+      </div>}
     </div>
   );
 };
