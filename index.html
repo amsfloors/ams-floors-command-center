@@ -4244,7 +4244,7 @@ function m15ReadTakeoff(text,fileName){
 }
 
 // ---- unit-family guard (M15: blocks the SC-1 SF->EA $77k garbage multiply) ----
-const M15_FAMILY={SF:'area',SY:'area',LF:'length',EA:'count','':''};
+const M15_FAMILY={SF:'area',SY:'area',SQFT:'area',LF:'length',LNFT:'length',EA:'count',PC:'count',PCS:'count',CTN:'count',CTNS:'count',ROLL:'count',ROLLS:'count',BX:'count',BOX:'count',GAL:'count',LB:'count',LBS:'count','':''};
 const m15UnitsCompatible=(mu,ou)=>{ const a=M15_FAMILY[(mu||'').toUpperCase()],b=M15_FAMILY[(ou||'').toUpperCase()]; if(!a||!b)return false; return a===b; };
 
 // ---- catalog from estimate_items in app state (keyed by manufacturer|||description, most-recent) ----
@@ -4341,15 +4341,19 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
       const newLines=priceable.map(it=>{
         const exact = it.tag ? catalog.byCode[it.tag.toLowerCase()] : null;
         const kw = m15Candidates(it.subject||it.tag, catalog.arr);
-        // exact tag match is only a SUGGESTION (tags are project-local — never auto-fill/commit).
         const cands = exact ? [exact, ...kw.filter(c=>c.key!==exact.key)] : kw;
+        // Auto-populate from an exact tag match (last-used product for that tag) as an editable
+        // starting point — Peter still confirms/overrides each line before save. Keyword-only
+        // (description) matches stay blank with suggestions, since they're lower-confidence.
         return {
           tag:it.tag, subject:it.subject, measured_qty:it.qty, measured_unit:it.unit, recon:it.recon_delta,
           candidates:cands,
-          product:'', manufacturer:'', unitCost:'', orderUnit:it.unit,
-          coverage:1, laborRate:0, freight:0,
+          product: exact?exact.label:'', manufacturer: exact?exact.manufacturer:'',
+          unitCost: exact?exact.unitCost:'', orderUnit: exact?(exact.orderUnit||it.unit):it.unit,
+          coverage: exact&&exact.coverageFactor?exact.coverageFactor:1,
+          laborRate: exact?exact.laborRate:0, freight: exact?exact.freight:0,
           sectionCode:'', sectionName:'Flooring',
-          include:true,   // full scope captured; each line flags until Peter confirms product+cost
+          include:true,
           size:'',
         };
       });
@@ -4369,7 +4373,10 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
   const lineState=l=>{
     if(!l.include) return {label:'excluded',cls:'text-stone-400'};
     if(!l.product||!(Number(l.unitCost)>0)) return {label:'needs product+cost',cls:'text-rose-700 font-semibold'};
-    if(!m15UnitsCompatible(l.measured_unit,l.orderUnit)) return {label:'unit mismatch',cls:'text-rose-700 font-semibold'};
+    // Cross-unit (e.g. SF measured, EA ordered) is fine WHEN a coverage factor converts it.
+    // Block only the unconverted case — coverage = 1 across unit families is the SC-1 $77k bug.
+    if(!m15UnitsCompatible(l.measured_unit,l.orderUnit) && (Number(l.coverage)||1)===1)
+      return {label:'set coverage →',cls:'text-amber-700 font-semibold'};
     return {label:'ready',cls:'text-emerald-700'};
   };
   const linePreview=l=>{ const qty=Number(l.measured_qty)||0;
