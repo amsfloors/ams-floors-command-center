@@ -2025,7 +2025,7 @@ window.genProposal=function(est,items,notes,proposal){
   var propNum=(proposal&&proposal.id)||est.proposalNumber||'';
   var base=items.filter(function(i){return!i.isAlternate&&!i.isVeAlternative;});
   var alts=items.filter(function(i){return i.isAlternate&&!i.isVeAlternative;});
-  var calc=function(i){var q=Number(i.qty)||0,c=Number(i.costPerUnit)||Number(i.unitCost)||0,f=Number(i.freight)||0,lr=Number(i.laborRate)||0,a=q*c,mat=a+a*tax+f+a*mu,lab=q*lr;return{mat:mat,lab:lab,tot:mat+lab};};
+  var calc=function(i){var q=Number(i.qty)||0,c=Number(i.unitCost)||Number(i.costPerUnit)||0,f=Number(i.freight)||0,lr=Number(i.laborRate)||0,a=q*c,mat=a+a*tax+f+a*mu,lab=q*lr;return{mat:mat,lab:lab,tot:mat+lab};};
   var tM=0,tL=0;base.forEach(function(i){var r=calc(i);tM+=r.mat;tL+=r.lab;});
   // Detect dominant display mode for header
   var modes=base.map(function(i){return i.displayMode||'full';});
@@ -2102,7 +2102,7 @@ window.genSupplierPOs=function(est,items,proposal){
     //   • Raw-COST items: costPerUnit is already per-order-unit → use as-is.
     //   • MATERIAL-path items: costPerUnit is per-SF → multiply by sfPerCtn to get per-carton price.
     // Either way: line amount = orderQty × per-order-unit cost (what the supplier invoices).
-    var perOrderCost=function(i){var c=Number(i.costPerUnit)||Number(i.unitCost)||0;if(i.usedMaterial&&i.sfPerCtn&&Number(i.sfPerCtn)>0)return c*Number(i.sfPerCtn);return c;};
+    var perOrderCost=function(i){var c=Number(i.unitCost)||Number(i.costPerUnit)||0;if(i.usedMaterial&&i.sfPerCtn&&Number(i.sfPerCtn)>0)return c*Number(i.sfPerCtn);return c;};
     var its=byS[sup],tot=its.reduce(function(s,i){var oq=window._ordQ(i),c=perOrderCost(i),f=Number(i.freight)||0,a=oq*c;var effTax=i.usedMaterial?0:tax;return s+a+a*effTax+f;},0);
     H+="<div class='pg'><div style='display:flex;justify-content:space-between;padding-bottom:12px;margin-bottom:14px;border-bottom:2px solid #1c1917'>";
     H+="<div><img src='data:image/png;base64,"+_LOGO+"' style='height:40px'/><div style='font-size:16px;font-weight:700;margin-top:6px'>PO #"+String(n++).padStart(4,'0')+" \u2014 "+today+"</div><div style='font-size:11px;color:#666;margin-top:2px'>Proposal #"+propNum+(gc?' &nbsp;&middot;&nbsp; GC: '+gc:'')+"</div></div>";
@@ -2869,7 +2869,7 @@ const LineItemSection=({title,type,items,onAdd,onUpdate,onDelete})=>{
 // Also supports new multiplier/deduction/height fields (defaults preserve existing behavior)
 const calcEstimateItem = (item, taxRate, markupRate) => {
  const qty = Number(item.qty) || 0;
-const costPerUnit = Number(item.costPerUnit) || Number(item.unitCost) || 0;
+const costPerUnit = Number(item.unitCost) || Number(item.costPerUnit) || 0;
  const freight = Number(item.freight) || 0;
  const laborRate = Number(item.laborRate) || 0;
  // Effective qty: takeoff qty after multiplier/deduction/height (defaults = no-op for existing data)
@@ -2968,7 +2968,7 @@ const EstimateItemRow = ({ item, onUpdate, onDelete, onAddVE, taxRate, markupRat
     {calc.orderQty > 0 ? `${calc.orderQty} ${calc.orderUnit}` : '—'}
    </td>
    <td className="px-1 py-1">
-    <ACInput value={item.costPerUnit ?? item.unitCost} onChange={v => updateField('unitCost', v)} type="number" className="text-right font-mono" style={{ minWidth: '60px' }} />
+    <ACInput value={item.unitCost ?? item.costPerUnit} onChange={v => updateField('unitCost', v)} type="number" className="text-right font-mono" style={{ minWidth: '60px' }} />
     {priceHint && priceHint.lastCost > 0 && (
      <div className={`text-[9px] font-mono text-right pr-2 mt-0.5 ${driftColor}`} title={`Last: $${priceHint.lastCost.toFixed(2)} · 60d avg: $${priceHint.avg60.toFixed(2)} · ${priceHint.count} prior bids`}>
       {driftIcon} ${priceHint.lastCost.toFixed(2)}{priceHint.daysAgo !== null ? ` · ${priceHint.daysAgo}d ago` : ''}
@@ -3148,8 +3148,9 @@ const EstimateSection = ({ section, items, onUpdate, onDelete, onAddItem, onAddV
   </div>
  );
 };
-const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAddItem, onUpdateItem, onDeleteItem, onAddVE, allEstimateItems, onCloseEstimate, suppliers, installers, allGCs, gcs, gcStats }) => {
+const EstimateView = ({ proposal, estimate, estimateItems, onImported, onSaveEstimate, onAddItem, onUpdateItem, onDeleteItem, onAddVE, allEstimateItems, onCloseEstimate, suppliers, installers, allGCs, gcs, gcStats }) => {
  const [headerExpanded, setHeaderExpanded] = useState(false);
+ const [showImport, setShowImport] = useState(false);
  const [editingHeader, setEditingHeader] = useState(false);
  const [draftHeader, setDraftHeader] = useState(estimate);
  const [applyingDM, setApplyingDM] = useState(false);
@@ -3166,7 +3167,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
   const today = new Date();
   allEstimateItems.forEach(item => {
    if (item.estimateId === thisEstId) return;
-   const cpu = Number(item.costPerUnit) || Number(item.unitCost);
+   const cpu = Number(item.unitCost) || Number(item.costPerUnit);
    if (!cpu || cpu <= 0) return;
    const mfr = (item.manufacturer || '').trim().toLowerCase();
    const desc = (item.description || '').trim().toLowerCase();
@@ -3198,7 +3199,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
   const cutoff = Date.now() - 60 * 86400000;
   const recent = hist.filter(h => h.date && new Date(h.date) >= cutoff);
   const avg60 = recent.length > 0 ? recent.reduce((s, h) => s + h.costPerUnit, 0) / recent.length : lastCost;
-  const current = Number(item.costPerUnit) || Number(item.unitCost) || 0;
+  const current = Number(item.unitCost) || Number(item.costPerUnit) || 0;
   const drift = current > 0 && avg60 > 0 ? (current - avg60) / avg60 : null;
   return { lastCost, daysAgo, avg60, drift, count: hist.length };
  };
@@ -3303,6 +3304,11 @@ const EstimateView = ({ proposal, estimate, estimateItems, onSaveEstimate, onAdd
  return (
   <div className="space-y-3">
    {}
+   <div className="bg-white border border-stone-200 px-4 py-2.5 flex items-center justify-between gap-3">
+    <div className="text-sm text-stone-600">Have a Bluebeam takeoff for this project? Import the CSV — quantities reconcile and every line is a candidate you confirm before it saves into <span className="font-mono">#{proposal.id}</span>.</div>
+    <button onClick={()=>setShowImport(s=>!s)} className="text-sm bg-orange-800 text-white px-3 py-1.5 rounded-sm hover:bg-orange-900 flex items-center gap-1.5 whitespace-nowrap"><Ico n="plus" size={13}/>{showImport?'Hide import':'Import Bluebeam takeoff'}</button>
+   </div>
+   {showImport && <div className="bg-white border border-orange-200 px-4 pb-3"><TakeoffIntake lock={{id:proposal.id,project:proposal.project,gc:proposal.gc,contact:proposal.contact,email:proposal.email,phone:proposal.phone,location:proposal.location}} sb={sb} estimateItems={allEstimateItems} onImported={onImported} onDone={()=>setShowImport(false)}/></div>}
    <div className="bg-white border border-stone-200">
     <div className="px-4 py-2.5 bg-stone-50 border-b border-stone-200 flex items-center justify-between">
      <div className="flex items-center gap-3">
@@ -3570,7 +3576,7 @@ const FldSel=({label,value,edit,options,onChange,render})=>(
  {edit?<select value={value||''} onChange={e=>onChange(e.target.value)} className="w-full px-2 py-1 text-sm border border-stone-300 bg-white rounded-sm focus:outline-none focus:border-stone-600">{options.map(o=><option key={o} value={o}>{o}</option>)}</select>:<div className="text-sm text-stone-900">{render?render(value):(value||'—')}</div>}
  </div>
 );
-const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onAddLineItem,onUpdateLineItem,onDeleteLineItem,onAddNote,onSelectGC,estimate,estimateItems,onSaveEstimate,onAddEstimateItem,onUpdateEstimateItem,onDeleteEstimateItem,onAddVEAlternative,allEstimateItems,suppliers,installers,allGCs,gcs,gcStats})=>{
+const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onImported,onAddLineItem,onUpdateLineItem,onDeleteLineItem,onAddNote,onSelectGC,estimate,estimateItems,onSaveEstimate,onAddEstimateItem,onUpdateEstimateItem,onDeleteEstimateItem,onAddVEAlternative,allEstimateItems,suppliers,installers,allGCs,gcs,gcStats})=>{
  const [edit,setEdit]=useState(false);
  const [draft,setDraft]=useState(proposal);
  const [previewHtml,setPreviewHtml]=useState(null);
@@ -3680,6 +3686,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onAd
       estimate={estimate}
       estimateItems={estimateItemsForThis}
       allEstimateItems={allEstimateItems||[]}
+      onImported={onImported}
       onSaveEstimate={onSaveEstimate}
       onAddItem={onAddEstimateItem}
       onUpdateItem={onUpdateEstimateItem}
@@ -3777,7 +3784,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onAd
         No estimate items yet — go to <strong>Estimate / Bidsheet</strong> tab and add line items first.
        </div>
        :<div style={{background:'#1c1917',color:'white',padding:'14px',display:'grid',gridTemplateColumns:'1fr 1fr 1fr',textAlign:'center',gap:'10px',marginBottom:'4px'}}>
-        {(()=>{const tax=(estimate&&estimate.taxRate!=null?estimate.taxRate:0.07),mu=(estimate&&estimate.markupRate!=null?estimate.markupRate:0.20),base=(estimateItemsForThis||[]).filter(x=>!x.isAlternate&&!x.isVeAlternative),tM=base.reduce((s,x)=>{const q=Number(x.qty)||0,c=Number(x.costPerUnit)||Number(x.unitCost)||0,f=Number(x.freight)||0,a=q*c;return s+a+a*tax+f+a*mu;},0),tL=base.reduce((s,x)=>s+(Number(x.qty)||0)*(Number(x.laborRate)||0),0),$=n=>'$'+Math.round(n||0).toLocaleString('en-US');const bidAmt=Number(proposal&&proposal.bidAmount)||Number(proposal&&proposal.contractAmount)||Number(draft&&draft.bidAmount)||0;const statedTotal=bidAmt>0?bidAmt:(tM+tL);return[['Material',tM],['Labor',tL],['Base Bid',statedTotal]].map(([l,v],i)=><div key={l}><div style={{fontSize:'10px',textTransform:'uppercase',color:'#a8a29e'}}>{l}</div><div style={{fontFamily:'Georgia,serif',fontSize:'20px',color:i===2?'#6ee7b7':'white'}}>{$(v)}</div></div>);})()}
+        {(()=>{const tax=(estimate&&estimate.taxRate!=null?estimate.taxRate:0.07),mu=(estimate&&estimate.markupRate!=null?estimate.markupRate:0.20),base=(estimateItemsForThis||[]).filter(x=>!x.isAlternate&&!x.isVeAlternative),tM=base.reduce((s,x)=>{const q=Number(x.qty)||0,c=Number(x.unitCost)||Number(x.costPerUnit)||0,f=Number(x.freight)||0,a=q*c;return s+a+a*tax+f+a*mu;},0),tL=base.reduce((s,x)=>s+(Number(x.qty)||0)*(Number(x.laborRate)||0),0),$=n=>'$'+Math.round(n||0).toLocaleString('en-US');const bidAmt=Number(proposal&&proposal.bidAmount)||Number(proposal&&proposal.contractAmount)||Number(draft&&draft.bidAmount)||0;const statedTotal=bidAmt>0?bidAmt:(tM+tL);return[['Material',tM],['Labor',tL],['Base Bid',statedTotal]].map(([l,v],i)=><div key={l}><div style={{fontSize:'10px',textTransform:'uppercase',color:'#a8a29e'}}>{l}</div><div style={{fontFamily:'Georgia,serif',fontSize:'20px',color:i===2?'#6ee7b7':'white'}}>{$(v)}</div></div>);})()}
        </div>}
       {[['Proposal Document','Full PDF with logo, GC info, line items and totals.','genProposal','Generate Proposal'],
        ['Supplier Purchase Orders','One PO per supplier shipped to job site.','genSupplierPOs','Generate POs'],
@@ -3891,7 +3898,7 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
    if(!map.has(mfr)) map.set(mfr,{manufacturer:mfr,items:0,totalAmt:0,proposals:new Set()});
    const m=map.get(mfr);
    m.items++;
-   m.totalAmt+=(Number(it.qty)||0)*(Number(it.costPerUnit)||Number(it.unitCost)||0);
+   m.totalAmt+=(Number(it.qty)||0)*(Number(it.unitCost)||Number(it.costPerUnit)||0);
    if(it.proposalId) m.proposals.add(it.proposalId);
   });
   return [...map.values()]
@@ -4328,9 +4335,12 @@ function m15BuildPayloads({lines, job, propId, estId, isUpdate}){
 
 const M15_STATUS_OPTS=['Bidding','Lead','Submitted','Negotiating'];
 
-const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
+const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone }) => {
+  const blankJob = lock
+    ? {tax:0.07,markup:0.20,projectNumber:String(lock.id),projectName:lock.project||'',gc:lock.gc||'',contact:lock.contact||'',email:lock.email||'',phone:lock.phone||'',location:lock.location||'',status:'Bidding',fileName:''}
+    : {tax:0.07,markup:0.20,projectNumber:'',projectName:'',gc:'',contact:'',email:'',phone:'',location:'',status:'Bidding',fileName:''};
   const [lines,setLines]=React.useState(null);
-  const [job,setJob]=React.useState({tax:0.07,markup:0.20,projectNumber:'',projectName:'',gc:'',contact:'',email:'',phone:'',location:'',status:'Bidding',fileName:''});
+  const [job,setJob]=React.useState(blankJob);
   const [status,setStatus]=React.useState(null);
   const [saving,setSaving]=React.useState(false);
   const [collision,setCollision]=React.useState(null);   // {existing} pending Peter's confirm
@@ -4338,7 +4348,7 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
   const catalog=React.useMemo(()=>m15BuildCatalog(estimateItems||[]),[estimateItems]);
 
   const resetAll=()=>{ setLines(null); setCollision(null); setStatus(null);
-    setJob({tax:0.07,markup:0.20,projectNumber:'',projectName:'',gc:'',contact:'',email:'',phone:'',location:'',status:'Bidding',fileName:''});
+    setJob(blankJob);
     if(fileRef.current) fileRef.current.value=''; };
 
   const onFile=async(file)=>{
@@ -4400,8 +4410,8 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
     return{base,mat,lab,nReady,nIncl}; },[lines,job.tax,job.markup]);
 
   const blockers=()=>{ const b=[];
-    if(!job.projectNumber.trim()) b.push('Assign a project number');
-    if(!job.projectName.trim()) b.push('Enter a project name');
+    if(!lock && !job.projectNumber.trim()) b.push('Assign a project number');
+    if(!lock && !job.projectName.trim()) b.push('Enter a project name');
     if(lines){ const bad=lines.filter(l=>l.include&&lineState(l).label!=='ready'); if(bad.length) b.push(bad.length+' included line(s) not ready'); }
     if(totals.nIncl===0) b.push('Include at least one line');
     return b; };
@@ -4410,18 +4420,24 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
   // save reports false success (the test9999 silent-failure bug). chk() makes failures loud.
   const chk=async(label,p)=>{ const {data,error}=await p; if(error) throw new Error(label+' — '+(error.message||error.details||error.code||'rejected by database')); return data; };
   const doSave=async(confirmedUpdate)=>{
-    const propId=String(job.projectNumber).trim();
+    const propId=lock?String(lock.id):String(job.projectNumber).trim();
     setSaving(true); setStatus({ok:true,msg:'Saving…'});
     try{
-      // existence-check guard: shared namespace, so a reused number may hit a real project
-      const existing=await chk('number lookup',sb.from('proposals').select('id,project').eq('id',propId).maybeSingle());
-      if(existing && !confirmedUpdate){ setCollision({existing}); setSaving(false); setStatus(null); return; }
+      let existing=null;
+      if(lock){ existing={id:propId}; }   // known existing project — never clobber its metadata
+      else {
+        // existence-check guard: shared namespace, so a reused number may hit a real project
+        existing=await chk('number lookup',sb.from('proposals').select('id,project').eq('id',propId).maybeSingle());
+        if(existing && !confirmedUpdate){ setCollision({existing}); setSaving(false); setStatus(null); return; }
+      }
       const estId='est_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
       const {proposalRow,estimateRow,itemRows,totals:t}=m15BuildPayloads({lines,job:{...job,submitted:new Date().toISOString().slice(0,10)},propId,estId,isUpdate:!!existing});
-      // proposal FIRST — if the number is the wrong format the DB rejects it here and we abort
-      // before touching estimates/items (no orphans, no false success).
-      if(existing) await chk('save proposal',sb.from('proposals').upsert(proposalRow));
-      else         await chk('save proposal',sb.from('proposals').insert(proposalRow));
+      if(lock){
+        // import into an EXISTING project — preserve its status/gc/notes/owner; only refresh the
+        // estimate-derived money fields so the import never overwrites project metadata.
+        await chk('refresh project totals',sb.from('proposals').update({bidAmount:proposalRow.bidAmount,estMaterial:proposalRow.estMaterial,estLabor:proposalRow.estLabor,updatedAt:new Date().toISOString()}).eq('id',propId));
+      } else if(existing){ await chk('save proposal',sb.from('proposals').upsert(proposalRow)); }
+      else { await chk('save proposal',sb.from('proposals').insert(proposalRow)); }
       // clean replace of any prior estimate + items for this proposal (idempotent re-save), writes unitCost
       const oldEsts=await chk('check existing estimates',sb.from('estimates').select('id').eq('proposalId',propId));
       if(oldEsts&&oldEsts.length){ for(const oe of oldEsts) await chk('clear old items',sb.from('estimate_items').delete().eq('estimateId',oe.id)); await chk('clear old estimates',sb.from('estimates').delete().eq('proposalId',propId)); }
@@ -4430,8 +4446,9 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
       for(let i=0;i<itemRows.length;i+=50) await chk('save line items',sb.from('estimate_items').insert(itemRows.slice(i,i+50)));
       if(onImported) await onImported();
       setCollision(null); setSaving(false);
-      setStatus({ok:true,msg:'✓ Saved '+(existing?'(updated) ':'')+'#'+propId+' "'+job.projectName+'" — '+itemRows.length+' items · base '+money(t.base)+'. Open the project to generate proposal / PO / WO.'});
+      setStatus({ok:true,msg:'✓ Saved '+(lock?'into ':(existing?'(updated) ':''))+'#'+propId+' "'+job.projectName+'" — '+itemRows.length+' items · base '+money(t.base)+(lock?'.':'. Open the project to generate proposal / PO / WO.')});
       setLines(null);
+      if(lock&&onDone) setTimeout(onDone,1200);
     }catch(e){ setSaving(false); setStatus({ok:false,msg:'Save failed: '+e.message+(/bigint|integer|invalid input syntax|numeric/i.test(e.message)?' — the project number must be numeric (match your existing project numbers, e.g. 1898).':'')}); }
   };
 
@@ -4439,7 +4456,7 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
   const inp='w-full border border-stone-300 rounded-sm px-1.5 py-1 text-sm focus:outline-none focus:border-orange-700';
   return (
     <div className="mt-4 border-t border-stone-200 pt-4">
-      <h4 className="font-serif text-base text-stone-800 mb-1">New takeoff (Bluebeam CSV)</h4>
+      <h4 className="font-serif text-base text-stone-800 mb-1">{lock?'Import takeoff into #'+lock.id:'New takeoff (Bluebeam CSV)'}</h4>
       <p className="text-sm text-stone-600 mb-3">Drop a Bluebeam CSV export. Quantities reconcile automatically; every line is a <strong>candidate</strong> you confirm before it saves. Catalog suggestions come from {catalog.arr.length} known materials.</p>
       <div className="flex items-center gap-3 mb-3">
         <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={e=>onFile(e.target.files&&e.target.files[0])}
@@ -4510,10 +4527,10 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
           <button onClick={addLine} className="mt-2 text-sm text-orange-800 hover:text-orange-900 font-medium">+ add a line the takeoff didn’t measure (clips, grout, mortar, adhesive, base…)</button>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 bg-white border border-stone-200 p-3 rounded-sm">
-            <label className="text-xs text-stone-600">Project number <span className="text-rose-600">*</span><input className={inp} value={job.projectNumber} onChange={e=>{setCollision(null);setJob(j=>({...j,projectNumber:e.target.value}));}} placeholder="Peter assigns (numeric)"/></label>
-            <label className="text-xs text-stone-600">Project name <span className="text-rose-600">*</span><input className={inp} value={job.projectName} onChange={e=>setJob(j=>({...j,projectName:e.target.value}))}/></label>
+            <label className="text-xs text-stone-600">Project number <span className="text-rose-600">*</span><input className={inp+(lock?' bg-stone-100 text-stone-500':'')} value={job.projectNumber} disabled={!!lock} onChange={e=>{setCollision(null);setJob(j=>({...j,projectNumber:e.target.value}));}} placeholder="Peter assigns (numeric)"/>{lock&&<span className="text-[10px] text-stone-400">Locked to this project</span>}</label>
+            <label className="text-xs text-stone-600">Project name <span className="text-rose-600">*</span><input className={inp+(lock?' bg-stone-100 text-stone-500':'')} value={job.projectName} disabled={!!lock} onChange={e=>setJob(j=>({...j,projectName:e.target.value}))}/></label>
             <label className="text-xs text-stone-600">GC<input className={inp} value={job.gc} onChange={e=>setJob(j=>({...j,gc:e.target.value}))}/></label>
-            <label className="text-xs text-stone-600">Status<select className={inp} value={job.status} onChange={e=>setJob(j=>({...j,status:e.target.value}))}>{M15_STATUS_OPTS.map(s=><option key={s}>{s}</option>)}</select></label>
+            {!lock&&<label className="text-xs text-stone-600">Status<select className={inp} value={job.status} onChange={e=>setJob(j=>({...j,status:e.target.value}))}>{M15_STATUS_OPTS.map(s=><option key={s}>{s}</option>)}</select></label>}
             <label className="text-xs text-stone-600">Tax rate<input className={inp + ' font-mono'} type="number" step="0.001" value={job.tax} onChange={e=>setJob(j=>({...j,tax:e.target.value}))}/></label>
             <label className="text-xs text-stone-600">Markup rate<input className={inp + ' font-mono'} type="number" step="0.01" value={job.markup} onChange={e=>setJob(j=>({...j,markup:e.target.value}))}/></label>
             <label className="text-xs text-stone-600">Contact<input className={inp} value={job.contact} onChange={e=>setJob(j=>({...j,contact:e.target.value}))}/></label>
@@ -4718,6 +4735,16 @@ function App() {
  const gcStats=useMemo(()=>computeGCStats(proposals),[proposals]);
  const selectedProposal=useMemo(()=>proposals.find(p=>p.id===selectedId)||null,[proposals,selectedId]);
  const selectedLineItems=useMemo(()=>lineItems.filter(l=>l.proposalId===selectedId),[lineItems,selectedId]);
+ const reloadData=async()=>{
+  const [{data:fP},{data:fE},{data:fI}]=await Promise.all([
+   sb.from('proposals').select('*').order('submitted',{ascending:false}),
+   sb.from('estimates').select('*'),
+   fetchAll('estimate_items'),
+  ]);
+  if(fP)setProposals(fP.map(p=>({...p,bidAmount:Number(p.bidAmount)||0,estMaterial:Number(p.estMaterial)||0,estLabor:Number(p.estLabor)||0,contractAmount:(p.contractAmountActual!=null?p.contractAmountActual:null)})));
+  if(fE)setEstimates(fE);
+  if(fI)setEstimateItems(fI);
+ };
  const saveProposal=async(next)=>{
   const updated={...next,updatedAt:new Date().toISOString()};
   setProposals(ps=>ps.map(p=>p.id===next.id?updated:p));
@@ -5008,16 +5035,7 @@ function App() {
     {view==='gcs'&&!selectedGC&&<GCIntelView gcStats={gcStats} proposals={proposals} onSelectGC={setSelectedGC} settings={settings}/>}
     {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
     {view==='active'&&<ActiveJobsView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
-    {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal} sb={sb} estimateItems={estimateItems} onImported={async()=>{
-     const [{data:fP},{data:fE},{data:fI}]=await Promise.all([
-      sb.from('proposals').select('*').order('submitted',{ascending:false}),
-      sb.from('estimates').select('*'),
-      fetchAll('estimate_items'),
-     ]);
-     if(fP)setProposals(fP.map(p=>({...p,bidAmount:Number(p.bidAmount)||0,estMaterial:Number(p.estMaterial)||0,estLabor:Number(p.estLabor)||0,contractAmount:(p.contractAmountActual!=null?p.contractAmountActual:null)})));
-     if(fE)setEstimates(fE);
-     if(fI)setEstimateItems(fI);
-    }}/>}
+    {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal} sb={sb} estimateItems={estimateItems} onImported={reloadData}/>}
     {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSaveProposal={saveProposal}/>}
    </main>
    {selectedProposal&&<ProjectDrawer
@@ -5027,6 +5045,7 @@ function App() {
     onSave={saveProposal}
     onDelete={deleteProposal}
     onRenumber={renumberProposal}
+    onImported={reloadData}
     onAddLineItem={addLineItem}
     onUpdateLineItem={updateLineItem}
     onDeleteLineItem={deleteLineItem}
