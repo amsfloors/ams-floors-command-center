@@ -4177,7 +4177,325 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
 // [M7 CUTOVER 2026-06-05] BulkIntakeView (in-app bulk bidsheet import UI) REMOVED.
 // It fed the retired parser and wrote costPerUnit into estimate_items. Removed wholesale.
 
-const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onExport,setShowNewProject,onSaveProposal,sb,onImported})=>{
+/* ===================== M15 — Bluebeam takeoff intake (Peter's front door) =====================
+   CSV drop -> priced CANDIDATE draft -> Peter confirms/edits/adds missing lines -> save-back to
+   proposals/estimates/estimate_items via a CLEAN unitCost writer.
+   Idempotency anchor = Peter-assigned project number (one shared namespace with the historical 154;
+   existence-checked on save -> explicit "update this one" vs cancel; never silent overwrite).
+   Reader/pricer/unit-guard ported from M14 (m15_port.js, 20/20 regression incl. Seaside F-1 885.22 SF).
+   NEVER writes costPerUnit to estimate_items. Forbidden baked columns omitted (their absence = the
+   correct no-op in calcEstimateItem). ============================================================ */
+
+// ---- CSV parser (RFC4180-ish: "" escapes, commas-in-quotes, CRLF, BOM) ----
+function m15ParseCSV(text){
+  if(text.charCodeAt(0)===0xFEFF) text=text.slice(1);
+  const rows=[]; let row=[],field='',i=0,inQ=false; const n=text.length;
+  while(i<n){ const c=text[i];
+    if(inQ){ if(c==='"'){ if(text[i+1]==='"'){field+='"';i+=2;continue;} inQ=false;i++;continue;} field+=c;i++;continue; }
+    if(c==='"'){inQ=true;i++;continue;}
+    if(c===','){row.push(field);field='';i++;continue;}
+    if(c==='\r'){i++;continue;}
+    if(c==='\n'){row.push(field);rows.push(row);row=[];field='';i++;continue;}
+    field+=c;i++;
+  }
+  if(field!==''||row.length){row.push(field);rows.push(row);}
+  return rows;
+}
+const M15_GROUP_RE=/^(.*\S)\s*\((\d+)\)\s*$/;
+const M15_UNNAMED_RE=/^\(\d+\)$/;
+const m15Num=s=>{ if(s==null)return 0; s=String(s).trim().replace(/,/g,''); if(s==='')return 0; const v=parseFloat(s); return isNaN(v)?0:v; };
+const m15r2=x=>Math.round(x*100)/100;
+
+function m15ReadTakeoff(text,fileName){
+  const rows=m15ParseCSV(text);
+  if(!rows.length) return {file:fileName,error:'empty file',items:[],junk_rows:0};
+  const header=rows[0].map(h=>h.trim());
+  const col={}; header.forEach((nm,idx)=>{ if(!(nm in col)) col[nm]=idx; });
+  const cell=(r,nm)=>{ const idx=col[nm]; return (idx!=null&&idx<r.length)?r[idx]:''; };
+  const details=new Map(); const headers={}; let junk=0;
+  for(let k=1;k<rows.length;k++){
+    const r=rows[k];
+    if(!r.some(c=>String(c).trim()!=='')) continue;
+    const label=String(cell(r,'Label')).trim();
+    const subject=String(cell(r,'Subject')).trim();
+    const area=m15Num(cell(r,'Area')), length=m15Num(cell(r,'Length')), count=m15Num(cell(r,'Count'));
+    const m=label.match(M15_GROUP_RE);
+    if(m&&subject===''){ const tag=m[1].trim(); if(tag==='')continue;
+      headers[tag]={group_count:parseInt(m[2],10),area_sf:area,length_lf:length}; continue; }
+    if(label===''||M15_UNNAMED_RE.test(label)){ junk++; continue; }
+    if(!details.has(label)) details.set(label,{subjects:new Set(),area_sf:0,length_lf:0,count:0,n_measures:0});
+    const d=details.get(label);
+    if(subject) d.subjects.add(subject);
+    d.area_sf+=area; d.length_lf+=length; d.count+=count; d.n_measures+=1;
+  }
+  const items=[];
+  for(const [tag,d] of details){
+    const hdr=headers[tag]||{}; let measure,qty,unit;
+    if(d.area_sf>0){measure='area';qty=m15r2(d.area_sf);unit='SF';}
+    else if(d.length_lf>0){measure='length';qty=m15r2(d.length_lf);unit='LF';}
+    else if(d.count>0){measure='count';qty=m15r2(d.count);unit='EA';}
+    else {measure='none';qty=0;unit='';}
+    let recon=null;
+    if(Object.keys(hdr).length){ const hv=measure==='area'?hdr.area_sf:(measure==='length'?hdr.length_lf:null); if(hv!=null)recon=m15r2(qty-hv); }
+    items.push({tag,subject:d.subjects.size?[...d.subjects].sort().join(' / '):'',measure,qty,unit,n_measures:d.n_measures,recon_delta:recon});
+  }
+  items.sort((a,b)=>a.tag<b.tag?-1:a.tag>b.tag?1:0);
+  return {file:fileName,header,items,junk_rows:junk};
+}
+
+// ---- unit-family guard (M15: blocks the SC-1 SF->EA $77k garbage multiply) ----
+const M15_FAMILY={SF:'area',SY:'area',LF:'length',EA:'count','':''};
+const m15UnitsCompatible=(mu,ou)=>{ const a=M15_FAMILY[(mu||'').toUpperCase()],b=M15_FAMILY[(ou||'').toUpperCase()]; if(!a||!b)return false; return a===b; };
+
+// ---- catalog from estimate_items in app state (keyed by manufacturer|||description, most-recent) ----
+function m15BuildCatalog(estimateItems){
+  const map=new Map();
+  (estimateItems||[]).forEach(it=>{
+    const cost=Number(it.unitCost)||Number(it.costPerUnit)||0;        // unitCost is truth; costPerUnit fallback is harmless (never exists live)
+    if(!(cost>0)) return;
+    const mfr=(it.manufacturer||'').trim(), desc=(it.description||'').trim();
+    if(!mfr&&!desc) return;
+    const key=(mfr+'|||'+desc).toLowerCase();
+    const date=it.updatedAt||it.createdAt||'';
+    const qty=Number(it.qty)||0, orderQty=Number(it.orderQty)||0;
+    const cov=(qty>0&&orderQty>0)?m15r2(orderQty/qty):null;
+    const prev=map.get(key);
+    if(!prev||date>prev.date){
+      map.set(key,{ key, label:(mfr?mfr+' ':'')+desc, manufacturer:mfr, description:desc,
+        itemCode:(it.itemCode||'').trim(), unitCost:m15r2(cost), orderUnit:(it.orderUnit||it.unit||'').trim(),
+        coverageFactor:cov, laborRate:Number(it.laborRate)||0, freight:Number(it.freight)||0, date, n:1 });
+    } else { prev.n+=1; }
+  });
+  const arr=[...map.values()].sort((a,b)=>a.label.localeCompare(b.label));
+  const byCode={}; arr.forEach(e=>{ if(e.itemCode) byCode[e.itemCode.toLowerCase()]=e; });
+  return {arr, byKey:map, byCode};
+}
+function m15Candidates(subject, catArr, limit=6){
+  const stop=new Set(['tile','the','and','of','to','in','x','floor','wall','base','cut']);
+  const toks=new Set(String(subject).toLowerCase().split(/[^a-z0-9]+/).filter(t=>t.length>2&&!stop.has(t)));
+  if(!toks.size) return [];
+  const scored=[];
+  catArr.forEach(e=>{ const d=e.label.toLowerCase(); let h=0; toks.forEach(t=>{ if(d.includes(t))h++; }); if(h)scored.push([h,e]); });
+  scored.sort((a,b)=> b[0]-a[0] || a[1].label.localeCompare(b[1].label));
+  return scored.slice(0,limit).map(s=>s[1]);
+}
+
+// ---- PURE payload builder (node-tested): lines+job -> rows for proposals/estimates/estimate_items ----
+// Writes unitCost (never costPerUnit); omits forbidden baked columns; stores materialActual + lineMarkupRate.
+function m15BuildPayloads({lines, job, propId, estId, isUpdate}){
+  const tax=Number(job.tax), markup=Number(job.markup);
+  const included=lines.filter(l=>l.include);
+  let estMat=0, estLab=0, base=0, ord=0;
+  const itemRows=included.map(l=>{
+    const qty=Number(l.measured_qty)||0;
+    const orderQty=m15r2(qty*(Number(l.coverage)||1));
+    const item={ qty, unitCost:Number(l.unitCost)||0, freight:Number(l.freight)||0,
+                 laborRate:Number(l.laborRate)||0, orderQty, orderUnit:l.orderUnit||l.measured_unit, unit:l.measured_unit };
+    const c=calcEstimateItem(item, tax, markup);
+    estMat+=c.material; estLab+=c.labor; base+=c.total;
+    return { id:'ei_'+propId+'_'+l.tag+'_'+(ord++), estimateId:estId, proposalId:propId,
+      sortOrder:ord, sectionCode:l.sectionCode||'', sectionName:l.sectionName||'Flooring',
+      itemCode:l.tag||'', size:l.size||'', manufacturer:l.manufacturer||'', description:l.product||l.subject||'',
+      color:'', qty, unit:l.measured_unit, orderQty, orderUnit:item.orderUnit,
+      unitCost:item.unitCost, freight:item.freight, laborRate:item.laborRate,
+      materialActual:m15r2(c.material), lineMarkupRate:markup, displayMode:'full', source:'M15 takeoff: '+job.fileName };
+  });
+  const proposalRow={ id:propId, project:job.projectName, location:job.location||'', gc:job.gc||'',
+    contact:job.contact||'', email:job.email||'', phone:job.phone||'', submitted:job.submitted,
+    bidAmount:Math.round(base), contractAmount:null, status:job.status||'Bidding',
+    owner:'Peter', estimator:'Peter', bdOwner:'Paul', pm:'', projectNumber:propId,
+    notes:'Takeoff intake from '+job.fileName, retainage:0.1,
+    estMaterial:Math.round(estMat), estLabor:Math.round(estLab), estOther:null,
+    actMaterial:null, actLabor:null, actOther:null };
+  const estimateRow={ id:estId, proposalId:propId, proposalNumber:propId, projectName:job.projectName,
+    gcName:job.gc||'', gcContactName:job.contact||'', gcContactEmail:job.email||'', gcContactPhone:job.phone||'',
+    taxRate:tax, markupRate:markup, baseBidTotal:Math.round(base),
+    preparedByName:'Peter Laitres', preparedByEmail:'peter@amsfloors.com', preparedByPhone:'9417401555' };
+  return { proposalRow, estimateRow, itemRows, totals:{base:Math.round(base),estMat:Math.round(estMat),estLab:Math.round(estLab)}, isUpdate:!!isUpdate };
+}
+
+const M15_STATUS_OPTS=['Bidding','Lead','Submitted','Negotiating'];
+
+const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
+  const [lines,setLines]=React.useState(null);
+  const [job,setJob]=React.useState({tax:0.07,markup:0.20,projectNumber:'',projectName:'',gc:'',contact:'',email:'',phone:'',location:'',status:'Bidding',fileName:''});
+  const [status,setStatus]=React.useState(null);
+  const [saving,setSaving]=React.useState(false);
+  const [collision,setCollision]=React.useState(null);   // {existing} pending Peter's confirm
+  const fileRef=React.useRef(null);
+  const catalog=React.useMemo(()=>m15BuildCatalog(estimateItems||[]),[estimateItems]);
+
+  const resetAll=()=>{ setLines(null); setCollision(null); setStatus(null);
+    setJob({tax:0.07,markup:0.20,projectNumber:'',projectName:'',gc:'',contact:'',email:'',phone:'',location:'',status:'Bidding',fileName:''});
+    if(fileRef.current) fileRef.current.value=''; };
+
+  const onFile=async(file)=>{
+    if(!file) return;
+    if(!/\.csv$/i.test(file.name)){ setStatus({ok:false,msg:'M15 takes a Bluebeam CSV export — not '+file.name}); return; }
+    setStatus({ok:true,msg:'Reading '+file.name+'…'});
+    try{
+      const text=await file.text();
+      const parsed=m15ReadTakeoff(text,file.name);
+      if(parsed.error){ setStatus({ok:false,msg:parsed.error}); return; }
+      const priceable=parsed.items.filter(i=>i.measure!=='none');
+      const newLines=priceable.map(it=>{
+        const exact = it.tag ? catalog.byCode[it.tag.toLowerCase()] : null;
+        const cands = m15Candidates(it.subject||it.tag, catalog.arr);
+        const seed = exact || null;
+        return {
+          tag:it.tag, subject:it.subject, measured_qty:it.qty, measured_unit:it.unit, recon:it.recon_delta,
+          candidates:cands,
+          product: seed?seed.label:'', manufacturer: seed?seed.manufacturer:'',
+          unitCost: seed?seed.unitCost:'', orderUnit: seed?(seed.orderUnit||it.unit):it.unit,
+          coverage: seed&&seed.coverageFactor?seed.coverageFactor:1,
+          laborRate: seed?seed.laborRate:0, freight: seed?seed.freight:0,
+          sectionCode:'', sectionName:'Flooring',
+          include: !!seed,    // resolved lines default in; unresolved default out until Peter picks
+          size:'',
+        };
+      });
+      setJob(j=>({...j,fileName:file.name}));
+      setLines(newLines);
+      setStatus({ok:true,msg:'Parsed '+priceable.length+' priceable line'+(priceable.length===1?'':'s')+' · '+parsed.junk_rows+' annotation rows skipped. Every line is a CANDIDATE — confirm product + cost before saving.'});
+    }catch(e){ setStatus({ok:false,msg:'Read failed: '+e.message}); }
+  };
+
+  const updateLine=(idx,patch)=>setLines(ls=>ls.map((l,i)=>i===idx?{...l,...patch}:l));
+  const pickProduct=(idx,key)=>{ const e=catalog.byKey.get(key); if(!e)return;
+    updateLine(idx,{product:e.label,manufacturer:e.manufacturer,unitCost:e.unitCost,
+      orderUnit:e.orderUnit||lines[idx].measured_unit,coverage:e.coverageFactor||1,laborRate:e.laborRate,freight:e.freight,include:true}); };
+  const addLine=()=>setLines(ls=>[...(ls||[]),{tag:'NEW-'+((ls||[]).length+1),subject:'',measured_qty:0,measured_unit:'SF',recon:null,candidates:[],product:'',manufacturer:'',unitCost:'',orderUnit:'SF',coverage:1,laborRate:0,freight:0,sectionCode:'',sectionName:'Flooring',include:true,size:''}]);
+  const removeLine=idx=>setLines(ls=>ls.filter((_,i)=>i!==idx));
+
+  const lineState=l=>{
+    if(!l.include) return {label:'excluded',cls:'text-stone-400'};
+    if(!l.product||!(Number(l.unitCost)>0)) return {label:'needs product+cost',cls:'text-rose-700 font-semibold'};
+    if(!m15UnitsCompatible(l.measured_unit,l.orderUnit)) return {label:'unit mismatch',cls:'text-rose-700 font-semibold'};
+    return {label:'ready',cls:'text-emerald-700'};
+  };
+  const linePreview=l=>{ const qty=Number(l.measured_qty)||0;
+    const item={qty,unitCost:Number(l.unitCost)||0,freight:Number(l.freight)||0,laborRate:Number(l.laborRate)||0,orderQty:m15r2(qty*(Number(l.coverage)||1)),orderUnit:l.orderUnit||l.measured_unit,unit:l.measured_unit};
+    return calcEstimateItem(item,Number(job.tax),Number(job.markup)); };
+  const totals=React.useMemo(()=>{ if(!lines)return{base:0,mat:0,lab:0,nReady:0,nIncl:0};
+    let base=0,mat=0,lab=0,nReady=0,nIncl=0;
+    lines.forEach(l=>{ if(!l.include)return; nIncl++; if(lineState(l).label==='ready'){nReady++; const c=linePreview(l); base+=c.total;mat+=c.material;lab+=c.labor;} });
+    return{base,mat,lab,nReady,nIncl}; },[lines,job.tax,job.markup]);
+
+  const blockers=()=>{ const b=[];
+    if(!job.projectNumber.trim()) b.push('Assign a project number');
+    if(!job.projectName.trim()) b.push('Enter a project name');
+    if(lines){ const bad=lines.filter(l=>l.include&&lineState(l).label!=='ready'); if(bad.length) b.push(bad.length+' included line(s) not ready'); }
+    if(totals.nIncl===0) b.push('Include at least one line');
+    return b; };
+
+  const doSave=async(confirmedUpdate)=>{
+    const propId=String(job.projectNumber).trim();
+    setSaving(true); setStatus({ok:true,msg:'Saving…'});
+    try{
+      // existence-check guard: shared namespace, so a reused number may hit a real project
+      const {data:existing}=await sb.from('proposals').select('id,project').eq('id',propId).maybeSingle();
+      if(existing && !confirmedUpdate){ setCollision({existing}); setSaving(false); setStatus(null); return; }
+      const estId='est_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+      const {proposalRow,estimateRow,itemRows,totals:t}=m15BuildPayloads({lines,job:{...job,submitted:new Date().toISOString().slice(0,10)},propId,estId,isUpdate:!!existing});
+      // clean replace for this proposal (idempotent re-save) — mirrors the proven shape, writes unitCost
+      const {data:oldEsts}=await sb.from('estimates').select('id').eq('proposalId',propId);
+      if(oldEsts&&oldEsts.length){ for(const oe of oldEsts) await sb.from('estimate_items').delete().eq('estimateId',oe.id); await sb.from('estimates').delete().eq('proposalId',propId); }
+      await sb.from('estimate_items').delete().eq('proposalId',propId);
+      if(existing) await sb.from('proposals').upsert(proposalRow); else await sb.from('proposals').insert(proposalRow);
+      await sb.from('estimates').insert(estimateRow);
+      for(let i=0;i<itemRows.length;i+=50) await sb.from('estimate_items').insert(itemRows.slice(i,i+50));
+      if(onImported) await onImported();
+      setCollision(null); setSaving(false);
+      setStatus({ok:true,msg:'✓ Saved '+(existing?'(updated) ':'')+'#'+propId+' "'+job.projectName+'" — '+itemRows.length+' items · base '+money(t.base)+'. Open the project to generate proposal / PO / WO.'});
+      setLines(null);
+    }catch(e){ setSaving(false); setStatus({ok:false,msg:'Save failed: '+e.message}); }
+  };
+
+  const cellCls='px-2 py-1 text-xs';
+  const inp='w-full border border-stone-300 rounded-sm px-1.5 py-1 text-xs focus:outline-none focus:border-orange-700';
+  return (
+    <div className="mt-4 border-t border-stone-200 pt-4">
+      <h4 className="font-serif text-base text-stone-800 mb-1">New takeoff (Bluebeam CSV)</h4>
+      <p className="text-sm text-stone-600 mb-3">Drop a Bluebeam CSV export. Quantities reconcile automatically; every line is a <strong>candidate</strong> you confirm before it saves. Catalog suggestions come from {catalog.arr.length} known materials.</p>
+      <div className="flex items-center gap-3 mb-3">
+        <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={e=>onFile(e.target.files&&e.target.files[0])}
+          className="text-sm file:mr-3 file:px-3 file:py-1.5 file:border-0 file:bg-orange-800 file:text-white file:rounded-sm file:cursor-pointer hover:file:bg-orange-900"/>
+        {lines&&<button onClick={resetAll} className="text-xs text-stone-500 underline hover:text-stone-800">Clear</button>}
+      </div>
+      {status&&<div className={`text-sm mb-3 px-3 py-2 rounded-sm ${status.ok?'bg-emerald-50 text-emerald-800':'bg-rose-50 text-rose-800'}`}>{status.msg}</div>}
+
+      {lines&&<>
+        <div className="overflow-x-auto border border-stone-200 rounded-sm">
+          <table className="w-full text-xs">
+            <thead><tr className="bg-stone-50 text-stone-500 text-left">
+              <th className={cellCls}>✓</th><th className={cellCls}>Tag</th><th className={cellCls}>Measured</th>
+              <th className={cellCls}>Product (confirm)</th><th className={cellCls}>Unit cost</th><th className={cellCls}>Cov.→Order</th>
+              <th className={cellCls}>Labor</th><th className={cellCls + ' text-right'}>Line $</th><th className={cellCls}>State</th><th className={cellCls}></th>
+            </tr></thead>
+            <tbody>
+              {lines.map((l,idx)=>{ const st=lineState(l); const pv=st.label==='ready'?linePreview(l):null;
+                return (<tr key={idx} className="border-t border-stone-100 align-top">
+                  <td className={cellCls}><input type="checkbox" checked={l.include} onChange={e=>updateLine(idx,{include:e.target.checked})}/></td>
+                  <td className={cellCls}><div className="font-mono">{l.tag}</div><div className="text-[10px] text-stone-400 max-w-[110px] truncate">{l.subject}</div></td>
+                  <td className={cellCls + ' font-mono whitespace-nowrap'}>{Number(l.measured_qty).toLocaleString()} {l.measured_unit}{l.recon!=null&&Math.abs(l.recon)>0.01?<span className="text-amber-600" title="detail vs Bluebeam subtotal"> ({l.recon>0?'+':''}{l.recon})</span>:null}</td>
+                  <td className={cellCls} style={{minWidth:'200px'}}>
+                    {l.candidates&&l.candidates.length>0&&
+                      <select className={inp + ' mb-1'} value="" onChange={e=>e.target.value&&pickProduct(idx,e.target.value)}>
+                        <option value="">— pick from catalog ({l.candidates.length}) —</option>
+                        {l.candidates.map(c=><option key={c.key} value={c.key}>{c.label.slice(0,60)} · {money(c.unitCost)}/{c.orderUnit||'?'}</option>)}
+                      </select>}
+                    <input className={inp} placeholder="product / spec" value={l.product} onChange={e=>updateLine(idx,{product:e.target.value})}/>
+                  </td>
+                  <td className={cellCls}><input className={inp + ' text-right font-mono'} type="number" step="0.01" value={l.unitCost} onChange={e=>updateLine(idx,{unitCost:e.target.value})} style={{minWidth:'70px'}}/></td>
+                  <td className={cellCls}>
+                    <div className="flex items-center gap-1">
+                      <input className={inp + ' text-right font-mono'} type="number" step="0.01" value={l.coverage} onChange={e=>updateLine(idx,{coverage:e.target.value})} style={{width:'52px'}} title="ORDER = measured × coverage"/>
+                      <input className={inp} value={l.orderUnit} onChange={e=>updateLine(idx,{orderUnit:e.target.value})} style={{width:'42px'}} title="order unit"/>
+                    </div>
+                  </td>
+                  <td className={cellCls}><input className={inp + ' text-right font-mono'} type="number" step="0.01" value={l.laborRate} onChange={e=>updateLine(idx,{laborRate:e.target.value})} style={{width:'56px'}}/></td>
+                  <td className={cellCls + ' text-right font-mono'}>{pv?money(pv.total):'—'}</td>
+                  <td className={cellCls + ' ' + st.cls}>{st.label}</td>
+                  <td className={cellCls}><button onClick={()=>removeLine(idx)} className="text-stone-400 hover:text-rose-700">✕</button></td>
+                </tr>); })}
+            </tbody>
+          </table>
+        </div>
+        <button onClick={addLine} className="mt-2 text-xs text-orange-800 hover:text-orange-900">+ add a line the catalog is missing</button>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 bg-stone-50 border border-stone-200 p-3 rounded-sm">
+          <label className="text-xs text-stone-600">Project number <span className="text-rose-600">*</span><input className={inp} value={job.projectNumber} onChange={e=>{setCollision(null);setJob(j=>({...j,projectNumber:e.target.value}));}} placeholder="Peter assigns"/></label>
+          <label className="text-xs text-stone-600">Project name <span className="text-rose-600">*</span><input className={inp} value={job.projectName} onChange={e=>setJob(j=>({...j,projectName:e.target.value}))}/></label>
+          <label className="text-xs text-stone-600">GC<input className={inp} value={job.gc} onChange={e=>setJob(j=>({...j,gc:e.target.value}))}/></label>
+          <label className="text-xs text-stone-600">Status<select className={inp} value={job.status} onChange={e=>setJob(j=>({...j,status:e.target.value}))}>{M15_STATUS_OPTS.map(s=><option key={s}>{s}</option>)}</select></label>
+          <label className="text-xs text-stone-600">Tax rate<input className={inp + ' font-mono'} type="number" step="0.001" value={job.tax} onChange={e=>setJob(j=>({...j,tax:e.target.value}))}/></label>
+          <label className="text-xs text-stone-600">Markup rate<input className={inp + ' font-mono'} type="number" step="0.01" value={job.markup} onChange={e=>setJob(j=>({...j,markup:e.target.value}))}/></label>
+          <label className="text-xs text-stone-600">Contact<input className={inp} value={job.contact} onChange={e=>setJob(j=>({...j,contact:e.target.value}))}/></label>
+          <label className="text-xs text-stone-600">Email<input className={inp} value={job.email} onChange={e=>setJob(j=>({...j,email:e.target.value}))}/></label>
+        </div>
+
+        <div className="flex items-center justify-between mt-3">
+          <div className="text-sm text-stone-600">Base bid (ready lines): <span className="font-mono font-semibold text-stone-900">{money(totals.base)}</span> · {totals.nReady}/{totals.nIncl} ready · tax {Math.round(Number(job.tax)*100)}% markup {Math.round(Number(job.markup)*100)}%</div>
+          <button disabled={saving||blockers().length>0} onClick={()=>doSave(false)}
+            className="px-4 py-2 bg-orange-800 text-white text-sm rounded-sm disabled:opacity-40 hover:bg-orange-900">
+            {saving?'Saving…':'Save to Supabase'}
+          </button>
+        </div>
+        {blockers().length>0&&<div className="text-xs text-stone-500 mt-1 text-right">Before saving: {blockers().join(' · ')}</div>}
+
+        {collision&&<div className="mt-3 bg-amber-50 border border-amber-300 p-3 rounded-sm text-sm">
+          <div className="text-amber-900">Project number <strong>#{collision.existing.id}</strong> already exists: <strong>"{collision.existing.project}"</strong>. Saving will replace its estimate and line items.</div>
+          <div className="flex gap-2 mt-2">
+            <button onClick={()=>doSave(true)} className="px-3 py-1.5 bg-amber-700 text-white text-xs rounded-sm hover:bg-amber-800">Update "{collision.existing.project}"</button>
+            <button onClick={()=>setCollision(null)} className="px-3 py-1.5 bg-white border border-stone-300 text-xs rounded-sm hover:bg-stone-100">Cancel — I'll pick a different number</button>
+          </div>
+        </div>}
+      </>}
+    </div>
+  );
+};
+
+const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onExport,setShowNewProject,onSaveProposal,sb,onImported,estimateItems})=>{
  const [bfReason,setBfReason]=useState({});
  const [bfSaving,setBfSaving]=useState(false);
  const [bfSaved,setBfSaved]=useState(0);
@@ -4204,11 +4522,12 @@ const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onExport,set
    </section>
    <section className="bg-white border border-stone-200 p-5">
     <h3 className="font-serif text-lg text-stone-800 mb-2">Import / Export</h3>
-    <p className="text-sm text-stone-600 mb-4">Add individual projects or export all data. Bulk bidsheet import has been retired — historical files load through the verified migration pipeline, not the app.</p>
+    <p className="text-sm text-stone-600 mb-4">Add individual projects or export all data. Historical bulk bidsheet import stays retired (files load through the verified migration pipeline). For a NEW job, use the Bluebeam takeoff intake below.</p>
     <div className="flex flex-wrap gap-3">
      <button onClick={()=>setShowNewProject(true)} className="inline-flex items-center gap-2 bg-orange-800 text-white px-4 py-2 rounded-sm hover:bg-orange-900 text-sm"><Ico n="plus" size={14}/>Add Single Project</button>
      <button onClick={onExport} className="inline-flex items-center gap-2 bg-white border border-stone-300 text-stone-900 px-4 py-2 rounded-sm hover:bg-stone-100 text-sm"><Ico n="download" size={14}/>Export Everything to Excel</button>
     </div>
+    <TakeoffIntake sb={sb} estimateItems={estimateItems} proposals={proposals} onImported={onImported}/>
    </section>
    <section className="bg-stone-100 border border-stone-200 p-4 text-xs text-stone-600"><strong className="text-stone-900">Current data:</strong> {proposals.length} proposals · {lineItemsAll.length} line items · stored in Supabase (live sync)</section>
    {/* Backfill: tag historical lost bids */}
@@ -4278,7 +4597,6 @@ function App() {
  const [selectedId, setSelectedId] = useState(null);
  const [selectedGC, setSelectedGC] = useState(null);
  const [showNewProject, setShowNewProject] = useState(false);
- const [importStatus, setImportStatus] = useState(null);
  useEffect(()=>{
   (async()=>{
    try {
@@ -4530,239 +4848,6 @@ function App() {
   }
  }, [selectedEstimateItems, selectedEstimate]);
  const allGCNames = useMemo(() => Array.from(new Set(proposals.map(p => p.gc).filter(Boolean))).sort(), [proposals]);
- const handleImport=async(file)=>{
-  setImportStatus({ok:true,message:'Reading file…'});
-  try{
-   const buf=await file.arrayBuffer();
-   const wb=window.XLSX.read(buf,{type:'array',cellDates:true});
-   let added=0,updated=0;
-   const maxId=Math.max(0,...proposals.map(p=>parseInt(p.id)||0));
-   let nextId=maxId+1;
-   const existingIds=new Set(proposals.map(p=>String(p.id)));
-   const existingKeys=new Set(proposals.map(p=>`${(p.project||'').toLowerCase().trim()}|${(p.gc||'').toLowerCase().trim()}`));
-   const newRecs=[];
-   let bsMeta={proposalNum:'',projName:'',gcName:'',gcContact:'',gcEmail:'',gcPhone:'',location:''};
-   let bsRaw=null, bsHdrIdx=-1;
-   for(const sn of wb.SheetNames){
-    const ws2=wb.Sheets[sn];
-    const raw=window.XLSX.utils.sheet_to_json(ws2,{header:1,defval:null,raw:false});
-    for(let ri=0;ri<Math.min(raw.length,15);ri++){
-     const cells=(raw[ri]||[]).map(v=>(v||'').toString().trim());
-     for(let ci=0;ci<cells.length-1;ci++){
-      const cu=cells[ci].replace(/\s+/g,'').toUpperCase();
-      if((cu==='PROPOSAL#'||cu==='PROPOSAL#:')&&cells[ci+1]&&/^\d+$/.test(cells[ci+1])&&!bsMeta.proposalNum)
-       bsMeta.proposalNum=cells[ci+1].trim();
-     }
-     if(!bsMeta.gcName&&cells[3]&&cells[3].length>3
-      &&!/^(Contractor|Address|Email|Phone|Plans|Addendum|Attention|Prepared|Sarasota|\d)/i.test(cells[3])
-      &&!cells[3].includes('@'))
-      bsMeta.gcName=cells[3];
-     if(!bsMeta.projName&&cells[0]&&cells[0].length>5
-      &&!/^(Quality|Project:|Architect:|Prepared|Proposal|\d)/i.test(cells[0])
-      &&/[A-Za-z]/.test(cells[0]))
-      bsMeta.projName=cells[0];
-     if(!bsMeta.location&&cells[1]&&/^[A-Z]{2}$/.test(cells[1])&&cells[0]&&cells[0].length>1)
-      bsMeta.location=(cells[0]+', '+cells[1]+' '+(cells[2]||'')).trim();
-     if(cells[5]==='Email'&&cells[6]&&cells[6].includes('@')&&!bsMeta.gcEmail) bsMeta.gcEmail=cells[6];
-     if(cells[5]==='Phone'&&cells[6]&&!bsMeta.gcPhone) bsMeta.gcPhone=cells[6];
-     if(cells[0]==='Peter Laitres'&&cells[3]&&!bsMeta.gcContact) bsMeta.gcContact=cells[3];
-    }
-    if(!bsRaw){
-     for(let i=0;i<Math.min(raw.length,20);i++){
-      const r=(raw[i]||[]).map(v=>(v||'').toString().toUpperCase().trim());
-      if(r.includes('ITEM')&&r.includes('COST')&&r.some(v=>v.startsWith('MFR'))){
-       bsRaw=raw; bsHdrIdx=i; break;
-      }
-     }
-    }
-   }
-   if(bsHdrIdx!==-1&&bsRaw){
-    setImportStatus({ok:true,message:'Bidsheet detected — importing line items…'});
-    let {proposalNum,projName,gcName,gcContact,gcEmail,gcPhone,location}=bsMeta;
-    if(!projName) projName=file.name.replace(/\.xlsx?$/i,'').replace(/_/g,' ');
-    if(!gcName) gcName='Unknown GC';
-    let propId='';
-    let existingProp=null;
-    if(proposalNum){
-     existingProp=proposals.find(p=>String(p.id)===proposalNum);
-     if(!existingProp){
-      const {data:dp}=await sb.from('proposals').select('*').eq('id',proposalNum).maybeSingle();
-      if(dp){existingProp=dp;}
-     }
-    }
-    if(!existingProp){
-     const kl=projName.toLowerCase().slice(0,25)+'|'+gcName.toLowerCase().slice(0,25);
-     existingProp=proposals.find(p=>(p.project||'').toLowerCase().slice(0,25)+'|'+(p.gc||'').toLowerCase().slice(0,25)===kl);
-    }
-    propId=existingProp?String(existingProp.id):(proposalNum||String(nextId++));
-    if(!existingProp){
-     const np={id:propId,project:projName,location:location||'',gc:gcName,contact:gcContact,email:gcEmail,phone:gcPhone,submitted:todayStr(),bidAmount:0,contractAmount:null,status:'Submitted',owner:'Peter',estimator:'Peter',bdOwner:'Paul',pm:'',notes:'Imported from '+file.name,retainage:0.1,estMaterial:null,estLabor:null,estOther:null,actMaterial:null,actLabor:null,actOther:null};
-     await sb.from('proposals').insert(np);
-    }
-    const {data:oldEsts}=await sb.from('estimates').select('id').eq('proposalId',propId);
-    if(oldEsts&&oldEsts.length){
-     for(const oe of oldEsts){
-      await sb.from('estimate_items').delete().eq('estimateId',oe.id);
-     }
-     await sb.from('estimates').delete().eq('proposalId',propId);
-    }
-    await sb.from('estimate_items').delete().eq('proposalId',propId);
-    const estId='est_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
-    const freshEst={
-     id:estId, proposalId:propId, proposalNumber:proposalNum||propId,
-     projectName:projName, gcName:gcName,
-     gcContactName:gcContact, gcContactEmail:gcEmail, gcContactPhone:gcPhone,
-     taxRate:0.07, markupRate:0.20,
-     preparedByName:'Peter Laitres', preparedByEmail:'peter@amsfloors.com', preparedByPhone:'9417401555'
-    };
-    // Auto-detect markup from column header e.g. "30% MARKUP"
-    const hdrsForMu=(bsRaw[bsHdrIdx]||[]).map(v=>String(v||'').replace(/^'+/g,'').replace(/'+$/g,'').trim().toUpperCase());
-    const muHdr=hdrsForMu.find(h=>/^\d+(\.\d+)?%\s*MARKUP$/.test(h));
-    if(muHdr){const muPct=parseFloat(muHdr.match(/^(\d+(?:\.\d+)?)/)[1]);if(muPct>0&&muPct<100)freshEst.markupRate=muPct/100;}
-    // Auto-detect tax from AMOUNT/SALES TAX ratio on first data row
-    const amtIdx=hdrsForMu.indexOf('AMOUNT'),taxIdx=hdrsForMu.indexOf('SALES TAX');
-    if(amtIdx>=0&&taxIdx>=0){for(let ri=bsHdrIdx+1;ri<Math.min(bsRaw.length,bsHdrIdx+10);ri++){const r=bsRaw[ri]||[];const a=Number(r[amtIdx]),t=Number(r[taxIdx]);if(a>0&&t>0){freshEst.taxRate=Math.round((t/a)*1000)/1000;break;}}}
-    await sb.from('estimates').insert(freshEst);
-    const headers=(bsRaw[bsHdrIdx]||[]).map(v=>(v||'').toString().trim());
-    const hC={};headers.forEach((h,i)=>{hC[h.toUpperCase()]=i;});
-    const iItem=hC['ITEM']??0, iSize=hC['SIZE']??1, iMfr=hC['MFR']??2, iDesc=hC['DESCRIPTION']??3, iColor=hC['COLOR']??4;
-    const iQty=hC['QTY']??5, iUnit=hC['UNIT']??6, iSfCtn=hC['SF/CTN']??7, iSyCtn=hC['SY/CTN']??8;
-    const iCost=hC['COST']??11, iFreight=hC['FREIGHT']??14, iLabRate=hC['LABOR RATE']??18;
-    let sec='', secName='', ord=0;
-    const items=[];
-    const now=Date.now();
-    for(let ri=bsHdrIdx+1;ri<bsRaw.length;ri++){
-     const row=bsRaw[ri]||[];
-     const c0=(row[iItem]||'').toString().trim();
-     const c1=(row[iSize]||'').toString().trim();
-     const qty=parseFloat((row[iQty]||'').toString().replace(/[^0-9.]/g,''))||0;
-     if(/^\d{6}$/.test(c0)&&qty===0){sec=c0;secName=c1||c0;continue;}
-     if(!c0||!/[A-Za-z]/.test(c0)) continue;
-     if(/TOTAL|BASE BID/i.test(c0)) continue;
-     items.push({
-      id:'ei_'+now+'_'+Math.random().toString(36).slice(2,9)+'_'+ri,
-      estimateId:estId, proposalId:propId,
-      sectionCode:sec, sectionName:secName,
-      isAlternate:false, isVeAlternative:false, sortOrder:ord++,
-      itemCode:c0,
-      size:(row[iSize]||'').toString().trim(),
-      manufacturer:(row[iMfr]||'').toString().trim(),
-      description:(row[iDesc]||'').toString().trim(),
-      color:(row[iColor]||'').toString().trim(),
-      qty:qty, unit:(row[iUnit]||'SF').toString().trim(),
-      sfPerCtn:parseFloat((row[iSfCtn]||'').toString())||null,
-      syPerCtn:parseFloat((row[iSyCtn]||'').toString())||null,
-      costPerUnit:parseFloat((row[iCost]||'').toString().replace(/[^0-9.]/g,''))||0,
-      freight:parseFloat((row[iFreight]||'').toString().replace(/[^0-9.]/g,''))||0,
-      laborRate:parseFloat((row[iLabRate]||'').toString().replace(/[^0-9.]/g,''))||0,
-      displayMode:'full',
-      // PATCH (v37.1): persist new fields with safe defaults — this parser reads raw COST (not MATERIAL), so usedMaterial=false
-      usedMaterial:false, source:'Settings Reimport', multiplier:1, deduction:0,
-     });
-    }
-    for(let i=0;i<items.length;i+=50) await sb.from('estimate_items').insert(items.slice(i,i+50));
-    const [{data:fE},{data:fI},{data:fP}]=await Promise.all([
-     sb.from('estimates').select('*'),
-     fetchAll('estimate_items'),
-     sb.from('proposals').select('*').order('submitted',{ascending:false}),
-    ]);
-    if(fE) setEstimates(fE);
-    if(fI) setEstimateItems(fI);
-    if(fP) setProposals(fP.map(p=>({...p,bidAmount:Number(p.bidAmount)||0})));
-    const tax=0.07, mu=0.20;
-    let sumMatCost=0, sumMatSell=0, sumLab=0;
-    items.forEach(it=>{
-     const qty=Number(it.qty)||0, cpu=Number(it.costPerUnit)||0;
-     const fr=Number(it.freight)||0, lr=Number(it.laborRate)||0;
-     const amt=qty*cpu;
-     const amsCost=amt+amt*tax+fr;
-     const matSell=amsCost+amt*mu;
-     sumMatCost+=amsCost;
-     sumMatSell+=matSell;
-     sumLab+=qty*lr;
-    });
-    const grandTotal=Math.round(sumMatSell+sumLab);
-    const estMat=Math.round(sumMatCost);
-    const estLab=Math.round(sumLab);
-    const {data:curProp}=await sb.from('proposals').select('*').eq('id',propId).maybeSingle();
-    const mergedProp={...(curProp||existingProp||{}),id:propId,bidAmount:grandTotal,estMaterial:estMat,estLabor:estLab,updatedAt:new Date().toISOString()};
-        if(!mergedProp.contractAmount) mergedProp.contractAmount=grandTotal;
-    await sb.from('proposals').upsert(mergedProp);
-    setProposals(ps=>ps.map(p=>String(p.id)===propId?{...p,bidAmount:grandTotal,contractAmount:p.contractAmount||grandTotal,estMaterial:estMat,estLabor:estLab}:p));
-    const {data:fP2}=await sb.from('proposals').select('*').order('submitted',{ascending:false});
-    if(fP2) setProposals(fP2.map(p=>({...p,bidAmount:Number(p.bidAmount)||0,estMaterial:Number(p.estMaterial)||0,estLabor:Number(p.estLabor)||0})));
-    const marginPct=grandTotal>0?Math.round((grandTotal-estMat-estLab)/grandTotal*100):0;
-    setImportStatus({ok:true,message:'✓ Bidsheet imported — '+items.length+' items · '+money(grandTotal)+' total · Est. Margin ~'+marginPct+'% → proposal #'+propId+' "'+projName+'" ('+gcName+'). Open the project → Estimate / Bidsheet tab.'});
-    return;
-   }
-   for(const sheetName of wb.SheetNames){
-    const ws=wb.Sheets[sheetName];
-    let rows=[];
-    for(let hdr=1;hdr<=4;hdr++){
-     const attempt=window.XLSX.utils.sheet_to_json(ws,{defval:null,raw:false,range:hdr-1});
-     if(attempt.length>0){
-      const keys=Object.keys(attempt[0]).map(k=>k.toLowerCase().trim());
-      const hasProject=keys.some(k=>k.includes('project')||k.includes('name'));
-      const hasGC=keys.some(k=>k==='gc'||k.includes('client')||k.includes('contractor'));
-      const hasId=keys.some(k=>k==='#'||k==='id'||k.includes('proposal'));
-      if(hasProject||hasGC||hasId){rows=attempt;break;}
-     }
-    }
-    if(!rows.length) continue;
-    for(const r of rows){
-     const norm={};
-     Object.keys(r).forEach(k=>{
-      const v=r[k];
-      if(v!==null&&v!==undefined&&String(v).trim()!=='')
-       norm[k.toLowerCase().trim()]=v;
-     });
-     const rawProj=norm['project']??norm['project name']??norm['name']??norm['job name']??'';
-     const project=cleanProject(String(rawProj).split(';')[0].split('http')[0].trim());
-     const gc=String(norm['gc']??norm['client']??norm['gc / client']??norm['general contractor']??norm['contractor']??'').trim();
-     if(!project&&!gc) continue;
-     const idVal=norm['proposal #']??norm['proposal#']??norm['#']??norm['id']??norm['project number']??norm['project #']??null;
-     let id=idVal?String(Math.round(Number(String(idVal).replace(/[^0-9.]/g,'')))):'';
-     if(id==='0'||id==='NaN') id='';
-     const rawStatus=String(norm['status']??norm['awarded']??'').trim();
-     const status=rawStatus?mapStatus(rawStatus):'Lead';
-     const submitted=parseDate(norm['submitted']??norm['date submitted']??norm['date']??norm['bid date']??null);
-     const dateAwarded=parseDate(norm['date awarded']??norm['awarded date']??null);
-     const bidAmount=parseNumber(norm['bid amount']??norm['bid']??norm['amount']??norm['proposal amount']??null)??0;
-     const contractAmount=parseNumber(norm['contract amount']??norm['contract amt']??norm['contract']??null)??null;
-     const contact=String(norm['contact']??norm['contact name']??norm['name']??'').trim();
-     const email=String(norm['email']??'').trim();
-     const phone=String(norm['phone']??'').trim();
-     const location=String(norm['location']??norm['city']??norm['address']??'').trim();
-     const owner=String(norm['owner']??norm['bd owner']??norm['bd']??'Paul').trim();
-     const estimator=String(norm['estimator']??norm['est']??'Peter').trim();
-     const bdOwner=String(norm['bd owner']??norm['bd']??norm['owner']??'Paul').trim();
-     const pm=String(norm['pm']??norm['project manager']??'').trim();
-     const notes=String(norm['notes']??norm['comments']??'').trim();
-     if(id&&existingIds.has(id)){
-      newRecs.push({_action:'update',id,project,gc,contact,email,phone,location,submitted,bidAmount,contractAmount,status,owner,estimator,bdOwner,pm,notes});
-      updated++;continue;
-     }
-     const key=`${project.toLowerCase()}|${gc.toLowerCase()}`;
-     if(existingKeys.has(key)) continue;
-     existingKeys.add(key);
-     if(!id||id==='0') id=String(nextId++);
-     newRecs.push({_action:'insert',id,project,gc,contact,email,phone,location,submitted:submitted||(dateAwarded?null:null),bidAmount,contractAmount,status,owner,estimator,bdOwner,pm,notes,retainage:0.1,estMaterial:null,estLabor:null,estOther:null,actMaterial:null,actLabor:null,actOther:null});
-     added++;
-    }
-   }
-   if(newRecs.length){
-    const inserts=newRecs.filter(r=>r._action==='insert').map(({_action,...r})=>r);
-    const updates=newRecs.filter(r=>r._action==='update').map(({_action,...r})=>r);
-    if(inserts.length){for(let i=0;i<inserts.length;i+=50)await sb.from('proposals').insert(inserts.slice(i,i+50));}
-    if(updates.length){for(const u of updates)await sb.from('proposals').upsert(u);}
-    const {data}=await sb.from('proposals').select('*').order('submitted',{ascending:false});
-    if(data) setProposals(data.map(p=>({...p,bidAmount:Number(p.bidAmount)||0})));
-    setImportStatus({ok:true,message:`Done — ${added} added, ${updated} updated.`});
-   } else {
-    setImportStatus({ok:false,message:`No new records found. Checked ${wb.SheetNames.length} sheet(s). Make sure your file has Project and/or GC columns.`});
-   }
-  }catch(e){setImportStatus({ok:false,message:`Import failed: ${e.message}`});}
- };
  const handleExport=()=>{
   const wb=window.XLSX.utils.book_new();
   const ws1=window.XLSX.utils.json_to_sheet(proposals.map(p=>({'#':p.id,'Project':p.project,'Location':p.location,'GC':p.gc,'Contact':p.contact,'Email':p.email,'Phone':p.phone,'Submitted':p.submitted,'Bid Amount':p.bidAmount,'Contract Amt':p.contractAmount,'Status':p.status,'Estimator':p.estimator||p.owner||'','BD Owner':p.bdOwner||p.owner||'','PM':p.pm||'','Next Action':p.nextAction||'','Next Action Date':p.nextActionDate||'','Lost Reason':p.lostReason||'','Notes':p.notes})));
@@ -4811,7 +4896,7 @@ function App() {
     {view==='gcs'&&!selectedGC&&<GCIntelView gcStats={gcStats} proposals={proposals} onSelectGC={setSelectedGC} settings={settings}/>}
     {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
     {view==='active'&&<ActiveJobsView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
-    {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal} sb={sb} onImported={async()=>{
+    {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal} sb={sb} estimateItems={estimateItems} onImported={async()=>{
      const [{data:fP},{data:fE},{data:fI}]=await Promise.all([
       sb.from('proposals').select('*').order('submitted',{ascending:false}),
       sb.from('estimates').select('*'),
