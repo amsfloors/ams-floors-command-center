@@ -3559,7 +3559,7 @@ const FldSel=({label,value,edit,options,onChange,render})=>(
  {edit?<select value={value||''} onChange={e=>onChange(e.target.value)} className="w-full px-2 py-1 text-sm border border-stone-300 bg-white rounded-sm focus:outline-none focus:border-stone-600">{options.map(o=><option key={o} value={o}>{o}</option>)}</select>:<div className="text-sm text-stone-900">{render?render(value):(value||'—')}</div>}
  </div>
 );
-const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLineItem,onDeleteLineItem,onAddNote,onSelectGC,estimate,estimateItems,onSaveEstimate,onAddEstimateItem,onUpdateEstimateItem,onDeleteEstimateItem,onAddVEAlternative,allEstimateItems,suppliers,installers,allGCs,gcs,gcStats})=>{
+const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onAddLineItem,onUpdateLineItem,onDeleteLineItem,onAddNote,onSelectGC,estimate,estimateItems,onSaveEstimate,onAddEstimateItem,onUpdateEstimateItem,onDeleteEstimateItem,onAddVEAlternative,allEstimateItems,suppliers,installers,allGCs,gcs,gcStats})=>{
  const [edit,setEdit]=useState(false);
  const [draft,setDraft]=useState(proposal);
  const [previewHtml,setPreviewHtml]=useState(null);
@@ -3594,6 +3594,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onAddLineItem,onUpdateLi
       <div className="min-w-0"><div className="text-xs text-stone-500 font-mono">#{proposal.id}</div><div className="font-serif text-xl text-stone-900 truncate">{proposal.project||'Untitled'}</div></div>
      </div>
      <div className="flex items-center gap-2">
+      {!edit&&<button onClick={()=>{if(window.confirm('Delete "'+(proposal.project||'this project')+'"  (#'+proposal.id+')?\n\nThis permanently removes the project and its estimate and ALL line items. This cannot be undone.')){onDelete(proposal.id);}}} className="text-sm px-3 py-1.5 rounded-sm border border-rose-300 text-rose-700 hover:bg-rose-50 flex items-center gap-1.5"><Ico n="trash2" size={13}/>Delete</button>}
       {!edit?<button onClick={()=>setEdit(true)} className="text-sm bg-stone-900 text-white px-3 py-1.5 rounded-sm hover:bg-stone-800 flex items-center gap-1.5"><Ico n="edit3" size={13}/>Edit</button>:
       <><button onClick={()=>{setDraft(proposal);setEdit(false);}} className="text-sm px-3 py-1.5 rounded-sm border border-stone-300 hover:bg-stone-100">Cancel</button>
       <button onClick={save} className="text-sm bg-emerald-700 text-white px-3 py-1.5 rounded-sm hover:bg-emerald-800 flex items-center gap-1.5"><Ico n="save" size={13}/>Save</button></>}
@@ -4711,6 +4712,27 @@ function App() {
   setProposals(ps=>ps.map(p=>p.id===next.id?updated:p));
   await sb.from('proposals').upsert({...updated,id:String(updated.id)});
  };
+ // Delete a whole proposal + its estimate(s) + all estimate_items + line_items.
+ // Children-first, same order/filters as the M15 clean-replace path. Aborts on the
+ // first DB error WITHOUT touching local state, so a partial server-side failure is
+ // surfaced rather than silently desynced from the UI.
+ const deleteProposal=async(id)=>{
+  const pid=String(id);
+  const ce=async(label,p)=>{const{error}=await p; if(error) throw new Error(label+' — '+(error.message||error.details||error.code||'rejected by database'));};
+  try{
+   const {data:ests}=await sb.from('estimates').select('id').eq('proposalId',pid);
+   if(ests&&ests.length){ for(const e of ests) await ce('clear items by estimate',sb.from('estimate_items').delete().eq('estimateId',e.id)); }
+   await ce('clear items by proposal',sb.from('estimate_items').delete().eq('proposalId',pid));
+   await ce('clear estimates',sb.from('estimates').delete().eq('proposalId',pid));
+   await ce('clear line items',sb.from('line_items').delete().eq('proposalId',pid));
+   await ce('delete proposal',sb.from('proposals').delete().eq('id',pid));
+  }catch(err){ alert('Delete failed — '+err.message+'\n\nNo further rows were removed. The project was NOT fully deleted.'); return; }
+  setEstimateItems(eis=>eis.filter(i=>String(i.proposalId)!==pid));
+  setEstimates(es=>es.filter(e=>String(e.proposalId)!==pid));
+  setLineItems(ls=>ls.filter(l=>String(l.proposalId)!==pid));
+  setProposals(ps=>ps.filter(p=>String(p.id)!==pid));
+  setSelectedId(null);
+ };
  const addNewProject=async(rec)=>{
   const key=`${(rec.project||'').toLowerCase().trim()}|${(rec.gc||'').toLowerCase().trim()}`;
   const dup=proposals.find(p=>`${(p.project||'').toLowerCase().trim()}|${(p.gc||'').toLowerCase().trim()}`===key);
@@ -4947,6 +4969,7 @@ function App() {
     lineItems={selectedLineItems}
     onClose={()=>setSelectedId(null)}
     onSave={saveProposal}
+    onDelete={deleteProposal}
     onAddLineItem={addLineItem}
     onUpdateLineItem={updateLineItem}
     onDeleteLineItem={deleteLineItem}
