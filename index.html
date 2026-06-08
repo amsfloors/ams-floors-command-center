@@ -3618,13 +3618,16 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
  const [activeTab,setActiveTab]=useState('details');
  useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('details');},[proposal?.id]);
  if(!proposal) return null;
- const save=()=>{onSave(draft);setEdit(false);};
+ // [STALE-DRAFT FIX 2026-06-08] Read the LATEST draft via the functional updater, not the closure
+ // copy. Without this, a header-sync that just ran (setDraft) hadn't applied to this closure yet,
+ // so the master Save persisted the pre-edit proposal and wiped the synced header fields.
+ const save=()=>{setDraft(d=>{onSave(d);return d;});setEdit(false);};
  // [HEADER->PROPOSAL SYNC 2026-06-08] Estimate Header writes the estimates table; Project Details
  // reads/edits the proposals draft. When the header saves shared fields, merge them into this
  // drawer's draft (so Details shows them immediately) and persist via onSave. Triggered by the
  // header's discrete onBlur save — NOT a proposal-content effect — so it can't reintroduce the
  // per-keystroke kick-out the [proposal?.id] reset effect was added to fix.
- const syncProposalFromHeader=(fields)=>{const merged={...draft,...fields};setDraft(merged);onSave(merged);};
+ const syncProposalFromHeader=(fields)=>{setDraft(d=>{const merged={...d,...fields};onSave(merged);return merged;});};
  const materials=lineItems.filter(l=>l.type==='Material');
  const labor=lineItems.filter(l=>l.type==='Labor');
  const other=lineItems.filter(l=>l.type==='Other');
