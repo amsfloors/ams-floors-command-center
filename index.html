@@ -3374,9 +3374,13 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
        })}
       </div>
      </div>
-     <button onClick={() => setHeaderExpanded(!headerExpanded)} className="text-xs text-stone-600 hover:text-stone-900 flex items-center gap-1">
+     {/* [EXPAND/COLLAPSE FIX 2026-06-08] Rendered as a div, not a <button>, so it stays clickable
+         in view mode. <fieldset disabled={!edit}> disables form controls (button/input/select) but
+         NOT plain divs. This is a pure-view toggle of local headerExpanded state — no data write —
+         so it must work without Edit. F/T/L and line-item edits stay gated (they're real controls). */}
+     <div role="button" tabIndex={0} onClick={() => setHeaderExpanded(v => !v)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setHeaderExpanded(v => !v); } }} className="text-xs text-stone-600 hover:text-stone-900 flex items-center gap-1 cursor-pointer select-none">
       {headerExpanded ? 'Collapse' : 'Expand'} <Ico n={headerExpanded ? 'chevDown' : 'chevRight'} size={12} />
-     </button>
+     </div>
     </div>
     {headerExpanded && (
      <div className="p-4 grid grid-cols-3 gap-x-4 gap-y-2 text-xs bg-stone-50/50">
