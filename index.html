@@ -2173,6 +2173,21 @@ async function fetchAll(table, opts){
  return {data:all,error:null};
 }
 const SEED_PROPOSALS = window._SEED;
+// [SCHEMA FIX 2026-06-08] The live proposals column is `contractAmountActual` — there is NO
+// `contractAmount` column (SCHEMA_TRUTH.md §3). The app uses `contractAmount` internally for
+// reads, so we mirror the real column into it on load (below) and translate it back on every
+// write here. PROPOSAL_COLS is the exact live column set; any other key (computed fields,
+// phantom columns) is dropped, so a stray property can never again be rejected by the schema
+// cache mid-write (which silently lost new leads, edits, and renumbers).
+const PROPOSAL_COLS=['id','project','location','gc','contact','email','phone','submitted','bidAmount','contractAmountActual','status','owner','notes','sharepoint','retainage','estMaterial','estLabor','estOther','actMaterial','actLabor','actOther','lastTouched','createdAt','updatedAt','nextAction','nextActionDate','lostReason','lostToPrice','wonByPrice','estimator','bdOwner','pm','projectNumber','architectId','plansDate'];
+function toDbProposal(obj){
+ const src={...obj};
+ if(src.contractAmount!==undefined) src.contractAmountActual=src.contractAmount; // UI name -> DB name
+ if(src.id!=null) src.id=String(src.id);
+ const out={};
+ for(const k of PROPOSAL_COLS) if(src[k]!==undefined) out[k]=src[k];
+ return out;
+}
 const STATUS_CONFIG = {
  'Lead':        { color:'bg-stone-200 text-stone-700',       dot:'bg-stone-500',    pipeline:'open',    order:1 },
  'Bidding':     { color:'bg-sky-100 text-sky-800',           dot:'bg-sky-500',      pipeline:'open',    order:2 },
@@ -4669,7 +4684,7 @@ function App() {
   const channel=sb.channel('ams_changes')
    .on('postgres_changes',{event:'*',schema:'public',table:'proposals'},payload=>{
     if(payload.eventType==='INSERT') setProposals(ps=>{const exists=ps.find(p=>p.id===payload.new.id);return exists?ps:[payload.new,...ps];});
-    else if(payload.eventType==='UPDATE') setProposals(ps=>ps.map(p=>p.id===payload.new.id?{...payload.new,bidAmount:Number(payload.new.bidAmount)||0}:p));
+    else if(payload.eventType==='UPDATE') setProposals(ps=>ps.map(p=>p.id===payload.new.id?{...payload.new,bidAmount:Number(payload.new.bidAmount)||0,contractAmount:(payload.new.contractAmountActual!=null?payload.new.contractAmountActual:null)}:p));
     else if(payload.eventType==='DELETE') setProposals(ps=>ps.filter(p=>p.id!==payload.old.id));
    })
    .on('postgres_changes',{event:'*',schema:'public',table:'line_items'},payload=>{
@@ -4706,7 +4721,8 @@ function App() {
  const saveProposal=async(next)=>{
   const updated={...next,updatedAt:new Date().toISOString()};
   setProposals(ps=>ps.map(p=>p.id===next.id?updated:p));
-  await sb.from('proposals').upsert({...updated,id:String(updated.id)});
+  const {error}=await sb.from('proposals').upsert(toDbProposal(updated));
+  if(error) alert('Could not save changes — '+(error.message||error.code||'rejected by database')+'\n\nYour edits are shown on screen but were NOT saved. Refresh to see the last saved version.');
  };
  // Delete a whole proposal + its estimate(s) + all estimate_items + line_items.
  // Children-first, same order/filters as the M15 clean-replace path. Aborts on the
@@ -4744,7 +4760,7 @@ function App() {
   if(!src){ alert('Could not find project #'+oId+' to renumber.'); return; }
   const ce=async(label,p)=>{const{error}=await p; if(error) throw new Error(label+' — '+(error.message||error.details||error.code||'rejected by database'));};
   try{
-   await ce('create renumbered proposal',sb.from('proposals').insert({...src,id:nId,updatedAt:new Date().toISOString()}));
+   await ce('create renumbered proposal',sb.from('proposals').insert(toDbProposal({...src,id:nId,updatedAt:new Date().toISOString()})));
    await ce('repoint estimates',sb.from('estimates').update({proposalId:nId,proposalNumber:nId}).eq('proposalId',oId));
    await ce('repoint estimate_items',sb.from('estimate_items').update({proposalId:nId,projectNumber:nId}).eq('proposalId',oId));
    await ce('repoint line items',sb.from('line_items').update({proposalId:nId}).eq('proposalId',oId));
@@ -4763,17 +4779,18 @@ function App() {
   if(dup) return;
   const r={...rec,id:String(rec.id)};
   setProposals(ps=>[r,...ps]);
-  await sb.from('proposals').insert(r);
+  const {error}=await sb.from('proposals').insert(toDbProposal(r));
+  if(error){ setProposals(ps=>ps.filter(p=>p.id!==r.id)); alert('Could not save the new project — '+(error.message||error.code||'rejected by database')+'\n\nIt has been removed from the list (it was never saved to the database).'); }
  };
  const markContacted=async(id,note)=>{
   const stamp=todayStr();
   const entry=note?`[${stamp}] ${note}`:`[${stamp}] Called / contacted`;
-  setProposals(ps=>ps.map(p=>{if(p.id!==id)return p;const updated={...p,lastTouched:stamp,notes:p.notes?`${entry}\n${p.notes}`:entry};sb.from('proposals').upsert({...updated,id:String(updated.id)});return updated;}));
+  setProposals(ps=>ps.map(p=>{if(p.id!==id)return p;const updated={...p,lastTouched:stamp,notes:p.notes?`${entry}\n${p.notes}`:entry};sb.from('proposals').upsert(toDbProposal(updated));return updated;}));
  };
  const addNote=async(id,text)=>{
   const stamp=todayStr();
   const entry=`[${stamp}] ${text}`;
-  setProposals(ps=>ps.map(p=>{if(p.id!==id)return p;const updated={...p,lastTouched:stamp,notes:p.notes?`${entry}\n${p.notes}`:entry};sb.from('proposals').upsert({...updated,id:String(updated.id)});return updated;}));
+  setProposals(ps=>ps.map(p=>{if(p.id!==id)return p;const updated={...p,lastTouched:stamp,notes:p.notes?`${entry}\n${p.notes}`:entry};sb.from('proposals').upsert(toDbProposal(updated));return updated;}));
  };
  const addLineItem=async(proposalId,type)=>{
   const li={id:`li_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,proposalId:String(proposalId),type,item:'',vendor:'',qty:null,unit:'',estUnit:null,estTotal:null,actUnit:null,actTotal:null,status:'Pending'};
@@ -4982,7 +4999,7 @@ function App() {
       sb.from('estimates').select('*'),
       fetchAll('estimate_items'),
      ]);
-     if(fP)setProposals(fP.map(p=>({...p,bidAmount:Number(p.bidAmount)||0,estMaterial:Number(p.estMaterial)||0,estLabor:Number(p.estLabor)||0})));
+     if(fP)setProposals(fP.map(p=>({...p,bidAmount:Number(p.bidAmount)||0,estMaterial:Number(p.estMaterial)||0,estLabor:Number(p.estLabor)||0,contractAmount:(p.contractAmountActual!=null?p.contractAmountActual:null)})));
      if(fE)setEstimates(fE);
      if(fI)setEstimateItems(fI);
     }}/>}
