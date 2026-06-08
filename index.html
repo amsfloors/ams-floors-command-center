@@ -4388,27 +4388,33 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported }) => {
     if(totals.nIncl===0) b.push('Include at least one line');
     return b; };
 
+  // Supabase returns {error} instead of throwing — so EVERY write must be checked or a failed
+  // save reports false success (the test9999 silent-failure bug). chk() makes failures loud.
+  const chk=async(label,p)=>{ const {data,error}=await p; if(error) throw new Error(label+' — '+(error.message||error.details||error.code||'rejected by database')); return data; };
   const doSave=async(confirmedUpdate)=>{
     const propId=String(job.projectNumber).trim();
     setSaving(true); setStatus({ok:true,msg:'Saving…'});
     try{
       // existence-check guard: shared namespace, so a reused number may hit a real project
-      const {data:existing}=await sb.from('proposals').select('id,project').eq('id',propId).maybeSingle();
+      const existing=await chk('number lookup',sb.from('proposals').select('id,project').eq('id',propId).maybeSingle());
       if(existing && !confirmedUpdate){ setCollision({existing}); setSaving(false); setStatus(null); return; }
       const estId='est_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
       const {proposalRow,estimateRow,itemRows,totals:t}=m15BuildPayloads({lines,job:{...job,submitted:new Date().toISOString().slice(0,10)},propId,estId,isUpdate:!!existing});
-      // clean replace for this proposal (idempotent re-save) — mirrors the proven shape, writes unitCost
-      const {data:oldEsts}=await sb.from('estimates').select('id').eq('proposalId',propId);
-      if(oldEsts&&oldEsts.length){ for(const oe of oldEsts) await sb.from('estimate_items').delete().eq('estimateId',oe.id); await sb.from('estimates').delete().eq('proposalId',propId); }
-      await sb.from('estimate_items').delete().eq('proposalId',propId);
-      if(existing) await sb.from('proposals').upsert(proposalRow); else await sb.from('proposals').insert(proposalRow);
-      await sb.from('estimates').insert(estimateRow);
-      for(let i=0;i<itemRows.length;i+=50) await sb.from('estimate_items').insert(itemRows.slice(i,i+50));
+      // proposal FIRST — if the number is the wrong format the DB rejects it here and we abort
+      // before touching estimates/items (no orphans, no false success).
+      if(existing) await chk('save proposal',sb.from('proposals').upsert(proposalRow));
+      else         await chk('save proposal',sb.from('proposals').insert(proposalRow));
+      // clean replace of any prior estimate + items for this proposal (idempotent re-save), writes unitCost
+      const oldEsts=await chk('check existing estimates',sb.from('estimates').select('id').eq('proposalId',propId));
+      if(oldEsts&&oldEsts.length){ for(const oe of oldEsts) await chk('clear old items',sb.from('estimate_items').delete().eq('estimateId',oe.id)); await chk('clear old estimates',sb.from('estimates').delete().eq('proposalId',propId)); }
+      await chk('clear old items',sb.from('estimate_items').delete().eq('proposalId',propId));
+      await chk('save estimate',sb.from('estimates').insert(estimateRow));
+      for(let i=0;i<itemRows.length;i+=50) await chk('save line items',sb.from('estimate_items').insert(itemRows.slice(i,i+50)));
       if(onImported) await onImported();
       setCollision(null); setSaving(false);
       setStatus({ok:true,msg:'✓ Saved '+(existing?'(updated) ':'')+'#'+propId+' "'+job.projectName+'" — '+itemRows.length+' items · base '+money(t.base)+'. Open the project to generate proposal / PO / WO.'});
       setLines(null);
-    }catch(e){ setSaving(false); setStatus({ok:false,msg:'Save failed: '+e.message}); }
+    }catch(e){ setSaving(false); setStatus({ok:false,msg:'Save failed: '+e.message+(/bigint|integer|invalid input syntax|numeric/i.test(e.message)?' — the project number must be numeric (match your existing project numbers, e.g. 1898).':'')}); }
   };
 
   const cellCls='px-2 py-1 text-xs';
