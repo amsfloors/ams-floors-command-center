@@ -2188,6 +2188,21 @@ function toDbProposal(obj){
  for(const k of PROPOSAL_COLS) if(src[k]!==undefined) out[k]=src[k];
  return out;
 }
+// [SCHEMA GUARD 2026-06-08] Same protection as toDbProposal for the other write-heavy tables.
+// Several save paths spread the whole in-memory object ({...next}) into an insert/upsert; if a
+// stray (non-column) key ever rides along, PostgREST rejects the ENTIRE write (the silent
+// failure that ate new leads). These keep only real columns and drop anything else. Column
+// lists are the exact live names from SCHEMA_TRUTH.md §4. NOTE: usedMaterial/multiplier/
+// deduction/height are intentionally KEPT — the calc engine reads them (calcEstimateItem) and
+// migrated rows carry them; the doc's "forbidden to write" rule conflicts with that and is
+// flagged for Peter review, NOT enforced here (stripping them would change penny-accurate math).
+const ESTIMATE_COLS=['id','proposalId','proposalNumber','projectName','projectAddressLine1','projectAddressLine2','projectCity','projectState','projectZip','projectNumber','plansDated','addendum','gcId','gcName','gcAddressLine1','gcAddressLine2','gcCity','gcState','gcZip','gcContactName','gcContactEmail','gcContactPhone','architectName','architectAddress','architectEmail','architectPhone','preparedByName','preparedByEmail','preparedByPhone','taxRate','markupRate','baseBidNotes','alternatesNotes','proposalNotes','baseBidTotal','alternatesTotal','createdAt','updatedAt'];
+const ESTIMATE_ITEM_COLS=['id','estimateId','proposalId','parentItemId','sortOrder','sectionCode','sectionName','isAlternate','alternateGroupName','itemCode','size','manufacturer','description','color','qty','unit','sfPerCtn','syPerCtn','orderQty','orderUnit','orderQtyOverride','unitCost','freight','laborRate','displayMode','supplierId','supplierName','installerId','installerName','isVeAlternative','veNote','notes','createdAt','updatedAt','usedMaterial','multiplier','deduction','height','source','coveragePerUnit','alternateType','scenarioId','materialActual','lineMarkupRate'];
+const LINE_ITEM_COLS=['id','proposalId','type','item','vendor','qty','unit','estUnit','estTotal','actUnit','actTotal','status','createdAt'];
+const pickCols=(obj,cols)=>{const out={};for(const k of cols) if(obj[k]!==undefined) out[k]=obj[k];return out;};
+const toDbEstimate=obj=>pickCols(obj,ESTIMATE_COLS);
+const toDbEstimateItem=obj=>pickCols(obj,ESTIMATE_ITEM_COLS);
+const toDbLineItem=obj=>pickCols(obj,LINE_ITEM_COLS);
 const STATUS_CONFIG = {
  'Lead':        { color:'bg-stone-200 text-stone-700',       dot:'bg-stone-500',    pipeline:'open',    order:1 },
  'Bidding':     { color:'bg-sky-100 text-sky-800',           dot:'bg-sky-500',      pipeline:'open',    order:2 },
@@ -4840,11 +4855,11 @@ function App() {
  const addLineItem=async(proposalId,type)=>{
   const li={id:`li_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,proposalId:String(proposalId),type,item:'',vendor:'',qty:null,unit:'',estUnit:null,estTotal:null,actUnit:null,actTotal:null,status:'Pending'};
   setLineItems(ls=>[...ls,li]);
-  await sb.from('line_items').insert(li);
+  await sb.from('line_items').insert(toDbLineItem(li));
  };
  const updateLineItem=async(next)=>{
   setLineItems(ls=>ls.map(l=>l.id===next.id?next:l));
-  await sb.from('line_items').upsert(next);
+  await sb.from('line_items').upsert(toDbLineItem(next));
  };
  const deleteLineItem=async(id)=>{
   setLineItems(ls=>ls.filter(l=>l.id!==id));
@@ -4892,14 +4907,14 @@ function App() {
    preparedByPhone: '9417401555',
   };
   setEstimates(es => [...es, newEst]);
-  sb.from('estimates').insert(newEst).then(({ error }) => {
+  sb.from('estimates').insert(toDbEstimate(newEst)).then(({ error }) => {
    if (error) console.error('Failed to create estimate:', error);
   });
  }, [selectedId, proposals]);
  const saveEstimate = async (next) => {
   const updated = { ...next, updatedAt: new Date().toISOString() };
   setEstimates(es => es.map(e => e.id === next.id ? updated : e));
-  await sb.from('estimates').upsert(updated);
+  await sb.from('estimates').upsert(toDbEstimate(updated));
  };
  const addEstimateItem = async (sectionCode, sectionName, isAlternate = false) => {
   if (!selectedEstimate) return;
@@ -4926,12 +4941,12 @@ function App() {
    usedMaterial: false, source: 'Manual', multiplier: 1, deduction: 0,
   };
   setEstimateItems(eis => [...eis, newItem]);
-  await sb.from('estimate_items').insert(newItem);
+  await sb.from('estimate_items').insert(toDbEstimateItem(newItem));
  };
  const updateEstimateItem = async (next) => {
   const updated = { ...next, updatedAt: new Date().toISOString() };
   setEstimateItems(eis => eis.map(i => i.id === next.id ? updated : i));
-  await sb.from('estimate_items').upsert(updated);
+  await sb.from('estimate_items').upsert(toDbEstimateItem(updated));
  };
  const deleteEstimateItem = async (id) => {
   const children = estimateItems.filter(i => i.parentItemId === id);
@@ -4971,7 +4986,7 @@ function App() {
    usedMaterial: false, source: 'Manual', multiplier: Number(parent.multiplier)||1, deduction: Number(parent.deduction)||0,
   };
   setEstimateItems(eis => [...eis, newItem]);
-  await sb.from('estimate_items').insert(newItem);
+  await sb.from('estimate_items').insert(toDbEstimateItem(newItem));
  };
  useEffect(() => {
   if (!selectedEstimate) return;
