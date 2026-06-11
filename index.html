@@ -2088,29 +2088,107 @@ window.genProposal=function(est,items,notes,proposal){
 // Defaults of 1/0/0/null mean existing line items behave identically to pre-patch
 window._effQ=function(i){var q=Number(i.qty)||0,m=Number(i.multiplier)||1,d=Number(i.deduction)||0,h=Number(i.height)||0;var e=q;if(d>0)e=Math.max(0,e-d);if(m!==1)e=e*m;if(h>0)e=e*h;return e;};
 window._ordQ=function(i){var e=window._effQ(i);if(i.sfPerCtn&&Number(i.sfPerCtn)>0&&e>0)return Math.ceil(e/Number(i.sfPerCtn));return e;};
-window.genSupplierPOs=function(est,items,proposal){
-  var tax=(est.taxRate!=null?est.taxRate:0.07),fmt=function(n){return'$'+Math.round(n||0).toLocaleString('en-US');};
+// PETER 6/10 #4 (rebuilt to match sample PO 1573-16 AHF): one page per supplier PO with the
+// full header/vendor/ship-to/freight-contact/account#/totals layout. Cost law unchanged:
+// reads unitCost from estimate_items (costPerUnit fallback is a no-op on live rows);
+// line amount = orderQty x per-order-unit cost. Currency renders to the cent (sample shows cents).
+// Call shape matches the app's generator invocation: (est, items, _notes, proposal, suppliers).
+window.genSupplierPOs=function(est,items,_notes,proposal,suppliers){
+  // legacy-shape guard: old callers passed (est, items, proposal)
+  if(proposal===undefined && _notes && typeof _notes==='object'){ proposal=_notes; _notes=''; }
+  var tax=(est.taxRate!=null?est.taxRate:0.07);
+  var fmt=function(n){return '$'+(Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});};
+  var esc=function(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');};
   var projName=(proposal&&proposal.project)||est.projectName||'';
-  var gc=(proposal&&proposal.gc)||est.gcName||'';
   var location=(proposal&&proposal.location)||est.projectAddressLine1||'';
+  var projCSZ=[est.projectCity,est.projectState,est.projectZip].filter(Boolean).join(', ').replace(/, ([A-Z]{2})$/,' $1');
   var propNum=(proposal&&proposal.id)||est.proposalNumber||'';
+  var supByName={};(suppliers||[]).forEach(function(s){ if(s&&s.name) supByName[String(s.name).trim().toLowerCase()]=s; });
+  var findSupplier=function(name){ var k=String(name||'').trim().toLowerCase(); if(supByName[k])return supByName[k];
+    for(var key in supByName){ if(key&&(k.indexOf(key)>=0||key.indexOf(k)>=0)) return supByName[key]; } return null; };
   var byS={};(items||[]).filter(function(i){return!i.isVeAlternative;}).forEach(function(i){var k=((i.manufacturer||i.supplierName||'Supplier').trim());if(!byS[k])byS[k]=[];byS[k].push(i);});
-  var today=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}),n=1;
-  var H="<!DOCTYPE html><html><head><meta charset='UTF-8'><style>body{font-family:Arial,sans-serif;font-size:11px;color:#1c1917}.pg{max-width:850px;margin:0 auto;padding:32px;page-break-after:always}.pg:last-child{page-break-after:auto}table{width:100%;border-collapse:collapse;margin:10px 0}th{background:#1c1917;color:#fff;padding:5px 8px;font-size:10px;text-transform:uppercase}td{padding:5px 8px;border-bottom:1px solid #e7e5e4}tfoot td{background:#f5f5f4;font-weight:700}@media print{.np{display:none}}</style></head><body>";
-    Object.keys(byS).forEach(function(sup){
-    // PATCH (v37.1a): supplier PO arithmetic must reconcile on the page.
-    //   • Raw-COST items: costPerUnit is already per-order-unit → use as-is.
-    //   • MATERIAL-path items: costPerUnit is per-SF → multiply by sfPerCtn to get per-carton price.
-    // Either way: line amount = orderQty × per-order-unit cost (what the supplier invoices).
+  var today=new Date().toLocaleDateString('en-US'); var n=1;
+  var H="<!DOCTYPE html><html><head><meta charset='UTF-8'><style>"
+   +"body{font-family:Arial,sans-serif;font-size:11px;color:#1c1917;margin:0}"
+   +".pg{width:850px;margin:0 auto;padding:30px 36px;page-break-after:always;position:relative;min-height:1050px;box-sizing:border-box}"
+   +".pg:last-child{page-break-after:auto}"
+   +"table.items{width:100%;border-collapse:collapse;margin-top:14px}"
+   +"table.items th{background:#3f5e7a;color:#fff;padding:4px 8px;font-size:10px;text-transform:uppercase;border:1px solid #3f5e7a}"
+   +"table.items td{padding:4px 8px;border:1px solid #cbd5e1;height:16px}"
+   +".band{background:#3f5e7a;color:#fff;font-size:10px;font-weight:700;text-transform:uppercase;padding:3px 8px}"
+   +".cell{border:1px solid #cbd5e1;padding:6px 8px;font-size:11px;vertical-align:top}"
+   +"@media print{.np{display:none}}"
+   +"</style></head><body>";
+  Object.keys(byS).forEach(function(supName){
     var perOrderCost=function(i){var c=Number(i.unitCost)||Number(i.costPerUnit)||0;if(i.usedMaterial&&i.sfPerCtn&&Number(i.sfPerCtn)>0)return c*Number(i.sfPerCtn);return c;};
-    var its=byS[sup],tot=its.reduce(function(s,i){var oq=window._ordQ(i),c=perOrderCost(i),f=Number(i.freight)||0,a=oq*c;var effTax=i.usedMaterial?0:tax;return s+a+a*effTax+f;},0);
-    H+="<div class='pg'><div style='display:flex;justify-content:space-between;padding-bottom:12px;margin-bottom:14px;border-bottom:2px solid #1c1917'>";
-    H+="<div><img src='data:image/png;base64,"+_LOGO+"' style='height:40px'/><div style='font-size:16px;font-weight:700;margin-top:6px'>PO #"+String(n++).padStart(4,'0')+" \u2014 "+today+"</div><div style='font-size:11px;color:#666;margin-top:2px'>Proposal #"+propNum+(gc?' &nbsp;&middot;&nbsp; GC: '+gc:'')+"</div></div>";
-    H+="<div style='text-align:right'><div style='font-weight:700;font-size:13px'>"+sup+"</div><div style='color:#888;font-size:10px;margin-top:2px'>Ship to job site:</div><div style='font-weight:700'>"+projName+"</div>"+(location?"<div style='color:#666;font-size:11px'>"+location+"</div>":"")+"</div></div>";
-    H+="<table><thead><tr><th>Item</th><th>Description</th><th>Color / Spec</th><th style='text-align:right'>Order Qty</th><th style='text-align:right'>Unit Cost</th><th style='text-align:right'>Amt</th></tr></thead><tbody>";
-    its.forEach(function(i){var oq=window._ordQ(i),c=perOrderCost(i);var oqDisplay=i.sfPerCtn&&Number(i.sfPerCtn)>0?oq+' CTN':oq+' '+(i.unit||'SF');H+="<tr><td>"+(i.itemCode||'')+"</td><td>"+(i.description||'')+"</td><td>"+(i.color||'')+"</td><td style='text-align:right'>"+oqDisplay+"</td><td style='text-align:right'>"+fmt(c)+"</td><td style='text-align:right'>"+fmt(oq*c)+"</td></tr>";});
-    H+="</tbody><tfoot><tr><td colspan='4'></td><td>Subtotal</td><td style='text-align:right'>"+fmt(tot)+"</td></tr></tfoot></table>";
-    H+="<div style='margin-top:20px;padding-top:12px;border-top:1px solid #e7e5e4;display:grid;grid-template-columns:1fr 1fr;gap:20px;font-size:11px'><div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>AMS Floors LLC -- Ordered by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date</div></div><div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:8px'>"+sup+" -- Confirmed by</div><div style='height:32px;border-bottom:1px solid #888;margin-bottom:3px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp; Date &nbsp;&nbsp;&nbsp;&nbsp; ETA: ____________</div></div></div>";
+    var its=byS[supName];
+    var sup=findSupplier(supName);
+    var subtotal=0, freight=0;
+    its.forEach(function(i){ var oq=window._ordQ(i),c=perOrderCost(i); subtotal+=oq*c; freight+=Number(i.freight)||0; });
+    var taxAmt=subtotal*tax;
+    var total=subtotal+taxAmt+freight;
+    var poNo=(propNum?propNum+'-':'')+(n++);
+    H+="<div class='pg'>";
+    // ---- top header: company | logo | PURCHASE ORDER / date / PO# ----
+    H+="<div style='display:flex;justify-content:space-between;align-items:flex-start'>";
+    H+="<div><div style='font-size:22px;font-weight:700;color:#8a6d3b'>AMS Floors, LLC</div>"
+      +"<div style='font-size:11px;margin-top:2px'>1001 Corporate Av., Ste. 100<br/>North Port, FL 34289<br/>(941)238-6614</div></div>";
+    H+="<img src='data:image/png;base64,"+_LOGO+"' style='height:64px'/>";
+    H+="<div style='text-align:right'><div style='font-size:24px;font-weight:700;font-style:italic;color:#3f5e7a'>PURCHASE ORDER</div>"
+      +"<table style='margin-left:auto;margin-top:4px;font-size:11px'><tr><td style='padding:1px 10px 1px 0;text-align:right;color:#555'>DATE</td><td style='text-align:right'>"+today+"</td></tr>"
+      +"<tr><td style='padding:1px 10px 1px 0;text-align:right;color:#555'>PO #</td><td style='text-align:right;font-weight:700'>"+esc(poNo)+"</td></tr></table></div></div>";
+    // ---- vendor | project | ship-to band ----
+    H+="<table style='width:100%;border-collapse:collapse;margin-top:16px'><tr>"
+      +"<td style='width:34%'><div class='band'>Vendor</div></td><td style='width:6px'></td>"
+      +"<td style='width:30%'><div class='band'>Project</div></td><td style='width:6px'></td>"
+      +"<td style='width:30%'><div class='band'>Ship To:</div></td></tr><tr>";
+    H+="<td class='cell'><div style='font-weight:700'>"+esc(supName)+"</div>";
+    if(sup){ if(sup.addressLine1)H+="<div>"+esc(sup.addressLine1)+"</div>"; if(sup.addressLine2)H+="<div>"+esc(sup.addressLine2)+"</div>";
+      var scsz=[sup.city,sup.state,sup.zip].filter(Boolean).join(', ').replace(/, (\d{5})/,' $1'); if(scsz)H+="<div>"+esc(scsz)+"</div>"; }
+    H+="<div style='margin-top:6px'>Vendor Rep: "+esc(sup&&sup.contactName||'')+"</div>"
+      +"<div>Phone: "+esc(sup&&sup.contactPhone||'')+"</div>"
+      +"<div>Email: "+esc(sup&&sup.contactEmail||'')+"</div>"
+      +"<div>Quote #: __________</div></td><td></td>";
+    H+="<td class='cell'><div style='font-weight:700'>"+esc(projName)+"</div>"
+      +(location?"<div>"+esc(location)+"</div>":"")
+      +(projCSZ?"<div>"+esc(projCSZ)+"</div>":"")
+      +"<div style='color:#666;margin-top:6px'>Proposal #"+esc(propNum)+"</div></td><td></td>";
+    H+="<td class='cell'><div style='font-weight:700'>JOB SITE</div><div>"+esc(projName)+"</div>"
+      +(location?"<div>"+esc(location)+"</div>":"")
+      +(projCSZ?"<div>"+esc(projCSZ)+"</div>":"")
+      +"<div style='margin-top:8px;font-weight:700'>FREIGHT CONTACT:</div>"
+      +"<div>(941)699-6250 - David Minchuk</div></td></tr></table>";
+    // ---- requisitioner bar ----
+    H+="<table style='width:100%;border-collapse:collapse;margin-top:12px'><tr>"
+      +"<td style='width:22%'><div class='band'>Requisitioner</div></td>"
+      +"<td style='width:22%'><div class='band'>Date Requested</div></td>"
+      +"<td style='width:22%'><div class='band'>Account #</div></td>"
+      +"<td style='width:34%'><div class='band'>Shipping Terms</div></td></tr><tr>"
+      +"<td class='cell' style='text-align:center'>Peter Laitres</td>"
+      +"<td class='cell' style='text-align:center'>ASAP</td>"
+      +"<td class='cell' style='text-align:center'>__________</td>"
+      +"<td class='cell' style='text-align:center;background:#fef08a;font-weight:700'>Best Way</td></tr></table>";
+    // ---- items table (SIZE | DESCRIPTION | QTY | UNIT | UNIT PRICE | TOTAL), padded like the sample ----
+    H+="<table class='items'><thead><tr><th style='width:12%'>Size</th><th>Description</th><th style='width:9%;text-align:right'>Qty</th><th style='width:8%'>Unit</th><th style='width:12%;text-align:right'>Unit Price</th><th style='width:13%;text-align:right'>Total</th></tr></thead><tbody>";
+    var rowCount=0;
+    its.forEach(function(i){var oq=window._ordQ(i),c=perOrderCost(i);
+      var unit=i.sfPerCtn&&Number(i.sfPerCtn)>0?'CTN':(i.orderUnit||i.unit||'SF');
+      var desc=esc(i.description||'')+(i.color?"<br/><span style='color:#555'>"+esc(i.color)+"</span>":"")+(i.itemCode?"<br/><span style='color:#888;font-size:10px'>"+esc(i.itemCode)+"</span>":"");
+      H+="<tr><td>"+esc(i.size||'')+"</td><td>"+desc+"</td><td style='text-align:right'>"+oq.toLocaleString('en-US')+"</td><td>"+esc(unit)+"</td><td style='text-align:right'>"+fmt(c)+"</td><td style='text-align:right'>"+fmt(oq*c)+"</td></tr>";
+      rowCount++; });
+    for(var p=rowCount;p<13;p++) H+="<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td style='text-align:right;color:#94a3b8'>$&nbsp;&nbsp;-</td></tr>";
+    H+="</tbody></table>";
+    // ---- totals block ----
+    H+="<table style='width:40%;margin-left:auto;border-collapse:collapse;margin-top:0'>"
+      +"<tr><td class='cell' style='font-weight:700'>SUBTOTAL</td><td class='cell' style='text-align:right'>"+fmt(subtotal)+"</td></tr>"
+      +"<tr><td class='cell'>"+(tax*100).toLocaleString('en-US',{maximumFractionDigits:2})+"% TAX</td><td class='cell' style='text-align:right'>"+fmt(taxAmt)+"</td></tr>"
+      +"<tr><td class='cell'>FREIGHT</td><td class='cell' style='text-align:right'>"+(freight>0?fmt(freight):'TBD')+"</td></tr>"
+      +"<tr><td class='cell'>CREDIT CARD</td><td class='cell'>&nbsp;</td></tr>"
+      +"<tr><td class='cell' style='font-weight:700;background:#e2e8f0'>TOTAL</td><td class='cell' style='text-align:right;font-weight:700;background:#e2e8f0'>"+fmt(total)+"</td></tr></table>";
+    // ---- footer ----
+    H+="<div style='text-align:center;margin-top:26px;font-weight:700;font-size:11px'>If you have any questions about this purchase order, please contact<br/>Peter Laitres - (941)740-1555 - peter@amsfloors.com</div>";
+    H+="<div style='position:absolute;bottom:24px;left:36px;right:36px;display:flex;justify-content:space-between;font-size:10px;color:#555'>"
+      +"<span>(941)238-6614</span><span style='text-align:center'>1001 Corporate Ave., Ste 100<br/>North Port, FL 34289</span><span>www.amsfloors.com</span></div>";
     H+="</div>";
   });
   return H+"</body></html>";
@@ -2924,28 +3002,92 @@ const costPerUnit = Number(item.unitCost) || Number(item.costPerUnit) || 0;
  const total = material + labor;
  return { amount, salesTax, amsTotalCost, markup, material, labor, total, orderQty, orderUnit, effectiveQty };
 };
+// FIX (Peter 6/10 #2): native <datalist> filtered options by the cell's CURRENT value, so a
+// filled cell showed nothing until you deleted its content. Replaced with a combobox: clicking
+// into a cell opens ALL suggestions with the current value preserved; the list narrows only by
+// what you type AFTER opening. Fixed-position panel so table overflow never clips it.
 const ACInput = ({ value, onChange, suggestions, placeholder, className = '', onBlur, type = 'text', listId, style }) => {
- const id = listId || `ac-${Math.random().toString(36).slice(2, 8)}`;
+ const [open, setOpen] = useState(false);
+ const [typed, setTyped] = useState(false);   // has the user typed since opening? (gates filtering)
+ const [hi, setHi] = useState(-1);
+ const [pos, setPos] = useState(null);
+ const inRef = useRef(null);
+ const hasSugg = suggestions && suggestions.length > 0;
+ const openList = () => {
+  if (!hasSugg || !inRef.current) return;
+  const r = inRef.current.getBoundingClientRect();
+  setPos({ left: r.left, top: r.bottom + 2, width: Math.max(r.width, 220) });
+  setTyped(false); setHi(-1); setOpen(true);
+ };
+ const close = () => { setOpen(false); setTyped(false); setHi(-1); };
+ const filtered = !open || !hasSugg ? []
+  : (typed && value != null && String(value) !== ''
+     ? suggestions.filter(s => String(s).toLowerCase().includes(String(value).toLowerCase()))
+     : suggestions);
+ const pick = (s) => { onChange(type === 'number' ? (s !== '' ? Number(s) : null) : s); close(); };
  return (
-  <>
-   {suggestions && suggestions.length > 0 && (
-    <datalist id={id}>
-     {suggestions.slice(0, 100).map(s => <option key={s} value={s} />)}
-    </datalist>
-   )}
+  <div className="relative">
    <input
-    list={suggestions && suggestions.length ? id : undefined}
+    ref={inRef}
     type={type}
     value={value ?? ''}
-    onChange={e => onChange(type === 'number' ? (e.target.value ? Number(e.target.value) : null) : e.target.value)}
-    onBlur={onBlur}
+    onChange={e => {
+     onChange(type === 'number' ? (e.target.value ? Number(e.target.value) : null) : e.target.value);
+     if (hasSugg) { if (!open) openList(); setTyped(true); setHi(-1); }
+    }}
+    onFocus={openList}
+    onClick={() => { if (!open) openList(); }}
+    onBlur={e => { setTimeout(close, 150); if (onBlur) onBlur(e); }}
+    onKeyDown={e => {
+     if (e.key === 'Escape') { close(); return; }
+     if (!open || !filtered.length) return;
+     if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(h + 1, filtered.length - 1)); }
+     else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(h - 1, 0)); }
+     else if (e.key === 'Enter' && hi >= 0) { e.preventDefault(); pick(filtered[hi]); }
+     else if (e.key === 'Tab') close();
+    }}
     placeholder={placeholder}
     className={`px-2 py-1 text-xs bg-transparent border-0 hover:bg-stone-100 focus:bg-white focus:outline focus:outline-1 focus:outline-stone-400 rounded-sm w-full ${className}`}
     style={style}
     step={type === 'number' ? '0.01' : undefined}
    />
-  </>
+   {open && filtered.length > 0 && pos && (
+    <div style={{ position: 'fixed', left: pos.left, top: pos.top, width: pos.width, zIndex: 9999, maxHeight: 220, overflowY: 'auto' }}
+     className="bg-white border border-stone-300 rounded-sm shadow-lg">
+     {filtered.slice(0, 100).map((s, i) => (
+      <div key={s + '_' + i}
+       onMouseDown={e => { e.preventDefault(); pick(s); }}
+       className={`px-2 py-1 text-xs cursor-pointer ${i === hi ? 'bg-orange-100' : 'hover:bg-stone-100'}`}>{s}</div>
+     ))}
+    </div>
+   )}
+  </div>
  );
+};
+// PETER 6/10 #3: "Need a way to request pricing." Builds a ready-to-send email draft listing
+// the unpriced lines (recipient left blank — Peter picks the supplier rep). Falls back to
+// clipboard copy if the draft is too long for a mailto URL.
+const requestPricingEmail = (projectName, propNum, items) => {
+ const rows = items.map(i => {
+  const code = i.itemCode || i.tag || '';
+  const size = i.size ? ' (' + i.size + ')' : '';
+  const mfr = i.manufacturer ? i.manufacturer + ' ' : '';
+  const desc = i.description || i.subject || i.product || '';
+  const color = i.color ? ' — ' + i.color : '';
+  const qty = (i.qty != null && i.qty !== '') ? i.qty : (i.measured_qty != null ? i.measured_qty : '');
+  const unit = i.unit || i.measured_unit || '';
+  return ('- ' + code + size + ' ' + mfr + desc + color + ' — ' + qty + ' ' + unit).replace(/\s+/g, ' ').trim();
+ });
+ const subject = 'Pricing request — ' + projectName + (propNum ? ' (Proposal #' + propNum + ')' : '');
+ const body = 'Hello,\n\nPlease provide current pricing, freight, and availability for the following items:\n\n'
+  + rows.join('\n')
+  + '\n\nProject: ' + projectName + (propNum ? '\nProposal #: ' + propNum : '')
+  + '\n\nThank you,\nPeter Laitres\nAMS Floors, LLC\n(941) 740-1555 — peter@amsfloors.com';
+ const url = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+ if (url.length < 1900) { window.location.href = url; return 'mail'; }
+ // long lists overflow mailto limits — copy to clipboard instead
+ if (navigator.clipboard) navigator.clipboard.writeText('Subject: ' + subject + '\n\n' + body);
+ return 'clipboard';
 };
 const EstimateItemRow = ({ item, onUpdate, onDelete, onAddVE, taxRate, markupRate, suggestions, isChild = false, priceHint }) => {
  const calc = calcEstimateItem(item, taxRate, markupRate);
@@ -3169,7 +3311,23 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
  const [editingHeader, setEditingHeader] = useState(false);
  const [draftHeader, setDraftHeader] = useState(estimate);
  const [applyingDM, setApplyingDM] = useState(false);
- useEffect(() => { setDraftHeader(estimate); setEditingHeader(false); }, [estimate?.id]);
+ // FIX (Peter 6/10 #1): bidsheet cell edits used to upsert to Supabase on EVERY keystroke —
+ // "saves without pressing Save". Field edits now stage into `pendingEdits` (id -> full patched
+ // row) and only persist when the explicit "Save bidsheet" button flushes them. Discard restores
+ // the live rows. Adds/deletes remain immediate (each is its own explicit click). Switching
+ // projects clears any unsaved staging.
+ const [pendingEdits, setPendingEdits] = useState({});
+ const [savingEdits, setSavingEdits] = useState(false);
+ const displayItems = useMemo(() => estimateItems.map(i => pendingEdits[i.id] || i), [estimateItems, pendingEdits]);
+ const pendingCount = Object.keys(pendingEdits).length;
+ const stageItemEdit = (next) => setPendingEdits(p => ({ ...p, [next.id]: next }));
+ const discardEdits = () => setPendingEdits({});
+ const saveEdits = async () => {
+  setSavingEdits(true);
+  try { for (const it of Object.values(pendingEdits)) await onUpdateItem(it); setPendingEdits({}); }
+  finally { setSavingEdits(false); }
+ };
+ useEffect(() => { setDraftHeader(estimate); setEditingHeader(false); setPendingEdits({}); }, [estimate?.id]);
  const gcIntel = useMemo(() => {
   if (!proposal?.gc || !gcStats?.length) return null;
   const g = gcStats.find(x => x.gc === proposal.gc);
@@ -3241,7 +3399,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
  }, [allEstimateItems]);
  const sections = useMemo(() => {
   const map = new Map();
-  estimateItems.forEach(item => {
+  displayItems.forEach(item => {
    const key = `${item.sectionCode || '_'}|${item.isAlternate ? 'A' : 'B'}|${item.alternateGroupName || ''}`;
    if (!map.has(key)) {
     map.set(key, {
@@ -3255,20 +3413,20 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
    map.get(key).items.push(item);
   });
   return Array.from(map.values());
- }, [estimateItems]);
+ }, [displayItems]);
  const totals = useMemo(() => {
   const tax = (estimate?.taxRate!=null?estimate.taxRate:0.07);
   const markup = (estimate?.markupRate!=null?estimate.markupRate:0.20);
   let baseBidTotal = 0;
   let alternatesTotal = 0;
-  estimateItems.forEach(item => {
+  displayItems.forEach(item => {
    if (item.isVeAlternative) return;
    const c = calcEstimateItem(item, tax, markup);
    if (item.isAlternate) alternatesTotal += c.total;
    else baseBidTotal += c.total;
   });
   return { baseBidTotal, alternatesTotal };
- }, [estimateItems, estimate?.taxRate, estimate?.markupRate]);
+ }, [displayItems, estimate?.taxRate, estimate?.markupRate]);
  const [showSectionPicker, setShowSectionPicker] = useState(false);
  const [pickerIsAlt, setPickerIsAlt] = useState(false);
  const [customSectionName, setCustomSectionName] = useState('');
@@ -3361,12 +3519,16 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
       {/* Global display-mode toggle — overrides all line items at once */}
       <div className="flex items-center gap-1 ml-2 border border-stone-200 rounded-sm overflow-hidden bg-white" title="Set display mode for all line items on proposal">
        {[{v:'full',l:'F',t:'Full detail'},{v:'total_only',l:'T',t:'Total only'},{v:'lump_sum',l:'L',t:'Lump sum'}].map(({v,l,t})=>{
-        const allMatch=(estimateItems||[]).length>0&&(estimateItems||[]).every(i=>(i.displayMode||'full')===v);
+        const allMatch=(displayItems||[]).length>0&&(displayItems||[]).every(i=>(i.displayMode||'full')===v);
         return(
          <button key={v} title={t+' — apply to all items'}
           onClick={async()=>{
-           const toUpdate=(estimateItems||[]).filter(i=>(i.displayMode||'full')!==v);
+           // Write displayMode against the LIVE rows (staged field edits stay unsaved until
+           // "Save bidsheet"), and patch any staged copy's displayMode so a later Save
+           // can't overwrite this change with a stale pending row.
+           const toUpdate=(estimateItems||[]).filter(i=>{ const eff=pendingEdits[i.id]||i; return (eff.displayMode||'full')!==v; });
            await Promise.all(toUpdate.map(i=>onUpdateItem({...i,displayMode:v})));
+           setPendingEdits(p=>{ const np={...p}; toUpdate.forEach(i=>{ if(np[i.id]) np[i.id]={...np[i.id],displayMode:v}; }); return np; });
           }}
           className="px-2 py-0.5 text-[10px] font-bold hover:bg-stone-100 transition-colors border-r border-stone-200 last:border-0"
           style={{background:allMatch?'#1c1917':'',color:allMatch?'white':'#78716c'}}>{l}</button>
@@ -3425,6 +3587,24 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
        <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Architect</div>
        <input value={draftHeader.architectName || ''} onChange={e => setDraftHeader({ ...draftHeader, architectName: e.target.value })} onBlur={saveHeader} className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
       </div>
+      {/* PETER 6/10: architect address — street + ONE City/State/ZIP box + phone.
+          Schema has a single architectAddress column (verified) — street is line 1, CSZ is line 2. */}
+      <div>
+       <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Architect Address</div>
+       <input value={(draftHeader.architectAddress || '').split('\n')[0] || ''}
+        onChange={e => { const csz = (draftHeader.architectAddress || '').split('\n').slice(1).join('\n'); setDraftHeader({ ...draftHeader, architectAddress: csz ? e.target.value + '\n' + csz : e.target.value }); }}
+        onBlur={saveHeader} placeholder="Street" className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
+      </div>
+      <div>
+       <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Architect City/State/ZIP</div>
+       <input value={(draftHeader.architectAddress || '').split('\n').slice(1).join('\n') || ''}
+        onChange={e => { const street = (draftHeader.architectAddress || '').split('\n')[0] || ''; setDraftHeader({ ...draftHeader, architectAddress: e.target.value ? street + '\n' + e.target.value : street }); }}
+        onBlur={saveHeader} placeholder="Sarasota, FL 34240" className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
+      </div>
+      <div>
+       <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Architect Phone</div>
+       <input value={draftHeader.architectPhone || ''} onChange={e => setDraftHeader({ ...draftHeader, architectPhone: e.target.value })} onBlur={saveHeader} placeholder="(941) 555-0100" className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
+      </div>
       <div>
        <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Tax Rate</div>
        <input type="number" step="0.001" value={draftHeader.taxRate!=null?draftHeader.taxRate:0.07} onChange={e => setDraftHeader({ ...draftHeader, taxRate: Number(e.target.value) })} onBlur={saveHeader} className="w-full px-2 py-1 border border-stone-300 rounded-sm font-mono" />
@@ -3455,7 +3635,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
        key={`${section.code}-base`}
        section={section}
        items={section.items}
-       onUpdate={onUpdateItem}
+       onUpdate={stageItemEdit}
        onDelete={onDeleteItem}
        onAddItem={onAddItem}
        onAddVE={onAddVE}
@@ -3463,14 +3643,14 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
        markupRate={estimate.markupRate!=null?estimate.markupRate:0.20}
        suggestions={suggestions}
        onUpdateSection={(s) => {
-        section.items.forEach(it => onUpdateItem({ ...it, sectionName: s.name }));
+        section.items.forEach(it => stageItemEdit({ ...it, sectionName: s.name }));
        }}
        onDeleteSection={(s) => {
         if (window.confirm(`Delete section "${s.name}" and all ${section.items.length} items?`)) {
          section.items.forEach(it => onDeleteItem(it.id));
         }
        }}
-       allItems={estimateItems}
+       allItems={displayItems}
        getPriceHint={getPriceHint}
       />
      ))}
@@ -3484,7 +3664,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
        key={`${section.code}-alt`}
        section={section}
        items={section.items}
-       onUpdate={onUpdateItem}
+       onUpdate={stageItemEdit}
        onDelete={onDeleteItem}
        onAddItem={onAddItem}
        onAddVE={onAddVE}
@@ -3492,14 +3672,14 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
        markupRate={estimate.markupRate!=null?estimate.markupRate:0.20}
        suggestions={suggestions}
        onUpdateSection={(s) => {
-        section.items.forEach(it => onUpdateItem({ ...it, sectionName: s.name }));
+        section.items.forEach(it => stageItemEdit({ ...it, sectionName: s.name }));
        }}
        onDeleteSection={(s) => {
         if (window.confirm(`Delete alternate "${s.name}" and all ${section.items.length} items?`)) {
          section.items.forEach(it => onDeleteItem(it.id));
         }
        }}
-       allItems={estimateItems}
+       allItems={displayItems}
        getPriceHint={getPriceHint}
       />
      ))}
@@ -3510,10 +3690,27 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
       <button onClick={() => openSectionPicker(true)} className="bg-amber-700 text-white px-3 py-1.5 rounded-sm hover:bg-amber-800 text-xs flex items-center gap-1">
        <Ico n="plus" size={11} />Add Alternate
       </button>
+      {(() => { const unpriced = displayItems.filter(i => !i.isVeAlternative && !(Number(i.unitCost) > 0)); return unpriced.length > 0 && (
+       <button onClick={() => { const r = requestPricingEmail(estimate.projectName || proposal?.project || '', proposal?.id || estimate.proposalNumber || '', unpriced); if (r === 'clipboard') window.alert('Item list is long — the pricing request was copied to your clipboard. Paste it into a new email.'); }}
+        className="bg-sky-700 text-white px-3 py-1.5 rounded-sm hover:bg-sky-800 text-xs flex items-center gap-1" title="Drafts an email listing every line with no cost — you pick the supplier rep to send it to">
+        <Ico n="mail" size={11} />Request pricing ({unpriced.length} unpriced)
+       </button> ); })()}
      </div>
     </>
    )}
    {}
+   {pendingCount > 0 && (
+    <div className="sticky bottom-[104px] z-20 bg-amber-50 border border-amber-400 shadow-lg px-4 py-2.5 flex items-center justify-between">
+     <div className="text-sm text-amber-900 flex items-center gap-2">
+      <Ico n="alertTri" size={14} />
+      <span><strong>{pendingCount} unsaved change{pendingCount === 1 ? '' : 's'}</strong> — nothing is written to the database until you save.</span>
+     </div>
+     <div className="flex items-center gap-2">
+      <button onClick={discardEdits} disabled={savingEdits} className="text-sm px-3 py-1.5 rounded-sm border border-stone-300 bg-white hover:bg-stone-100">Discard</button>
+      <button onClick={saveEdits} disabled={savingEdits} className="text-sm px-4 py-1.5 rounded-sm bg-emerald-700 text-white hover:bg-emerald-800 font-semibold">{savingEdits ? 'Saving…' : 'Save bidsheet'}</button>
+     </div>
+    </div>
+   )}
    <div className="bg-stone-900 text-white p-5 grid grid-cols-3 gap-4 text-center sticky bottom-0 shadow-2xl">
     <div>
      <div className="text-[10px] uppercase tracking-widest text-stone-400">Base Bid</div>
@@ -3845,7 +4042,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
         if(typeof fn!=='function'){alert('Generator not loaded — please refresh the page.');return;}
         if(!estimateItemsForThis||!estimateItemsForThis.length){alert('No line items found. Import Peter\'s bidsheet first.');return;}
         try{
-         const html=fn(estimate||{},estimateItemsForThis,'',draft);
+         const html=fn(estimate||{},estimateItemsForThis,'',draft,suppliers||[]);
          setPreviewHtml(html);
          sb.from('proposal_documents').insert({proposalId:String(draft.id),documentType:lb,generatedAt:new Date().toISOString(),generatedBy:'AMS'}).then(()=>{},()=>{});
         }catch(err){alert('Generator error: '+err.message);}
@@ -4286,14 +4483,23 @@ function m15ReadTakeoff(text,fileName){
     if(!r.some(c=>String(c).trim()!=='')) continue;
     const label=String(cell(r,'Label')).trim();
     const subject=String(cell(r,'Subject')).trim();
+    // PETER 6/10 #1: Bluebeam export now carries SIZE / MFR / ITEM COLOR columns.
+    // Mapping rule from Peter: CSV "Subject" = AMS "description". Blank cells fall back to
+    // the existing pulldown-history (catalog candidate) behavior downstream.
+    const csvSize=String(cell(r,'Size')).trim();
+    const csvMfr=String(cell(r,'MFR')).trim();
+    const csvColor=String(cell(r,'Item Color')).trim();
     const area=m15Num(cell(r,'Area')), length=m15Num(cell(r,'Length')), count=m15Num(cell(r,'Count'));
     const m=label.match(M15_GROUP_RE);
     if(m&&subject===''){ const tag=m[1].trim(); if(tag==='')continue;
       headers[tag]={group_count:parseInt(m[2],10),area_sf:area,length_lf:length}; continue; }
     if(label===''||M15_UNNAMED_RE.test(label)){ junk++; continue; }
-    if(!details.has(label)) details.set(label,{subjects:new Set(),area_sf:0,length_lf:0,count:0,n_measures:0});
+    if(!details.has(label)) details.set(label,{subjects:new Set(),sizes:new Set(),mfrs:new Set(),colors:new Set(),area_sf:0,length_lf:0,count:0,n_measures:0});
     const d=details.get(label);
     if(subject) d.subjects.add(subject);
+    if(csvSize) d.sizes.add(csvSize);
+    if(csvMfr) d.mfrs.add(csvMfr);
+    if(csvColor) d.colors.add(csvColor);
     d.area_sf+=area; d.length_lf+=length; d.count+=count; d.n_measures+=1;
   }
   const items=[];
@@ -4305,7 +4511,11 @@ function m15ReadTakeoff(text,fileName){
     else {measure='none';qty=0;unit='';}
     let recon=null;
     if(Object.keys(hdr).length){ const hv=measure==='area'?hdr.area_sf:(measure==='length'?hdr.length_lf:null); if(hv!=null)recon=m15r2(qty-hv); }
-    items.push({tag,subject:d.subjects.size?[...d.subjects].sort().join(' / '):'',measure,qty,unit,n_measures:d.n_measures,recon_delta:recon});
+    items.push({tag,subject:d.subjects.size?[...d.subjects].sort().join(' / '):'',
+      size:d.sizes&&d.sizes.size?[...d.sizes].sort().join(' / '):'',
+      mfr:d.mfrs&&d.mfrs.size?[...d.mfrs].sort().join(' / '):'',
+      color:d.colors&&d.colors.size?[...d.colors].sort().join(' / '):'',
+      measure,qty,unit,n_measures:d.n_measures,recon_delta:recon});
   }
   items.sort((a,b)=>a.tag<b.tag?-1:a.tag>b.tag?1:0);
   return {file:fileName,header,items,junk_rows:junk};
@@ -4363,8 +4573,10 @@ function m15BuildPayloads({lines, job, propId, estId, isUpdate}){
     estMat+=c.material; estLab+=c.labor; base+=c.total;
     return { id:'ei_'+propId+'_'+l.tag+'_'+(ord++), estimateId:estId, proposalId:propId,
       sortOrder:ord, sectionCode:l.sectionCode||'', sectionName:l.sectionName||'Flooring',
-      itemCode:l.tag||'', size:l.size||'', manufacturer:l.manufacturer||'', description:l.product||l.subject||'',
-      color:'', qty, unit:l.measured_unit, orderQty, orderUnit:item.orderUnit,
+      itemCode:l.tag||'', size:l.size||'', manufacturer:l.manufacturer||'',
+      // PETER'S RULE (6/10): CSV "SUBJECT" = AMS "description"
+      description:l.subject||l.product||'',
+      color:l.color||'', qty, unit:l.measured_unit, orderQty, orderUnit:item.orderUnit,
       unitCost:item.unitCost, freight:item.freight, laborRate:item.laborRate,
       materialActual:m15r2(c.material), lineMarkupRate:markup, displayMode:'full', source:'M15 takeoff: '+job.fileName };
   });
@@ -4410,22 +4622,26 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
       if(parsed.error){ setStatus({ok:false,msg:parsed.error}); return; }
       const priceable=parsed.items.filter(i=>i.measure!=='none');
       const newLines=priceable.map(it=>{
-        const exact = it.tag ? catalog.byCode[it.tag.toLowerCase()] : null;
+        // PETER 6/10 #1: MFR+Subject from the CSV give a higher-confidence exact catalog match
+        // (the catalog is keyed manufacturer|||description) — try it before the tag-code match.
+        const keyMatch = (it.mfr||it.subject) ? catalog.byKey.get(((it.mfr||'')+'|||'+(it.subject||'')).toLowerCase()) : null;
+        const exact = keyMatch || (it.tag ? catalog.byCode[it.tag.toLowerCase()] : null);
         const kw = m15Candidates(it.subject||it.tag, catalog.arr);
         const cands = exact ? [exact, ...kw.filter(c=>c.key!==exact.key)] : kw;
-        // Auto-populate from an exact tag match (last-used product for that tag) as an editable
-        // starting point — Peter still confirms/overrides each line before save. Keyword-only
-        // (description) matches stay blank with suggestions, since they're lower-confidence.
+        // CSV values win when present ("ready to go" per Peter); blanks keep the existing
+        // pulldown-history behavior (catalog prefill from an exact match, candidates otherwise).
         return {
           tag:it.tag, subject:it.subject, measured_qty:it.qty, measured_unit:it.unit, recon:it.recon_delta,
           candidates:cands,
-          product: exact?exact.label:'', manufacturer: exact?exact.manufacturer:'',
+          product: it.subject || (exact?exact.label:''),
+          manufacturer: it.mfr || (exact?exact.manufacturer:''),
           unitCost: exact?exact.unitCost:'', orderUnit: exact?(exact.orderUnit||it.unit):it.unit,
           coverage: exact&&exact.coverageFactor?exact.coverageFactor:1,
           laborRate: exact?exact.laborRate:0, freight: exact?exact.freight:0,
           sectionCode:'', sectionName:'Flooring',
           include:true,
-          size:'',
+          size: it.size || '',
+          color: it.color || '',
         };
       });
       setJob(j=>({...j,fileName:file.name}));
@@ -4438,7 +4654,7 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
   const pickProduct=(idx,key)=>{ const e=catalog.byKey.get(key); if(!e)return;
     updateLine(idx,{product:e.label,manufacturer:e.manufacturer,unitCost:e.unitCost,
       orderUnit:e.orderUnit||lines[idx].measured_unit,coverage:e.coverageFactor||1,laborRate:e.laborRate,freight:e.freight,include:true}); };
-  const addLine=()=>setLines(ls=>[...(ls||[]),{tag:'NEW-'+((ls||[]).length+1),subject:'',measured_qty:0,measured_unit:'SF',recon:null,candidates:[],product:'',manufacturer:'',unitCost:'',orderUnit:'SF',coverage:1,laborRate:0,freight:0,sectionCode:'',sectionName:'Flooring',include:true,size:''}]);
+  const addLine=()=>setLines(ls=>[...(ls||[]),{tag:'NEW-'+((ls||[]).length+1),subject:'',measured_qty:0,measured_unit:'SF',recon:null,candidates:[],product:'',manufacturer:'',unitCost:'',orderUnit:'SF',coverage:1,laborRate:0,freight:0,sectionCode:'',sectionName:'Flooring',include:true,size:'',color:''}]);
   const removeLine=idx=>setLines(ls=>ls.filter((_,i)=>i!==idx));
 
   const lineState=l=>{
@@ -4541,7 +4757,7 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
                 {lines.map((l,idx)=>{ const st=lineState(l); const pv=st.label==='ready'?linePreview(l):null;
                   return (<tr key={idx} className="border-t border-stone-100 align-top">
                     <td className={cellCls}><input type="checkbox" checked={l.include} onChange={e=>updateLine(idx,{include:e.target.checked})}/></td>
-                    <td className={cellCls}><div className="font-mono font-semibold text-stone-800">{l.tag}</div><div className="text-[11px] text-stone-400">{l.subject}</div><div className="font-mono text-stone-600 mt-0.5">{Number(l.measured_qty).toLocaleString()} {l.measured_unit}{l.recon!=null&&Math.abs(l.recon)>0.01?<span className="text-amber-600" title="detail vs Bluebeam subtotal"> ({l.recon>0?'+':''}{l.recon})</span>:null}</div></td>
+                    <td className={cellCls}><div className="font-mono font-semibold text-stone-800">{l.tag}</div><div className="text-[11px] text-stone-400">{l.subject}</div>{(l.size||l.color)&&<div className="text-[11px] text-stone-500">{[l.size,l.color].filter(Boolean).join(' · ')}</div>}<div className="font-mono text-stone-600 mt-0.5">{Number(l.measured_qty).toLocaleString()} {l.measured_unit}{l.recon!=null&&Math.abs(l.recon)>0.01?<span className="text-amber-600" title="detail vs Bluebeam subtotal"> ({l.recon>0?'+':''}{l.recon})</span>:null}</div></td>
                     <td className={cellCls}>
                       {(()=>{ const candKeys=new Set((l.candidates||[]).map(c=>c.key));
                         const rest=catalog.arr.filter(e=>!candKeys.has(e.key));
