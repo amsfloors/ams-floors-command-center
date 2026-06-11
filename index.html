@@ -2862,7 +2862,9 @@ const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProp
  const [editingActual,setEditingActual]=useState(null);
  const [editVal,setEditVal]=useState('');
  const jobs=useMemo(()=>{
-  let p=proposals.filter(x=>WON_STATUSES.includes(x.status));
+  // [STATUS FLOW 2026-06-11 — Ben] This tab is for jobs we are EXECUTING — status 'Active' only.
+  // 'Awarded' = won but not started (lives in Pipeline); 'Completed' = done (payment tracking later).
+  let p=proposals.filter(x=>x.status==='Active');
   if(settings.yearFilter!=='All') p=p.filter(x=>x.submitted&&x.submitted.startsWith(String(settings.yearFilter)));
   return p.map(x=>({...x,_em:estMargin(x),_am:actMargin(x),_contract:x.contractAmount||x.bidAmount||0,_ec:(x.estMaterial||0)+(x.estLabor||0)+(x.estOther||0),_ac:(x.actMaterial||0)+(x.actLabor||0)+(x.actOther||0)})).sort((a,b)=>b._contract-a._contract);
  },[proposals,settings.yearFilter]);
@@ -2879,7 +2881,7 @@ const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProp
     <Ico n="barChart" size={18} className="text-emerald-700 mt-1"/>
     <div>
      <h2 className="font-serif text-2xl text-stone-900">Active Jobs · Margin Watch</h2>
-     <p className="text-sm text-stone-700 mt-1">{jobs.length} awarded · <strong>{money(jobs.reduce((s,j)=>s+j._contract,0),true)}</strong> contract value
+     <p className="text-sm text-stone-700 mt-1">{jobs.length} active · <strong>{money(jobs.reduce((s,j)=>s+j._contract,0),true)}</strong> contract value
       {jobs.filter(j=>j._ec===0).length>0&&<span className="text-rose-700 ml-2">· {jobs.filter(j=>j._ec===0).length} missing cost data</span>}
       <span className="text-stone-400 ml-3 text-xs italic">Click Actual Mat / Lab cells to enter David's costs</span>
      </p>
