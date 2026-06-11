@@ -2805,9 +2805,9 @@ const GCIntelView=({gcStats,onSelectGC})=>{
     <select value={sortBy} onChange={e=>setSortBy(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm"><option value="volume">Total volume</option><option value="open">Open pipeline</option><option value="won">Won value</option><option value="wr">Win rate</option><option value="count">Bid count</option></select>
     <span className="text-xs text-stone-600 ml-auto"><span className="font-mono font-semibold">{ranked.length}</span> GCs</span>
    </div>
-   <div className="bg-white border border-stone-200 overflow-x-auto">
+   <div className="bg-white border border-stone-200 overflow-auto" style={{maxHeight:'calc(100vh - 230px)'}}>
     <table className="w-full text-sm">
-     <thead><tr className="bg-stone-50"><TH>GC</TH><TH className="text-right"># Bids</TH><TH className="text-right">Total Vol.</TH><TH className="text-right">Open</TH><TH className="text-right">Won</TH><TH className="text-right">Lost</TH><TH className="text-right">Win Rate</TH><TH>Verdict</TH><TH>Last Bid</TH></tr></thead>
+     <thead><tr><TH className="sticky top-0 bg-stone-50 z-10">GC</TH><TH className="sticky top-0 bg-stone-50 z-10 text-right"># Bids</TH><TH className="sticky top-0 bg-stone-50 z-10 text-right">Total Vol.</TH><TH className="sticky top-0 bg-stone-50 z-10 text-right">Open</TH><TH className="sticky top-0 bg-stone-50 z-10 text-right">Won</TH><TH className="sticky top-0 bg-stone-50 z-10 text-right">Lost</TH><TH className="sticky top-0 bg-stone-50 z-10 text-right">Win Rate</TH><TH className="sticky top-0 bg-stone-50 z-10">Verdict</TH><TH className="sticky top-0 bg-stone-50 z-10">Last Bid</TH></tr></thead>
      <tbody>
       {ranked.map(g=>{const v=verdict(g);return(
        <tr key={g.gc} className="border-b border-stone-100 hover:bg-stone-50 cursor-pointer" onClick={()=>onSelectGC(g.gc)}>
@@ -2887,18 +2887,18 @@ const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProp
      </p>
     </div>
    </div>
-   <div className="bg-white border border-stone-200 overflow-x-auto">
+   <div className="bg-white border border-stone-200 overflow-auto" style={{maxHeight:'calc(100vh - 230px)'}}>
     <table className="w-full text-sm">
-     <thead><tr className="bg-stone-50">
-      <TH>Project</TH><TH>GC</TH>
-      <TH className="text-right">Contract</TH>
-      <TH className="text-right">Est. Cost</TH>
+     <thead><tr>
+      <TH className="sticky top-0 bg-stone-50 z-10">Project</TH><TH className="sticky top-0 bg-stone-50 z-10">GC</TH>
+      <TH className="sticky top-0 bg-stone-50 z-10 text-right">Contract</TH>
+      <TH className="sticky top-0 bg-stone-50 z-10 text-right">Est. Cost</TH>
       <TH className="text-right text-sky-700">Actual Mat ✎</TH>
       <TH className="text-right text-sky-700">Actual Lab ✎</TH>
-      <TH className="text-right">Est. Margin</TH>
-      <TH className="text-right">Act. Margin</TH>
-      <TH>Status</TH>
-      <TH>Health</TH>
+      <TH className="sticky top-0 bg-stone-50 z-10 text-right">Est. Margin</TH>
+      <TH className="sticky top-0 bg-stone-50 z-10 text-right">Act. Margin</TH>
+      <TH className="sticky top-0 bg-stone-50 z-10">Status</TH>
+      <TH className="sticky top-0 bg-stone-50 z-10">Health</TH>
      </tr></thead>
      <tbody>
       {jobs.length===0&&<tr><td colSpan={10}><Empty icon="check2" title="No awarded projects" body="Projects with Won / Active / Complete status appear here."/></td></tr>}
@@ -3701,7 +3701,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
       </button>
       {(() => { const unpriced = displayItems.filter(i => !i.isVeAlternative && !(Number(i.unitCost) > 0)); return unpriced.length > 0 && (
        <button onClick={() => { const r = requestPricingEmail(estimate.projectName || proposal?.project || '', proposal?.id || estimate.proposalNumber || '', unpriced); if (r === 'clipboard') window.alert('Item list is long — the pricing request was copied to your clipboard. Paste it into a new email.'); }}
-        className="bg-sky-700 text-white px-3 py-1.5 rounded-sm hover:bg-sky-800 text-xs flex items-center gap-1" title="Drafts an email listing every line with no cost — you pick the supplier rep to send it to">
+        className="text-white px-3 py-1.5 rounded-sm text-xs flex items-center gap-1" style={{background:'#0369a1'}} title="Drafts an email listing every line with no cost — you pick the supplier rep to send it to">
         <Ico n="mail" size={11} />Request pricing ({unpriced.length} unpriced)
        </button> ); })()}
      </div>
@@ -3709,7 +3709,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
    )}
    {}
    {pendingCount > 0 && (
-    <div className="sticky bottom-[104px] z-20 bg-amber-50 border border-amber-400 shadow-lg px-4 py-2.5 flex items-center justify-between">
+    <div className="sticky bg-amber-50 shadow-lg px-4 py-2.5 flex items-center justify-between" style={{bottom:'104px',zIndex:20,border:'1px solid #fbbf24'}}>
      <div className="text-sm text-amber-900 flex items-center gap-2">
       <Ico n="alertTri" size={14} />
       <span><strong>{pendingCount} unsaved change{pendingCount === 1 ? '' : 's'}</strong> — nothing is written to the database until you save.</span>
@@ -3871,13 +3871,13 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
       <div className="min-w-0"><div className="text-xs text-stone-500 font-mono flex items-center gap-1.5">#{proposal.id}{!edit&&<button onClick={()=>{const n=window.prompt('Renumber project #'+proposal.id+'\n\nEnter the new project number (e.g. the real proposal # once a Lead becomes a bid).\nThis updates the project AND all its estimate, line items and documents.',String(proposal.id));if(n!==null&&n.trim()&&n.trim()!==String(proposal.id)){if(window.confirm('Renumber  #'+proposal.id+'  \u2192  #'+n.trim()+' ?\n\nAll linked records move to the new number.')) onRenumber(proposal.id,n.trim());}}} className="text-[10px] text-stone-400 hover:text-stone-700 underline decoration-dotted" title="Change the project number (cascades to every linked record)">renumber</button>}</div><div className="font-serif text-xl text-stone-900 truncate">{proposal.project||'Untitled'}</div></div>
      </div>
      <div className="flex items-center gap-2">
-      {/* [UX FIX 2026-06-10 — Ben] These buttons edit/save the PROJECT DETAILS draft only, so they
-          render only on that tab. The bidsheet has its own staged Save bar; showing both at once
-          put three save-ish buttons on screen and confused everyone. */}
-      {activeTab==='details'&&!edit&&<button onClick={()=>{if(window.confirm('Delete "'+(proposal.project||'this project')+'"  (#'+proposal.id+')?\n\nThis permanently removes the project and its estimate and ALL line items. This cannot be undone.')){onDelete(proposal.id);}}} className="text-sm px-3 py-1.5 rounded-sm border border-rose-300 text-rose-700 hover:bg-rose-50 flex items-center gap-1.5"><Ico n="trash2" size={13}/>Delete</button>}
-      {activeTab==='details'&&(!edit?<button onClick={()=>setEdit(true)} className="text-sm bg-stone-900 text-white px-3 py-1.5 rounded-sm hover:bg-stone-800 flex items-center gap-1.5"><Ico n="edit3" size={13}/>Edit Details</button>:
-      <><button onClick={()=>{setDraft(proposal);setEdit(false);}} className="text-sm px-3 py-1.5 rounded-sm border border-stone-300 hover:bg-stone-100">Cancel</button>
-      <button onClick={save} className="text-sm bg-emerald-700 text-white px-3 py-1.5 rounded-sm hover:bg-emerald-800 flex items-center gap-1.5"><Ico n="save" size={13}/>Save Details</button></>)}
+      {/* [UX 2026-06-11 — Ben] Edit and Delete are always visible. Edit jumps to Project Details
+          (the tab it edits) and turns edit mode on; Cancel/Save Details appear there. The bidsheet
+          keeps its own staged Save bar — still only one save control per context. */}
+      {!edit&&<button onClick={()=>{if(window.confirm('Delete "'+(proposal.project||'this project')+'"  (#'+proposal.id+')?\n\nThis permanently removes the project and its estimate and ALL line items. This cannot be undone.')){onDelete(proposal.id);}}} className="text-sm px-3 py-1.5 rounded-sm border border-rose-300 text-rose-700 hover:bg-rose-50 flex items-center gap-1.5"><Ico n="trash2" size={13}/>Delete</button>}
+      {!edit&&<button onClick={()=>{setActiveTab('details');setEdit(true);}} className="text-sm bg-stone-900 text-white px-3 py-1.5 rounded-sm hover:bg-stone-800 flex items-center gap-1.5"><Ico n="edit3" size={13}/>Edit Details</button>}
+      {edit&&activeTab==='details'&&<><button onClick={()=>{setDraft(proposal);setEdit(false);}} className="text-sm px-3 py-1.5 rounded-sm border border-stone-300 hover:bg-stone-100">Cancel</button>
+      <button onClick={save} className="text-sm bg-emerald-700 text-white px-3 py-1.5 rounded-sm hover:bg-emerald-800 flex items-center gap-1.5"><Ico n="save" size={13}/>Save Details</button></>}
      </div>
     </div>
     {}
@@ -4280,12 +4280,12 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
         const barColors={'Lead':'#e7e5e4','Bidding':'#bae6fd','Submitted':'#fde68a','Awarded / Active':'#a7f3d0','Completed':'#99f6e4','Lost / Dead':'#fecaca'};
         const bg=barColors[s.label]||'#e7e5e4';
         return(
-         <div key={s.label} className="flex items-center gap-4">
-          <div className="w-36 text-right text-sm text-stone-600 flex-shrink-0">{s.label}</div>
-          <div className="flex-1 h-8 relative rounded-sm overflow-hidden" style={{background:'#f5f5f4'}}>
-           <div className="h-full transition-all" style={{width:`${w}%`,background:bg}}/>
-           <div className="absolute inset-0 flex items-center px-3">
-            <span className="text-xs font-semibold text-stone-800">{s.count} bid{s.count!==1?'s':''} · {money(s.value,true)}</span>
+         <div key={s.label} style={{display:'flex',alignItems:'center',gap:'16px'}}>
+          <div style={{width:'150px',textAlign:'right',fontSize:'14px',color:'#57534e',flexShrink:0}}>{s.label}</div>
+          <div style={{flex:1,height:'32px',position:'relative',borderRadius:'2px',overflow:'hidden',background:'#f5f5f4'}}>
+           <div style={{height:'100%',width:`${w}%`,background:bg,transition:'width .3s'}}/>
+           <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',padding:'0 12px'}}>
+            <span style={{fontSize:'12px',fontWeight:600,color:'#292524'}}>{s.count} bid{s.count!==1?'s':''} · {money(Number(s.value)||0,true)}</span>
            </div>
           </div>
          </div>
@@ -4741,7 +4741,7 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
   const cellCls='px-2 py-1.5 align-top';
   const inp='w-full border border-stone-300 rounded-sm px-1.5 py-1 text-sm focus:outline-none focus:border-orange-700';
   return (
-    <div className="mt-4 border-t border-stone-200 pt-4">
+    <div style={lines?{gridColumn:'1 / -1'}:undefined}>
       <h4 className="font-serif text-base text-stone-800 mb-1">{lock?'Import takeoff into #'+lock.id:'New takeoff (Bluebeam CSV)'}</h4>
       <p className="text-sm text-stone-600 mb-3">Drop a Bluebeam CSV export. Quantities reconcile automatically; every line is a <strong>candidate</strong> you confirm before it saves. Catalog suggestions come from {catalog.arr.length} known materials.</p>
       <div className="flex items-center gap-3 mb-3">
@@ -4855,22 +4855,30 @@ const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onExport,set
   <div className="space-y-5 max-w-3xl">
    <div><h2 className="font-serif text-2xl text-stone-900">Settings</h2><p className="text-sm text-stone-600 mt-1">Everyday actions on top. Thresholds below — set once, rarely touched.</p></div>
    {/* [SETTINGS REDESIGN 2026-06-11 — Ben] What you DO comes first; what you tune comes second. */}
-   <section className="bg-white border border-stone-200 p-5">
-    <h3 className="font-serif text-lg text-stone-800 mb-3">Actions</h3>
-    <div className="flex flex-wrap gap-3">
+   {/* [SETTINGS 2026-06-11 — Ben] The three everyday features sit side by side, equal weight. */}
+   <section className="grid grid-cols-3 gap-4" style={{alignItems:'stretch'}}>
+    <div className="bg-white border border-stone-200 p-4">
+     <h4 className="font-serif text-base text-stone-800 mb-1">New Project</h4>
+     <p className="text-sm text-stone-600 mb-3">Add a single project to the pipeline by hand.</p>
      <button onClick={()=>setShowNewProject(true)} className="inline-flex items-center gap-2 bg-orange-800 text-white px-4 py-2 rounded-sm hover:bg-orange-900 text-sm"><Ico n="plus" size={14}/>New Project</button>
-     <button onClick={onExport} className="inline-flex items-center gap-2 bg-white border border-stone-300 text-stone-900 px-4 py-2 rounded-sm hover:bg-stone-100 text-sm"><Ico n="download" size={14}/>Export Everything to Excel</button>
     </div>
-    <TakeoffIntake sb={sb} estimateItems={estimateItems} proposals={proposals} onImported={onImported}/>
+    <div className="bg-white border border-stone-200 p-4">
+     <h4 className="font-serif text-base text-stone-800 mb-1">Export</h4>
+     <p className="text-sm text-stone-600 mb-3">Everything — proposals, items, GC stats — to one Excel file.</p>
+     <button onClick={onExport} className="inline-flex items-center gap-2 bg-white border border-stone-300 text-stone-900 px-4 py-2 rounded-sm hover:bg-stone-100 text-sm"><Ico n="download" size={14}/>Export to Excel</button>
+    </div>
+    <div className="bg-white border border-stone-200 p-4" style={{minWidth:0}}>
+     <TakeoffIntake sb={sb} estimateItems={estimateItems} proposals={proposals} onImported={onImported}/>
+    </div>
    </section>
    <section className="bg-white border border-stone-200 p-5">
     <h3 className="font-serif text-lg text-stone-800 mb-1">Thresholds</h3>
     <p className="text-sm text-stone-500 mb-3">A bid turns <span className="text-rose-700 font-semibold">overdue</span> in Follow-Ups when it sits longer than its SLA with no logged contact (logging a call resets the clock). Margins below the floor flag red in Active Jobs.</p>
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Submitted SLA</label><div className="flex items-center gap-2 mt-1"><input type="number" value={settings.slaSubmitted} onChange={e=>onSaveSettings({...settings,slaSubmitted:Number(e.target.value)||0})} className="w-16 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">days</span></div></div>
-     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Lead / Bidding SLA</label><div className="flex items-center gap-2 mt-1"><input type="number" value={settings.slaNegotiating} onChange={e=>onSaveSettings({...settings,slaNegotiating:Number(e.target.value)||0})} className="w-16 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">days</span></div></div>
-     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Target margin</label><div className="flex items-center gap-2 mt-1"><input type="number" step="0.01" value={settings.targetMargin} onChange={e=>onSaveSettings({...settings,targetMargin:Number(e.target.value)||0})} className="w-16 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">{Math.round((settings.targetMargin||0)*100)}%</span></div></div>
-     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">At-risk floor</label><div className="flex items-center gap-2 mt-1"><input type="number" step="0.01" value={settings.riskMarginFloor} onChange={e=>onSaveSettings({...settings,riskMarginFloor:Number(e.target.value)||0})} className="w-16 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">{Math.round((settings.riskMarginFloor||0)*100)}%</span></div></div>
+     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Submitted SLA</label><div className="flex items-center gap-2 mt-1"><input type="number" value={settings.slaSubmitted} onChange={e=>onSaveSettings({...settings,slaSubmitted:Number(e.target.value)||0})} className="w-20 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">days</span></div></div>
+     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Lead / Bidding SLA</label><div className="flex items-center gap-2 mt-1"><input type="number" value={settings.slaNegotiating} onChange={e=>onSaveSettings({...settings,slaNegotiating:Number(e.target.value)||0})} className="w-20 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">days</span></div></div>
+     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Target margin</label><div className="flex items-center gap-2 mt-1"><input type="number" step="0.01" value={settings.targetMargin} onChange={e=>onSaveSettings({...settings,targetMargin:Number(e.target.value)||0})} className="w-20 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">{Math.round((settings.targetMargin||0)*100)}%</span></div></div>
+     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">At-risk floor</label><div className="flex items-center gap-2 mt-1"><input type="number" step="0.01" value={settings.riskMarginFloor} onChange={e=>onSaveSettings({...settings,riskMarginFloor:Number(e.target.value)||0})} className="w-20 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">{Math.round((settings.riskMarginFloor||0)*100)}%</span></div></div>
     </div>
    </section>
    <section className="bg-stone-100 border border-stone-200 p-4 text-xs text-stone-600"><strong className="text-stone-900">Current data:</strong> {proposals.length} proposals · {lineItemsAll.length} line items · stored in Supabase (live sync)</section>
