@@ -2025,7 +2025,11 @@ window.genProposal=function(est,items,notes,proposal){
   var propNum=(proposal&&proposal.id)||est.proposalNumber||'';
   var base=items.filter(function(i){return!i.isAlternate&&!i.isVeAlternative;});
   var alts=items.filter(function(i){return i.isAlternate&&!i.isVeAlternative;});
-  var calc=function(i){var q=Number(i.qty)||0,c=Number(i.unitCost)||Number(i.costPerUnit)||0,f=Number(i.freight)||0,lr=Number(i.laborRate)||0,muL=(i.lineMarkupRate!=null?Number(i.lineMarkupRate):mu),a=q*c,mat=(i.materialActual!=null&&i.materialActual!=='')?(Number(i.materialActual)||0):(a+a*tax+f+a*muL),lab=q*lr;return{mat:mat,lab:lab,tot:mat+lab};};
+  // [BEN 6/11] Proposal lines round UP to the nearest $10 (Peter's ROUNDUP convention). Verified:
+  // ceiling each 1671 bidsheet line reproduces every proposal line, section total, and the $55,570
+  // grand total exactly. r10 applies to the displayed LINE TOTAL; mat/lab components stay exact.
+  var r10=function(t){return Math.ceil(t/10)*10;};
+  var calc=function(i){var q=Number(i.qty)||0,c=Number(i.unitCost)||Number(i.costPerUnit)||0,f=Number(i.freight)||0,lr=Number(i.laborRate)||0,muL=(i.lineMarkupRate!=null?Number(i.lineMarkupRate):mu),a=q*c,mat=(i.materialActual!=null&&i.materialActual!=='')?(Number(i.materialActual)||0):(a+a*tax+f+a*muL),lab=q*lr;return{mat:mat,lab:lab,tot:r10(mat+lab)};};
   var tM=0,tL=0;base.forEach(function(i){var r=calc(i);tM+=r.mat;tL+=r.lab;});
   // Detect dominant display mode for header
   var modes=base.map(function(i){return i.displayMode||'full';});
@@ -2082,14 +2086,15 @@ window.genProposal=function(est,items,notes,proposal){
   H+="<div style='font-size:11px;color:#555;margin-bottom:12px;line-height:1.6;padding:10px 14px;border-left:3px solid #e7e5e4'>AMS Floors LLC proposes to furnish and install all flooring as detailed below for the above-referenced project, per plans and specifications provided. All work performed in accordance with industry standards. Assumes smooth, level subfloor free of debris. State &amp; Local Taxes included in material costs only.</div>";
   H+="<table>"+thead+"<tbody>"+makeRows(base)+"</tbody></table>";
   if(alts.length>0){
-    var altM=0,altL=0;alts.forEach(function(i){var r=calc(i);altM+=r.mat;altL+=r.lab;});
+    var altM=0,altL=0,altRounded=0;alts.forEach(function(i){var r=calc(i);altM+=r.mat;altL+=r.lab;altRounded+=r.tot;});
     H+="<div style='margin-top:16px'><div style='font-size:10px;font-weight:700;text-transform:uppercase;color:#888;margin-bottom:4px;letter-spacing:1px'>Alternates</div>";
     H+="<table><thead><tr style='background:#374151'><th>Item</th><th>Description</th><th style='text-align:right'>QTY / Unit</th><th style='text-align:right'>Material</th><th style='text-align:right'>Alt Total</th></tr></thead><tbody>"+makeRows(alts)+"</tbody>";
-    H+="<tfoot><tr><td colspan='4' style='padding:6px 8px;background:#f5f5f4;font-weight:700'>Alternates Subtotal</td><td style='padding:6px 8px;text-align:right;background:#f5f5f4;font-weight:700'>"+fmt(altM+altL)+"</td></tr></tfoot></table></div>";
+    H+="<tfoot><tr><td colspan='4' style='padding:6px 8px;background:#f5f5f4;font-weight:700'>Alternates Subtotal</td><td style='padding:6px 8px;text-align:right;background:#f5f5f4;font-weight:700'>"+fmt(altRounded)+"</td></tr></tfoot></table></div>";
   }
-  var grandTotal=Number(proposal&&proposal.bidAmount)||Number(proposal&&proposal.contractAmount)||(tM+tL);
+  var roundedBase=base.reduce(function(s,i){return s+calc(i).tot;},0);
+  var grandTotal=Number(proposal&&proposal.bidAmount)||Number(proposal&&proposal.contractAmount)||roundedBase;
   H+="<div class='bar'><div><div class='bl'>Material</div><div class='bv'>"+fmt(tM)+"</div></div><div><div class='bl'>Labor</div><div class='bv'>"+fmt(tL)+"</div></div><div><div class='bl'>Base Bid Total</div><div class='bv' style='color:#6ee7b7'>"+fmt(grandTotal)+"</div></div></div>";
-  H+="<div style='margin-top:12px;padding-top:10px;border-top:1px solid #e7e5e4;font-size:10px;color:#666'><b>Notes:</b> Proposal valid 30 days from date above. Price subject to change if scope is modified. Does not include concrete grinding, self-leveling, or moisture mitigation unless noted."+(notes?' '+notes:'')+"</div>";
+  H+="<div style='margin-top:12px;padding-top:10px;border-top:1px solid #e7e5e4;font-size:10px;color:#666'><b>Notes:</b> Line totals rounded up to the nearest $10. Proposal valid 30 days from date above. Price subject to change if scope is modified. Does not include concrete grinding, self-leveling, or moisture mitigation unless noted."+(notes?' '+notes:'')+"</div>";
   H+="<div style='margin-top:22px;padding-top:16px;border-top:1px solid #e7e5e4;display:grid;grid-template-columns:1fr 1fr;gap:24px;font-size:11px'>";
   H+="<div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:10px'>AMS Floors LLC \u2014 Submitted by</div><div style='height:36px;border-bottom:1px solid #888;margin-bottom:4px'></div><div style='color:#888;font-size:10px'>Signature &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Date</div></div>";
   H+="<div><div style='font-size:9px;text-transform:uppercase;color:#888;font-weight:700;margin-bottom:10px'>Accepted by: "+gc+"</div><div style='height:36px;border-bottom:1px solid #888;margin-bottom:4px'></div><div style='color:#888;font-size:10px'>Authorized Signature &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Date</div></div></div>";
