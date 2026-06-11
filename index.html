@@ -4853,30 +4853,25 @@ const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onExport,set
  const saveBfAll=async()=>{setBfSaving(true);let saved=0;for(const p of lostUntagged){const r=bfReason[p.id];if(r){await onSaveProposal({...p,lostReason:r});saved++;}}setBfSaved(saved);setBfSaving(false);};
  return (
   <div className="space-y-5 max-w-3xl">
-   <div><h2 className="font-serif text-2xl text-stone-900">Settings</h2><p className="text-sm text-stone-600 mt-1">SLA thresholds, margin targets, data import/export, and data cleanup tools.</p></div>
+   <div><h2 className="font-serif text-2xl text-stone-900">Settings</h2><p className="text-sm text-stone-600 mt-1">Everyday actions on top. Thresholds below — set once, rarely touched.</p></div>
+   {/* [SETTINGS REDESIGN 2026-06-11 — Ben] What you DO comes first; what you tune comes second. */}
    <section className="bg-white border border-stone-200 p-5">
-    <h3 className="font-serif text-lg text-stone-800 mb-1">Follow-up SLAs</h3>
-    <p className="text-sm text-stone-500 mb-3">SLA = your internal deadline for following up on bids. A bid shows as <span className="text-rose-700 font-semibold">overdue</span> in the queue once it exceeds this threshold with no logged contact. The clock resets every time you click "Log Call."</p>
-    <div className="grid grid-cols-2 gap-4">
-     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Submitted → follow up after</label><div className="flex items-center gap-2 mt-1"><input type="number" value={settings.slaSubmitted} onChange={e=>onSaveSettings({...settings,slaSubmitted:Number(e.target.value)||0})} className="w-20 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">days (default 14)</span></div><p className="text-xs text-stone-400 mt-1">Call GC if no response in X days after submission.</p></div>
-     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Lead / Bidding → follow up after</label><div className="flex items-center gap-2 mt-1"><input type="number" value={settings.slaNegotiating} onChange={e=>onSaveSettings({...settings,slaNegotiating:Number(e.target.value)||0})} className="w-20 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">days (default 7)</span></div><p className="text-xs text-stone-400 mt-1">Call if conversation goes quiet for X days.</p></div>
-    </div>
-   </section>
-   <section className="bg-white border border-stone-200 p-5">
-    <h3 className="font-serif text-lg text-stone-800 mb-3">Margin targets</h3>
-    <div className="grid grid-cols-2 gap-4">
-     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Target gross margin</label><div className="flex items-center gap-2 mt-1"><input type="number" step="0.01" value={settings.targetMargin} onChange={e=>onSaveSettings({...settings,targetMargin:Number(e.target.value)||0})} className="w-24 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">e.g. 0.18 = 18%</span></div></div>
-     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">At-risk floor</label><div className="flex items-center gap-2 mt-1"><input type="number" step="0.01" value={settings.riskMarginFloor} onChange={e=>onSaveSettings({...settings,riskMarginFloor:Number(e.target.value)||0})} className="w-24 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">below = red alert</span></div></div>
-    </div>
-   </section>
-   <section className="bg-white border border-stone-200 p-5">
-    <h3 className="font-serif text-lg text-stone-800 mb-2">Import / Export</h3>
-    <p className="text-sm text-stone-600 mb-4">Add individual projects or export all data. Historical bulk bidsheet import stays retired (files load through the verified migration pipeline). For a NEW job, use the Bluebeam takeoff intake below.</p>
+    <h3 className="font-serif text-lg text-stone-800 mb-3">Actions</h3>
     <div className="flex flex-wrap gap-3">
-     <button onClick={()=>setShowNewProject(true)} className="inline-flex items-center gap-2 bg-orange-800 text-white px-4 py-2 rounded-sm hover:bg-orange-900 text-sm"><Ico n="plus" size={14}/>Add Single Project</button>
+     <button onClick={()=>setShowNewProject(true)} className="inline-flex items-center gap-2 bg-orange-800 text-white px-4 py-2 rounded-sm hover:bg-orange-900 text-sm"><Ico n="plus" size={14}/>New Project</button>
      <button onClick={onExport} className="inline-flex items-center gap-2 bg-white border border-stone-300 text-stone-900 px-4 py-2 rounded-sm hover:bg-stone-100 text-sm"><Ico n="download" size={14}/>Export Everything to Excel</button>
     </div>
     <TakeoffIntake sb={sb} estimateItems={estimateItems} proposals={proposals} onImported={onImported}/>
+   </section>
+   <section className="bg-white border border-stone-200 p-5">
+    <h3 className="font-serif text-lg text-stone-800 mb-1">Thresholds</h3>
+    <p className="text-sm text-stone-500 mb-3">A bid turns <span className="text-rose-700 font-semibold">overdue</span> in Follow-Ups when it sits longer than its SLA with no logged contact (logging a call resets the clock). Margins below the floor flag red in Active Jobs.</p>
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Submitted SLA</label><div className="flex items-center gap-2 mt-1"><input type="number" value={settings.slaSubmitted} onChange={e=>onSaveSettings({...settings,slaSubmitted:Number(e.target.value)||0})} className="w-16 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">days</span></div></div>
+     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Lead / Bidding SLA</label><div className="flex items-center gap-2 mt-1"><input type="number" value={settings.slaNegotiating} onChange={e=>onSaveSettings({...settings,slaNegotiating:Number(e.target.value)||0})} className="w-16 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">days</span></div></div>
+     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Target margin</label><div className="flex items-center gap-2 mt-1"><input type="number" step="0.01" value={settings.targetMargin} onChange={e=>onSaveSettings({...settings,targetMargin:Number(e.target.value)||0})} className="w-16 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">{Math.round((settings.targetMargin||0)*100)}%</span></div></div>
+     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">At-risk floor</label><div className="flex items-center gap-2 mt-1"><input type="number" step="0.01" value={settings.riskMarginFloor} onChange={e=>onSaveSettings({...settings,riskMarginFloor:Number(e.target.value)||0})} className="w-16 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">{Math.round((settings.riskMarginFloor||0)*100)}%</span></div></div>
+    </div>
    </section>
    <section className="bg-stone-100 border border-stone-200 p-4 text-xs text-stone-600"><strong className="text-stone-900">Current data:</strong> {proposals.length} proposals · {lineItemsAll.length} line items · stored in Supabase (live sync)</section>
    {/* Backfill: tag historical lost bids */}
@@ -5309,7 +5304,7 @@ function App() {
        <Ico n={online?'wifi':'wifiOff'} size={12}/><span className="hidden sm:inline">{online?'Live sync':'Offline'}</span>
       </button>
       <YearFilter proposals={proposals} value={settings.yearFilter} onChange={v=>setSettings({...settings,yearFilter:v})}/>
-      <button onClick={()=>setShowNewProject(true)} className="inline-flex items-center gap-1.5 bg-orange-800 hover:bg-orange-900 text-white text-sm px-3 py-1.5 rounded-sm font-medium whitespace-nowrap"><Ico n="plus" size={13}/>New Project</button>
+      {/* [UX 2026-06-11 — Ben] New Project removed from the global top bar — it lives in Settings → Actions. */}
      </div>
     </div>
    </header>
