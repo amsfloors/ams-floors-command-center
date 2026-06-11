@@ -2859,9 +2859,28 @@ const GCDetailView=({gc,proposals,gcStats,onBack,onSelectProposal,settings})=>{
   </div>
  );
 };
-const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProposal})=>{
+const ActiveJobsView=({proposals,estimateItems,estimates,onSelectProposal,onSelectGC,settings,onSaveProposal})=>{
  const [editingActual,setEditingActual]=useState(null);
  const [editVal,setEditVal]=useState('');
+ // BRIDGE (2026-06-11 — Ben): Est. Cost / Est. Margin derive from the migrated bidsheet LINE ITEMS
+ // when the proposal-level summary fields were never filled (the migration stored detail at line
+ // level; this screen previously read only the empty summary fields).
+ // Convention (Ben confirmed): bidsheet LABOR is what AMS CHARGES — no labor cost basis exists in
+ // the bidsheet. So: Est. Cost = line total − markup (material cost basis + labor at charge), and
+ // the estimated margin is the built-in material markup. Derived values render with a dotted
+ // underline and tooltip; hand-entered summary fields, when present, take precedence.
+ const derivedByDoc=useMemo(()=>{
+  const map={};
+  (estimateItems||[]).forEach(it=>{
+   if(it.isAlternate||it.isVeAlternative) return;
+   const pid=String(it.proposalId);
+   if(!map[pid]) map[pid]={total:0,markup:0,n:0};
+   const est=(estimates||[]).find(e=>String(e.proposalId)===pid);
+   const c=calcEstimateItem(it,(est&&est.taxRate!=null?est.taxRate:0.07),(est&&est.markupRate!=null?est.markupRate:0.20));
+   map[pid].total+=c.total; map[pid].markup+=c.markup; map[pid].n++;
+  });
+  return map;
+ },[estimateItems,estimates]);
  // FIX (2026-06-11): one PROJECT can have many DOCUMENTS (base proposal + COs/PRs sharing a
  // projectNumber, e.g. 1573 = 6 docs). Group by projectNumber and show project-level totals;
  // each document stays its own row (clickable, actuals editable).
@@ -2870,7 +2889,16 @@ const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProp
   // 'Awarded' = won but not started (lives in Pipeline); 'Completed' = done (payment tracking later).
   let p=proposals.filter(x=>x.status==='Active');
   if(settings.yearFilter!=='All') p=p.filter(x=>x.submitted&&x.submitted.startsWith(String(settings.yearFilter)));
-  const docs=p.map(x=>({...x,_em:estMargin(x),_am:actMargin(x),_contract:x.contractAmount||x.bidAmount||0,_ec:(x.estMaterial||0)+(x.estLabor||0)+(x.estOther||0),_ac:(x.actMaterial||0)+(x.actLabor||0)+(x.actOther||0)}));
+  const docs=p.map(x=>{
+   const storedEc=(x.estMaterial||0)+(x.estLabor||0)+(x.estOther||0);
+   const d=derivedByDoc[String(x.id)];
+   const canDerive=storedEc===0&&d&&d.total>0;
+   const _ec=storedEc>0?storedEc:(canDerive?d.total-d.markup:0);
+   const _ecDerived=storedEc===0&&canDerive;
+   const contract=x.contractAmount||x.bidAmount||0;
+   const _em=estMargin(x)!==null?estMargin(x):(canDerive&&contract>0?(contract-_ec)/contract:null);
+   return {...x,_em,_emDerived:_ecDerived&&estMargin(x)===null,_am:actMargin(x),_contract:contract,_ec,_ecDerived,_ac:(x.actMaterial||0)+(x.actLabor||0)+(x.actOther||0)};
+  });
   const byKey={},order=[];
   docs.forEach(d=>{const k=String(d.projectNumber||d.id);if(!byKey[k]){byKey[k]={key:k,docs:[]};order.push(byKey[k]);}byKey[k].docs.push(d);});
   order.forEach(g=>{
@@ -2884,7 +2912,7 @@ const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProp
   });
   order.sort((a,b)=>b.contract-a.contract);
   return order;
- },[proposals,settings.yearFilter]);
+ },[proposals,settings.yearFilter,derivedByDoc]);
  const jobs=useMemo(()=>groups.flatMap(g=>g.docs),[groups]);
  const startEdit=(jid,field,curVal,e)=>{e.stopPropagation();setEditingActual({id:jid,field});setEditVal(String(curVal||''));};
  const commitEdit=(j)=>{
@@ -2952,7 +2980,7 @@ const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProp
          <td className={`px-3 py-2.5 overflow-hidden ${multi?'pl-7':''}`}><div className={`${multi?'font-normal text-stone-700':'font-medium text-stone-900'} truncate`}>{multi&&<span className="text-stone-400 mr-1">↳</span>}{j.project}</div><div className="flex items-center gap-1.5 text-xs text-stone-500 mt-0.5">#{j.id}·{j.location}{j.pm&&<span className="text-[9px] px-1.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-full font-medium">PM: {j.pm}</span>}</div></td>
          <td className="px-3 py-2.5"><button onClick={e=>{e.stopPropagation();onSelectGC(j.gc);}} className="text-stone-700 hover:text-orange-800 hover:underline">{j.gc}</button></td>
          <td className="px-3 py-2.5 text-right font-semibold whitespace-nowrap"><MoneyCell amount={j._contract}/></td>
-         <td className="px-3 py-2.5 text-right text-stone-600 whitespace-nowrap">{j._ec?<MoneyCell amount={j._ec}/>:<span className="text-stone-300 text-xs">—</span>}</td>
+         <td className="px-3 py-2.5 text-right text-stone-600 whitespace-nowrap">{j._ec?<span title={j._ecDerived?'Derived from bidsheet line items: material cost + tax + freight + labor (markup excluded — markup is the margin)':undefined} className={j._ecDerived?'border-b border-dotted border-stone-400':''}><MoneyCell amount={j._ec}/></span>:<span className="text-stone-300 text-xs">—</span>}</td>
          {editingMat
           ?<td className="px-2 py-1.5" onClick={e=>e.stopPropagation()}><input autoFocus type="number" value={editVal} onChange={e=>setEditVal(e.target.value)} onBlur={()=>commitEdit(j)} onKeyDown={e=>{if(e.key==='Enter')commitEdit(j);if(e.key==='Escape'){setEditingActual(null);setEditVal('');}}} className="w-24 px-2 py-1 text-xs font-mono border border-sky-400 rounded-sm focus:outline-none bg-sky-50" step="100"/></td>
           :<td className="px-3 py-2.5 text-right cursor-pointer group" onClick={e=>startEdit(j.id,'actMaterial',j.actMaterial,e)} title="Click to enter actual material cost">{(j.actMaterial||0)>0?<span className={`font-mono text-xs ${matOver?'text-rose-700 font-semibold':''}`}>{money(j.actMaterial)}{matOver&&' ↑'}</span>:<span className="text-[10px] text-stone-300 group-hover:text-sky-500 italic">enter</span>}</td>
@@ -2961,7 +2989,7 @@ const ActiveJobsView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProp
           ?<td className="px-2 py-1.5" onClick={e=>e.stopPropagation()}><input autoFocus type="number" value={editVal} onChange={e=>setEditVal(e.target.value)} onBlur={()=>commitEdit(j)} onKeyDown={e=>{if(e.key==='Enter')commitEdit(j);if(e.key==='Escape'){setEditingActual(null);setEditVal('');}}} className="w-24 px-2 py-1 text-xs font-mono border border-sky-400 rounded-sm focus:outline-none bg-sky-50" step="100"/></td>
           :<td className="px-3 py-2.5 text-right cursor-pointer group" onClick={e=>startEdit(j.id,'actLabor',j.actLabor,e)} title="Click to enter actual labor cost">{(j.actLabor||0)>0?<span className={`font-mono text-xs ${labOver?'text-rose-700 font-semibold':''}`}>{money(j.actLabor)}{labOver&&' ↑'}</span>:<span className="text-[10px] text-stone-300 group-hover:text-sky-500 italic">enter</span>}</td>
          }
-         <td className="px-3 py-2.5 text-right font-mono text-xs">{j._em!==null?<span className={j._em<settings.riskMarginFloor?'text-rose-600':j._em>=settings.targetMargin?'text-emerald-700':'text-amber-700'}>{pct(j._em,1)}</span>:'—'}</td>
+         <td className="px-3 py-2.5 text-right font-mono text-xs">{j._em!==null?<span title={j._emDerived?'Built-in bidsheet margin (markup ÷ contract); labor at bidsheet rate':undefined} className={(j._em<settings.riskMarginFloor?'text-rose-600':j._em>=settings.targetMargin?'text-emerald-700':'text-amber-700')+(j._emDerived?' border-b border-dotted border-stone-400':'')}>{pct(j._em,1)}</span>:'—'}</td>
          <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold">{j._am!==null?<span className={j._am>=settings.targetMargin?'text-emerald-700':j._am<settings.riskMarginFloor?'text-rose-700':'text-amber-700'}>{pct(j._am,1)}</span>:<span className="text-stone-400">—</span>}</td>
          <td className="px-3 py-2.5"><StatusPill status={j.status} size="xs"/></td>
          <td className="px-3 py-2.5"><span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold ${health.color}`}><Ico n={health.icon} size={11}/>{health.label}</span></td>
@@ -5371,7 +5399,7 @@ function App() {
     {view==='followups'&&<FollowUpsView proposals={proposals} settings={settings} gcStats={gcStats} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted} onSaveProposal={saveProposal}/>}
     {view==='gcs'&&!selectedGC&&<GCIntelView gcStats={gcStats} proposals={proposals} onSelectGC={setSelectedGC} settings={settings}/>}
     {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
-    {view==='active'&&<ActiveJobsView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
+    {view==='active'&&<ActiveJobsView proposals={proposals} estimateItems={estimateItems} estimates={estimates} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
     {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal} sb={sb} estimateItems={estimateItems} onImported={reloadData}/>}
     {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSaveProposal={saveProposal}/>}
    </main>
