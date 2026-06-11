@@ -2724,7 +2724,8 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
      <div><h2 className="font-serif text-2xl text-stone-900">Today's Call Queue</h2><p className="text-sm text-stone-700 mt-1">{queue.length} {filter==='overdue'?'overdue follow-ups':'bids'} · <strong>{money(queue.reduce((s,p)=>s+(p.bidAmount||0),0),true)}</strong> on the line. Sorted by priority: <span className="font-mono text-xs">bid × overdue × win-rate</span>.</p></div>
     </div>
    </div>
-   <div className="flex items-center gap-2 flex-wrap">
+   {/* [UX 2026-06-11 — Ben] Filter row pins below the sticky nav while the queue scrolls. */}
+   <div className="flex items-center gap-2 flex-wrap bg-stone-100 sticky" style={{top:'64px',zIndex:15,paddingTop:'8px',paddingBottom:'8px',margin:'0 -8px',paddingLeft:'8px',paddingRight:'8px'}}>
     {[['overdue','🔥 Overdue'],['all','All open'],['large','$100K+ only'],['highWR','High win-rate GCs']].map(([val,lbl])=>(
      <button key={val} onClick={()=>setFilter(val)} className={`px-3 py-1.5 text-sm rounded-sm border ${filter===val?'bg-stone-900 text-white border-stone-900':'bg-white border-stone-300 text-stone-700 hover:bg-stone-100'}`}>{lbl}</button>
     ))}
@@ -3874,7 +3875,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
       {/* [UX 2026-06-11 FINAL] Original always-visible behavior. The labels carry the
           disambiguation: header buttons say "Details", the bidsheet bar says "bidsheet". */}
       {!edit&&<button onClick={()=>{if(window.confirm('Delete "'+(proposal.project||'this project')+'"  (#'+proposal.id+')?\n\nThis permanently removes the project and its estimate and ALL line items. This cannot be undone.')){onDelete(proposal.id);}}} className="text-sm px-3 py-1.5 rounded-sm border border-rose-300 text-rose-700 hover:bg-rose-50 flex items-center gap-1.5"><Ico n="trash2" size={13}/>Delete</button>}
-      {!edit?<button onClick={()=>{setEdit(true);setActiveTab('details');}} className="text-sm bg-stone-900 text-white px-3 py-1.5 rounded-sm hover:bg-stone-800 flex items-center gap-1.5"><Ico n="edit3" size={13}/>Edit Details</button>:
+      {!edit?<button onClick={()=>setEdit(true)} className="text-sm bg-stone-900 text-white px-3 py-1.5 rounded-sm hover:bg-stone-800 flex items-center gap-1.5"><Ico n="edit3" size={13}/>Edit Details</button>:
       <><button onClick={()=>{setDraft(proposal);setEdit(false);}} className="text-sm px-3 py-1.5 rounded-sm border border-stone-300 hover:bg-stone-100">Cancel</button>
       <button onClick={save} className="text-sm bg-emerald-700 text-white px-3 py-1.5 rounded-sm hover:bg-emerald-800 flex items-center gap-1.5"><Ico n="save" size={13}/>Save Details</button></>}
      </div>
