@@ -2099,7 +2099,7 @@ window.genProposal=function(est,items,notes,proposal){
 // PATCH (v37.1): Shared helpers — effectiveQty respects multiplier/deduction/height; orderQty respects sfPerCtn
 // Defaults of 1/0/0/null mean existing line items behave identically to pre-patch
 window._effQ=function(i){var q=Number(i.qty)||0,m=Number(i.multiplier)||1,d=Number(i.deduction)||0,h=Number(i.height)||0;var e=q;if(d>0)e=Math.max(0,e-d);if(m!==1)e=e*m;if(h>0)e=e*h;return e;};
-window._ordQ=function(i){var e=window._effQ(i);if(i.sfPerCtn&&Number(i.sfPerCtn)>0&&e>0)return Math.ceil(e/Number(i.sfPerCtn));return e;};
+window._ordQ=function(i){if(i.orderQty!=null&&Number(i.orderQty)>0)return Number(i.orderQty);/* FIX 2026-06-11: stored ORDER is authoritative (AMOUNT=ORDER x COST); derive only when absent */var e=window._effQ(i);if(i.sfPerCtn&&Number(i.sfPerCtn)>0&&e>0)return Math.ceil(e/Number(i.sfPerCtn));return e;};
 // PETER 6/10 #4 (rebuilt to match sample PO 1573-16 AHF): one page per supplier PO with the
 // full header/vendor/ship-to/freight-contact/account#/totals layout. Cost law unchanged:
 // reads unitCost from estimate_items (costPerUnit fallback is a no-op on live rows);
@@ -2132,7 +2132,7 @@ window.genSupplierPOs=function(est,items,_notes,proposal,suppliers){
    +"@media print{.np{display:none}}"
    +"</style></head><body>";
   Object.keys(byS).forEach(function(supName){
-    var perOrderCost=function(i){var c=Number(i.unitCost)||Number(i.costPerUnit)||0;if(i.usedMaterial&&i.sfPerCtn&&Number(i.sfPerCtn)>0)return c*Number(i.sfPerCtn);return c;};
+    var perOrderCost=function(i){var c=Number(i.unitCost)||Number(i.costPerUnit)||0;if(i.orderQty!=null&&Number(i.orderQty)>0)return c;if(i.usedMaterial&&i.sfPerCtn&&Number(i.sfPerCtn)>0)return c*Number(i.sfPerCtn);return c;};
     var its=byS[supName];
     var sup=findSupplier(supName);
     var subtotal=0, freight=0;
@@ -2184,7 +2184,7 @@ window.genSupplierPOs=function(est,items,_notes,proposal,suppliers){
     H+="<table class='items'><thead><tr><th style='width:12%'>Size</th><th>Description</th><th style='width:9%;text-align:right'>Qty</th><th style='width:8%'>Unit</th><th style='width:12%;text-align:right'>Unit Price</th><th style='width:13%;text-align:right'>Total</th></tr></thead><tbody>";
     var rowCount=0;
     its.forEach(function(i){var oq=window._ordQ(i),c=perOrderCost(i);
-      var unit=i.sfPerCtn&&Number(i.sfPerCtn)>0?'CTN':(i.orderUnit||i.unit||'SF');
+      var unit=(i.orderQty!=null&&Number(i.orderQty)>0)?(i.orderUnit||i.unit||'SF'):(i.sfPerCtn&&Number(i.sfPerCtn)>0?'CTN':(i.orderUnit||i.unit||'SF'));
       var desc=esc(i.description||'')+(i.color?"<br/><span style='color:#555'>"+esc(i.color)+"</span>":"")+(i.itemCode?"<br/><span style='color:#888;font-size:10px'>"+esc(i.itemCode)+"</span>":"");
       H+="<tr><td>"+esc(i.size||'')+"</td><td>"+desc+"</td><td style='text-align:right'>"+oq.toLocaleString('en-US')+"</td><td>"+esc(unit)+"</td><td style='text-align:right'>"+fmt(c)+"</td><td style='text-align:right'>"+fmt(oq*c)+"</td></tr>";
       rowCount++; });
@@ -2907,7 +2907,11 @@ const ActiveJobsView=({proposals,estimateItems,estimates,onSelectProposal,onSele
    g.contract=g.docs.reduce((s,d)=>s+d._contract,0);   // net of negative COs
    g.ec=g.docs.reduce((s,d)=>s+d._ec,0);
    g.ac=g.docs.reduce((s,d)=>s+d._ac,0);
-   g.em=(g.ec>0&&g.contract>0)?(g.contract-g.ec)/g.contract:null;
+   // FIX (2026-06-11): margin over COSTED documents only. No-cost docs (sell-only COs, placeholders)
+   // previously skewed contract without cost — 1573 showed 21.8% when costed docs run ~8.9%.
+   g.costedDocs=g.docs.filter(d=>d._ec>0);
+   g.costedContract=g.costedDocs.reduce((s,d)=>s+d._contract,0);
+   g.em=(g.ec>0&&g.costedContract>0)?(g.costedContract-g.ec)/g.costedContract:null;
    g.am=(g.ac>0&&g.contract>0)?(g.contract-g.ac)/g.contract:null;
   });
   order.sort((a,b)=>b.contract-a.contract);
@@ -2961,7 +2965,7 @@ const ActiveJobsView=({proposals,estimateItems,estimates,onSelectProposal,onSele
          <td className="px-3 py-2.5 text-right font-bold whitespace-nowrap"><MoneyCell amount={g.contract}/></td>
          <td className="px-3 py-2.5 text-right text-stone-600 whitespace-nowrap">{g.ec?<MoneyCell amount={g.ec}/>:<span className="text-stone-300 text-xs">—</span>}</td>
          <td className="px-3 py-2.5 text-right text-stone-500 text-xs" colSpan={2}>{g.ac>0?money(g.ac)+' actuals':''}</td>
-         <td className="px-3 py-2.5 text-right font-mono text-xs">{g.em!==null?<span className={g.em<settings.riskMarginFloor?'text-rose-600':g.em>=settings.targetMargin?'text-emerald-700':'text-amber-700'}>{pct(g.em,1)}</span>:'—'}</td>
+         <td className="px-3 py-2.5 text-right font-mono text-xs">{g.em!==null?<span title={`Est. margin over costed documents only (${g.costedDocs.length} of ${g.docs.length})`} className={(g.em<settings.riskMarginFloor?'text-rose-600':g.em>=settings.targetMargin?'text-emerald-700':'text-amber-700')+' border-b border-dotted border-stone-400'}>{pct(g.em,1)}</span>:'—'}</td>
          <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold">{g.am!==null?<span className={g.am>=settings.targetMargin?'text-emerald-700':g.am<settings.riskMarginFloor?'text-rose-700':'text-amber-700'}>{pct(g.am,1)}</span>:<span className="text-stone-400">—</span>}</td>
          <td className="px-3 py-2.5 text-[10px] uppercase tracking-wide text-stone-500">Project total</td>
          <td className="px-3 py-2.5"><span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold ${projHealth.color}`}><Ico n={projHealth.icon} size={11}/>{projHealth.label}</span></td>
@@ -4054,9 +4058,16 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
      {activeTab==='execution' && (()=>{
       const isAwarded=WON_STATUSES.includes(draft.status);
       const c=draft.contractAmount||draft.bidAmount||0;
-      const estCost=(draft.estMaterial||0)+(draft.estLabor||0)+(draft.estOther||0);
+      // BRIDGE (2026-06-11): same derivation as Active Jobs — fall back to bidsheet line items.
+      let estCost=(draft.estMaterial||0)+(draft.estLabor||0)+(draft.estOther||0), estCostDerived=false;
+      if(!estCost&&estimateItemsForThis&&estimateItemsForThis.length){
+       const _tx=(estimate&&estimate.taxRate!=null?estimate.taxRate:0.07),_mu=(estimate&&estimate.markupRate!=null?estimate.markupRate:0.20);
+       let _t=0,_mk=0;
+       estimateItemsForThis.filter(x=>!x.isAlternate&&!x.isVeAlternative).forEach(x=>{const cc=calcEstimateItem(x,_tx,_mu);_t+=cc.total;_mk+=cc.markup;});
+       if(_t>0){estCost=_t-_mk;estCostDerived=true;}
+      }
       const actCost=(draft.actMaterial||0)+(draft.actLabor||0)+(draft.actOther||0);
-      const estM=_em!==null?(_em*100).toFixed(1)+'%':null;
+      const estM=_em!==null?(_em*100).toFixed(1)+'%':(estCostDerived&&c>0?(((c-estCost)/c)*100).toFixed(1)+'%':null);
       const actM=actCost>0&&c>0?((c-actCost)/c*100).toFixed(1)+'%':null;
       if(!isAwarded) return(
        <div className="flex flex-col items-center justify-center py-16 text-center space-y-2">
@@ -4071,7 +4082,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
         <div className="grid grid-cols-4 border border-stone-200 divide-x divide-stone-200">
          {[
           {lbl:'Contract',val:money(c,true),sub:'awarded value',color:'text-stone-900'},
-          {lbl:'Est. Cost',val:estCost>0?money(estCost,true):'—',sub:'from Peter\'s bidsheet',color:'text-stone-700'},
+          {lbl:'Est. Cost',val:estCost>0?money(estCost,true):'—',sub:estCostDerived?'derived from bidsheet lines':'from Peter\'s bidsheet',color:'text-stone-700'},
           {lbl:'Actual Cost',val:actCost>0?money(actCost,true):'—',sub:'mat + labor entered',color:actCost>estCost&&estCost>0?'text-rose-700':'text-stone-700'},
           {lbl:actM?'Act. Margin':'Est. Margin',val:actM||estM||'—',sub:actM?'actual margin':estM?'estimated margin':'enter costs below',color:actM?parseFloat(actM)>=15?'text-emerald-700':parseFloat(actM)<5?'text-rose-700':'text-amber-700':estM?'text-stone-500':'text-stone-300'},
          ].map(({lbl,val,sub,color})=>(
