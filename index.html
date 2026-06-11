@@ -2031,22 +2031,34 @@ window.genProposal=function(est,items,notes,proposal){
   var modes=base.map(function(i){return i.displayMode||'full';});
   var allLump=modes.length>0&&modes.every(function(m){return m==='lump_sum';});
   var allTotal=modes.length>0&&modes.every(function(m){return m==='total_only'||m==='lump_sum';});
-  var sections=est.sections||[];
+  // [PETER 6/10] Group proposal lines by CSI section exactly like the bidsheet. Sections are
+  // derived from the items themselves (sectionCode/sectionName) — est.sections never existed in
+  // the live data model, which is why proposals rendered flat.
+  var deriveSections=function(its){
+    var seen={},list=[];
+    its.forEach(function(i){
+      var key=(i.sectionCode||'')+'|'+(i.sectionName||'');
+      if(!seen[key]){seen[key]={code:i.sectionCode||'',name:i.sectionName||'Flooring',items:[]};list.push(seen[key]);}
+      seen[key].items.push(i);
+    });
+    return list;
+  };
   var makeRow=function(i,r){
     var dm=i.displayMode||'full';
     if(dm==='lump_sum') return"<tr><td colspan='"+(allLump?'3':'4')+"' style='padding:5px 8px'>"+(i.itemCode?'<b>'+i.itemCode+'</b> ':'')+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";
     if(dm==='total_only') return"<tr><td style='padding:5px 8px'>"+(i.itemCode||'')+"</td><td style='padding:5px 8px'>"+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right'>"+(i.qty||'')+' '+(i.unit||'')+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";
     return"<tr><td style='padding:5px 8px'>"+(i.itemCode||'')+"</td><td style='padding:5px 8px'>"+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right'>"+(i.qty||'')+' '+(i.unit||'')+"</td><td style='padding:5px 8px;text-align:right'>"+fmt(r.mat)+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";
   };
+  var colCount=allLump?4:(allTotal?4:5);   // section header colspan must match the active table layout
   var makeRows=function(its){
     var rows='';
-    if(sections.length>0){
-      sections.forEach(function(sec){
-        var si=its.filter(function(i){return i.sectionId===sec.id;});
-        if(!si.length)return;
-        var st=si.reduce(function(s,i){return s+calc(i).tot;},0);
-        rows+="<tr><td colspan='5' style='background:#1c1917;color:#fff;padding:6px 10px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase'>"+(sec.code?sec.code+' \u2014 ':'')+(sec.name||'')+"<span style='float:right;color:#9ca3af'>"+fmt(st)+"</span></td></tr>";
-        si.forEach(function(i){rows+=makeRow(i,calc(i));});
+    var secs=deriveSections(its);
+    var multi=secs.length>1||(secs.length===1&&(secs[0].code||secs[0].name!=='Flooring'));
+    if(multi){
+      secs.forEach(function(sec){
+        var st=sec.items.reduce(function(s,i){return s+calc(i).tot;},0);
+        rows+="<tr><td colspan='"+colCount+"' style='background:#1c1917;color:#fff;padding:6px 10px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase'>"+(sec.code?sec.code+' \u2014 ':'')+(sec.name||'')+"<span style='float:right;color:#9ca3af'>"+fmt(st)+"</span></td></tr>";
+        sec.items.forEach(function(i){rows+=makeRow(i,calc(i));});
       });
     } else {
       its.forEach(function(i){rows+=makeRow(i,calc(i));});
@@ -2282,21 +2294,30 @@ const toDbEstimate=obj=>pickCols(obj,ESTIMATE_COLS);
 const toDbEstimateItem=obj=>pickCols(obj,ESTIMATE_ITEM_COLS);
 const toDbLineItem=obj=>pickCols(obj,LINE_ITEM_COLS);
 const STATUS_CONFIG = {
+ // [STATUS TAXONOMY 2026-06-10 — Ben] Natural business flow:
+ // Lead -> Bidding -> Submitted -> Awarded -> Active -> Completed, with Dead (project canceled,
+ // nobody awarded) and Lost (lost to competitor) as terminal branches.
  'Lead':        { color:'bg-stone-200 text-stone-700',       dot:'bg-stone-500',    pipeline:'open',    order:1 },
  'Bidding':     { color:'bg-sky-100 text-sky-800',           dot:'bg-sky-500',      pipeline:'open',    order:2 },
  'Submitted':   { color:'bg-amber-100 text-amber-800',       dot:'bg-amber-500',    pipeline:'open',    order:3 },
- 'Negotiating': { color:'bg-orange-100 text-orange-800',     dot:'bg-orange-500',   pipeline:'open',    order:4 },
- 'Won':         { color:'bg-emerald-100 text-emerald-800',   dot:'bg-emerald-500',  pipeline:'awarded', order:5 },
- 'Active':      { color:'bg-emerald-200 text-emerald-900',   dot:'bg-emerald-600',  pipeline:'awarded', order:6 },
- 'Complete':    { color:'bg-teal-100 text-teal-800',         dot:'bg-teal-600',     pipeline:'closed',  order:7 },
- 'Hold':        { color:'bg-yellow-100 text-yellow-800',     dot:'bg-yellow-500',   pipeline:'open',    order:8 },
- 'Lost':        { color:'bg-rose-100 text-rose-700',         dot:'bg-rose-500',     pipeline:'lost',    order:9 },
- 'Dead':        { color:'bg-stone-300 text-stone-700',       dot:'bg-stone-600',    pipeline:'lost',    order:10 },
+ 'Awarded':     { color:'bg-emerald-100 text-emerald-800',   dot:'bg-emerald-500',  pipeline:'awarded', order:4 },
+ 'Active':      { color:'bg-emerald-200 text-emerald-900',   dot:'bg-emerald-600',  pipeline:'awarded', order:5 },
+ 'Completed':   { color:'bg-teal-100 text-teal-800',         dot:'bg-teal-600',     pipeline:'closed',  order:6 },
+ 'Dead':        { color:'bg-stone-300 text-stone-700',       dot:'bg-stone-600',    pipeline:'lost',    order:7 },
+ 'Lost':        { color:'bg-rose-100 text-rose-700',         dot:'bg-rose-500',     pipeline:'lost',    order:8 },
+ // Legacy keys — live rows may still carry these until the status SQL migration runs.
+ // They render with the closest new status's look but are EXCLUDED from status pickers.
+ 'Negotiating': { color:'bg-amber-100 text-amber-800',       dot:'bg-amber-500',    pipeline:'open',    order:3.1, legacy:true },
+ 'Hold':        { color:'bg-yellow-100 text-yellow-800',     dot:'bg-yellow-500',   pipeline:'open',    order:3.2, legacy:true },
+ 'Won':         { color:'bg-emerald-100 text-emerald-800',   dot:'bg-emerald-500',  pipeline:'awarded', order:4.1, legacy:true },
+ 'Complete':    { color:'bg-teal-100 text-teal-800',         dot:'bg-teal-600',     pipeline:'closed',  order:6.1, legacy:true },
 };
-const ALL_STATUSES  = Object.keys(STATUS_CONFIG);
-const OPEN_STATUSES = ALL_STATUSES.filter(s => STATUS_CONFIG[s].pipeline === 'open');
-const WON_STATUSES  = ALL_STATUSES.filter(s => ['awarded','closed'].includes(STATUS_CONFIG[s].pipeline));
-const LOST_STATUSES = ALL_STATUSES.filter(s => STATUS_CONFIG[s].pipeline === 'lost');
+// Pickers offer only the 8 canonical statuses; pipeline filters include legacy keys so old rows still match.
+const ALL_STATUSES  = Object.keys(STATUS_CONFIG).filter(s => !STATUS_CONFIG[s].legacy);
+const _EVERY_STATUS = Object.keys(STATUS_CONFIG);
+const OPEN_STATUSES = _EVERY_STATUS.filter(s => STATUS_CONFIG[s].pipeline === 'open');
+const WON_STATUSES  = _EVERY_STATUS.filter(s => ['awarded','closed'].includes(STATUS_CONFIG[s].pipeline));
+const LOST_STATUSES = _EVERY_STATUS.filter(s => STATUS_CONFIG[s].pipeline === 'lost');
 const MAT_ITEMS = ['LVT (Luxury Vinyl Tile)','LVP (Luxury Vinyl Plank)','Carpet (Broadloom)','Carpet Tile','Hardwood','Engineered Wood','Ceramic Tile','Porcelain Tile','VCT (Vinyl Composition Tile)','Sheet Vinyl','Rubber Flooring','Epoxy Coating','Concrete Polish','Underlayment','Adhesive / Glue','Transition Strips','Reducer / T-Molding','Stair Nosing','Cove Base / Molding','Moisture Barrier','Self-Leveling Compound','Floor Prep / Grinding','Substrate Patching','Demo / Removal'];
 const LAB_ITEMS = ['Installation Labor','Demo / Removal Labor','Floor Prep Labor','Subfloor Repair Labor','Stair Installation','Tile Setting Labor','Carpet Stretching / Seaming','Polish / Finish Labor','Supervision / PM'];
 const OTH_ITEMS = ['Equipment Rental','Delivery / Freight','Disposal / Haul-off','Permits & Fees','Insurance / Bond','Subcontractor','Travel / Mileage','Warranty / Callbacks'];
@@ -2333,7 +2354,9 @@ const daysSince=d=>daysBetween(d,todayStr());
 const formatDate=d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
 const lastActivity=p=>p.lastTouched||p.submitted;
 const overdueDays=(p,s)=>{
- if(!['Submitted','Negotiating','Bidding'].includes(p.status)) return null;
+ // [FOLLOW-UP 2026-06-10 — Ben] SLA staleness applies to every pre-award working status.
+ // (nextAction/nextActionDate overdue applies to ALL statuses — handled by the queue itself.)
+ if(!['Lead','Bidding','Submitted','Negotiating','Hold'].includes(p.status)) return null;
  const since=daysSince(lastActivity(p));
  if(since===null) return null;
  const sla=p.status==='Submitted'?s.slaSubmitted:s.slaNegotiating;
@@ -2672,7 +2695,10 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
  const today=todayStr();
  const gcWR=useMemo(()=>new Map(gcStats.map(g=>[g.gc,g.winRate])),[gcStats]);
  const queue=useMemo(()=>{
-  let pool=proposals.filter(p=>OPEN_STATUSES.includes(p.status)&&p.bidAmount>0);
+  // [FOLLOW-UP 2026-06-10 — Ben] The follow-up system applies to ALL statuses:
+  // open statuses surface via SLA staleness; awarded/active/closed/lost rows surface
+  // whenever they carry a nextAction (or it's overdue). $0 leads are included.
+  let pool=proposals.filter(p=>OPEN_STATUSES.includes(p.status)||p.nextAction||p.nextActionDate);
   if(settings.yearFilter!=='All') pool=pool.filter(p=>p.submitted&&p.submitted.startsWith(String(settings.yearFilter)));
   pool=pool.map(p=>{
    const od=overdueDays(p,settings)||0;
@@ -3516,25 +3542,6 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
         {gcIntel.gc.split(' ')[0]} · {pct(gcIntel.winRate)} WR · {gcIntel.won + gcIntel.lost} bids
        </span>
       )}
-      {/* Global display-mode toggle — overrides all line items at once */}
-      <div className="flex items-center gap-1 ml-2 border border-stone-200 rounded-sm overflow-hidden bg-white" title="Set display mode for all line items on proposal">
-       {[{v:'full',l:'F',t:'Full detail'},{v:'total_only',l:'T',t:'Total only'},{v:'lump_sum',l:'L',t:'Lump sum'}].map(({v,l,t})=>{
-        const allMatch=(displayItems||[]).length>0&&(displayItems||[]).every(i=>(i.displayMode||'full')===v);
-        return(
-         <button key={v} title={t+' — apply to all items'}
-          onClick={async()=>{
-           // Write displayMode against the LIVE rows (staged field edits stay unsaved until
-           // "Save bidsheet"), and patch any staged copy's displayMode so a later Save
-           // can't overwrite this change with a stale pending row.
-           const toUpdate=(estimateItems||[]).filter(i=>{ const eff=pendingEdits[i.id]||i; return (eff.displayMode||'full')!==v; });
-           await Promise.all(toUpdate.map(i=>onUpdateItem({...i,displayMode:v})));
-           setPendingEdits(p=>{ const np={...p}; toUpdate.forEach(i=>{ if(np[i.id]) np[i.id]={...np[i.id],displayMode:v}; }); return np; });
-          }}
-          className="px-2 py-0.5 text-[10px] font-bold hover:bg-stone-100 transition-colors border-r border-stone-200 last:border-0"
-          style={{background:allMatch?'#1c1917':'',color:allMatch?'white':'#78716c'}}>{l}</button>
-        );
-       })}
-      </div>
      </div>
      {/* [EXPAND/COLLAPSE FIX 2026-06-08] Rendered as a div, not a <button>, so it stays clickable
          in view mode. <fieldset disabled={!edit}> disables form controls (button/input/select) but
@@ -3772,33 +3779,40 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
      </div>
     </div>
    </>}
-   <div className="bg-stone-50 border border-stone-200 p-3 text-xs text-stone-600">
-    <div className="flex items-center justify-between flex-wrap gap-3">
-     <div>
-      <div className="font-semibold text-stone-800 mb-0.5">Proposal Display Mode</div>
-      <div className="text-stone-500">Controls what GC sees on the PDF. Set globally below, or override per line.</div>
-     </div>
-     <div className="flex items-center gap-2">
-      <span className="text-stone-500 text-[10px] uppercase font-semibold tracking-wide mr-1">Set ALL lines to:</span>
-      {DISPLAY_MODES.map(d=>(
-       <button key={d.value} disabled={applyingDM}
-        onClick={async()=>{
-         if(!window.confirm('Set ALL '+estimateItems.length+' line items to "'+d.label+'"?')) return;
-         setApplyingDM(true);
-         for(const it of estimateItems){ await onUpdateItem({...it,displayMode:d.value}); }
-         setApplyingDM(false);
-        }}
-        className={`px-2.5 py-1 text-[11px] font-bold border transition-colors ${d.value==='full'?'border-stone-400 text-stone-700 hover:bg-stone-200':d.value==='total_only'?'border-sky-400 text-sky-800 hover:bg-sky-100':'border-amber-400 text-amber-800 hover:bg-amber-100'}`}
-        title={d.desc}>
-        {d.value==='full'?'F — Full Detail':d.value==='total_only'?'T — Total Only':'L — Lump Sum'}
-       </button>
-      ))}
-      {applyingDM&&<span className="text-stone-400 text-[10px] ml-1">Updating…</span>}
-     </div>
-    </div>
-   </div>
   </div>
   </fieldset>
+ );
+};
+// [UX FIX 2026-06-10 — Ben/Peter] Proposal Display Mode lives on the Proposal & POs tab —
+// the buttons and their explanations sit TOGETHER, next to the document they control.
+const ProposalDisplayModePanel = ({ items, onUpdateItem }) => {
+ const [applying, setApplying] = useState(false);
+ const counts = DISPLAY_MODES.reduce((a,d)=>{a[d.value]=(items||[]).filter(i=>(i.displayMode||'full')===d.value).length;return a;},{});
+ return (
+  <div style={{background:'#fafaf9',border:'1px solid #e7e5e4',padding:'14px 16px'}}>
+   <div style={{fontFamily:'Georgia,serif',fontSize:'15px',color:'#1c1917',marginBottom:'2px'}}>Proposal Display Mode</div>
+   <div style={{fontSize:'12px',color:'#a8a29e',marginBottom:'10px'}}>Controls what the GC sees on the proposal PDF. Set all lines here, or override per line in the bidsheet's DM column.</div>
+   <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
+    {DISPLAY_MODES.map(d=>(
+     <div key={d.value} style={{display:'flex',alignItems:'center',gap:'10px'}}>
+      <button disabled={applying}
+       onClick={async()=>{
+        if(!window.confirm('Set ALL '+(items||[]).length+' line items to "'+d.label+'"?')) return;
+        setApplying(true);
+        for(const it of (items||[])){ if((it.displayMode||'full')!==d.value) await onUpdateItem({...it,displayMode:d.value}); }
+        setApplying(false);
+       }}
+       className={`px-2.5 py-1 text-[11px] font-bold border transition-colors ${d.value==='full'?'border-stone-400 text-stone-700 hover:bg-stone-200':d.value==='total_only'?'border-sky-400 text-sky-800 hover:bg-sky-100':'border-amber-400 text-amber-800 hover:bg-amber-100'}`}
+       style={{minWidth:'130px',background:'white'}}>
+       {d.value==='full'?'F — Full Detail':d.value==='total_only'?'T — Total Only':'L — Lump Sum'}
+      </button>
+      <span style={{fontSize:'11px',color:'#78716c',fontFamily:'monospace'}}>{d.desc}</span>
+      <span style={{fontSize:'10px',color:'#a8a29e',marginLeft:'auto'}}>{counts[d.value]||0} line{(counts[d.value]||0)===1?'':'s'}</span>
+     </div>
+    ))}
+   </div>
+   {applying&&<div style={{fontSize:'10px',color:'#a8a29e',marginTop:'6px'}}>Updating…</div>}
+  </div>
  );
 };
 const Fld=({label,value,edit,type='text',onChange,render})=>(
@@ -3855,10 +3869,13 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
       <div className="min-w-0"><div className="text-xs text-stone-500 font-mono flex items-center gap-1.5">#{proposal.id}{!edit&&<button onClick={()=>{const n=window.prompt('Renumber project #'+proposal.id+'\n\nEnter the new project number (e.g. the real proposal # once a Lead becomes a bid).\nThis updates the project AND all its estimate, line items and documents.',String(proposal.id));if(n!==null&&n.trim()&&n.trim()!==String(proposal.id)){if(window.confirm('Renumber  #'+proposal.id+'  \u2192  #'+n.trim()+' ?\n\nAll linked records move to the new number.')) onRenumber(proposal.id,n.trim());}}} className="text-[10px] text-stone-400 hover:text-stone-700 underline decoration-dotted" title="Change the project number (cascades to every linked record)">renumber</button>}</div><div className="font-serif text-xl text-stone-900 truncate">{proposal.project||'Untitled'}</div></div>
      </div>
      <div className="flex items-center gap-2">
-      {!edit&&<button onClick={()=>{if(window.confirm('Delete "'+(proposal.project||'this project')+'"  (#'+proposal.id+')?\n\nThis permanently removes the project and its estimate and ALL line items. This cannot be undone.')){onDelete(proposal.id);}}} className="text-sm px-3 py-1.5 rounded-sm border border-rose-300 text-rose-700 hover:bg-rose-50 flex items-center gap-1.5"><Ico n="trash2" size={13}/>Delete</button>}
-      {!edit?<button onClick={()=>setEdit(true)} className="text-sm bg-stone-900 text-white px-3 py-1.5 rounded-sm hover:bg-stone-800 flex items-center gap-1.5"><Ico n="edit3" size={13}/>Edit</button>:
+      {/* [UX FIX 2026-06-10 — Ben] These buttons edit/save the PROJECT DETAILS draft only, so they
+          render only on that tab. The bidsheet has its own staged Save bar; showing both at once
+          put three save-ish buttons on screen and confused everyone. */}
+      {activeTab==='details'&&!edit&&<button onClick={()=>{if(window.confirm('Delete "'+(proposal.project||'this project')+'"  (#'+proposal.id+')?\n\nThis permanently removes the project and its estimate and ALL line items. This cannot be undone.')){onDelete(proposal.id);}}} className="text-sm px-3 py-1.5 rounded-sm border border-rose-300 text-rose-700 hover:bg-rose-50 flex items-center gap-1.5"><Ico n="trash2" size={13}/>Delete</button>}
+      {activeTab==='details'&&(!edit?<button onClick={()=>setEdit(true)} className="text-sm bg-stone-900 text-white px-3 py-1.5 rounded-sm hover:bg-stone-800 flex items-center gap-1.5"><Ico n="edit3" size={13}/>Edit Details</button>:
       <><button onClick={()=>{setDraft(proposal);setEdit(false);}} className="text-sm px-3 py-1.5 rounded-sm border border-stone-300 hover:bg-stone-100">Cancel</button>
-      <button onClick={save} className="text-sm bg-emerald-700 text-white px-3 py-1.5 rounded-sm hover:bg-emerald-800 flex items-center gap-1.5"><Ico n="save" size={13}/>Save</button></>}
+      <button onClick={save} className="text-sm bg-emerald-700 text-white px-3 py-1.5 rounded-sm hover:bg-emerald-800 flex items-center gap-1.5"><Ico n="save" size={13}/>Save Details</button></>)}
      </div>
     </div>
     {}
@@ -4032,6 +4049,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
        :<div style={{background:'#1c1917',color:'white',padding:'14px',display:'grid',gridTemplateColumns:'1fr 1fr 1fr',textAlign:'center',gap:'10px',marginBottom:'4px'}}>
         {(()=>{const tax=(estimate&&estimate.taxRate!=null?estimate.taxRate:0.07),mu=(estimate&&estimate.markupRate!=null?estimate.markupRate:0.20),base=(estimateItemsForThis||[]).filter(x=>!x.isAlternate&&!x.isVeAlternative),tM=base.reduce((s,x)=>{const q=Number(x.qty)||0,c=Number(x.unitCost)||Number(x.costPerUnit)||0,f=Number(x.freight)||0,a=q*c;return s+a+a*tax+f+a*mu;},0),tL=base.reduce((s,x)=>s+(Number(x.qty)||0)*(Number(x.laborRate)||0),0),$=n=>'$'+Math.round(n||0).toLocaleString('en-US');const bidAmt=Number(proposal&&proposal.bidAmount)||Number(proposal&&proposal.contractAmount)||Number(draft&&draft.bidAmount)||0;const statedTotal=bidAmt>0?bidAmt:(tM+tL);return[['Material',tM],['Labor',tL],['Base Bid',statedTotal]].map(([l,v],i)=><div key={l}><div style={{fontSize:'10px',textTransform:'uppercase',color:'#a8a29e'}}>{l}</div><div style={{fontFamily:'Georgia,serif',fontSize:'20px',color:i===2?'#6ee7b7':'white'}}>{$(v)}</div></div>);})()}
        </div>}
+      {estimateItemsForThis&&estimateItemsForThis.length>0&&<ProposalDisplayModePanel items={estimateItemsForThis} onUpdateItem={onUpdateEstimateItem}/>}
       {[['Proposal Document','Full PDF with logo, GC info, line items and totals.','genProposal','Generate Proposal'],
        ['Supplier Purchase Orders','One PO per supplier shipped to job site.','genSupplierPOs','Generate POs'],
        ['Installer Work Order','Labor scope with quantities and rates.','genInstallerPO','Generate Work Order']
@@ -4155,10 +4173,11 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
  const funnel=useMemo(()=>{
   const yr=settings.yearFilter==='All'?proposals:proposals.filter(p=>p.submitted&&p.submitted.startsWith(String(settings.yearFilter)));
   const stages=[
-   {label:'Lead / Qualified',statuses:['Lead','Qualified','Bidding'],color:'bg-sky-100 text-sky-800'},
-   {label:'Submitted',statuses:['Submitted'],color:'bg-amber-100 text-amber-800'},
-   {label:'Negotiating',statuses:['Negotiating','Follow-Up','Discussing'],color:'bg-orange-100 text-orange-800'},
-   {label:'Won / Active',statuses:WON_STATUSES,color:'bg-emerald-100 text-emerald-800'},
+   {label:'Lead',statuses:['Lead','Qualified'],color:'bg-stone-200 text-stone-700'},
+   {label:'Bidding',statuses:['Bidding','Hold'],color:'bg-sky-100 text-sky-800'},
+   {label:'Submitted',statuses:['Submitted','Negotiating','Follow-Up','Discussing'],color:'bg-amber-100 text-amber-800'},
+   {label:'Awarded / Active',statuses:['Awarded','Won','Active'],color:'bg-emerald-100 text-emerald-800'},
+   {label:'Completed',statuses:['Completed','Complete'],color:'bg-teal-100 text-teal-800'},
    {label:'Lost / Dead',statuses:LOST_STATUSES,color:'bg-rose-100 text-rose-800'},
   ];
   return stages.map(s=>{
@@ -4256,7 +4275,7 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
        {funnel.map(s=>{
         const maxVal=funnel.reduce((m,x)=>Math.max(m,x.value),0);
         const w=maxVal>0?Math.max(2,Math.round((s.value/maxVal)*100)):0;
-        const barColors={'Lead / Qualified':'#bae6fd','Submitted':'#fde68a','Negotiating':'#fed7aa','Won / Active':'#a7f3d0','Lost / Dead':'#fecaca'};
+        const barColors={'Lead':'#e7e5e4','Bidding':'#bae6fd','Submitted':'#fde68a','Awarded / Active':'#a7f3d0','Completed':'#99f6e4','Lost / Dead':'#fecaca'};
         const bg=barColors[s.label]||'#e7e5e4';
         return(
          <div key={s.label} className="flex items-center gap-4">
@@ -4274,7 +4293,7 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
      </div>
      <div className="grid grid-cols-3 gap-4">
       {(()=>{
-       const won=funnel.find(s=>s.label.startsWith('Won'));
+       const won=funnel.find(s=>s.label.startsWith('Awarded'));
        const lost=funnel.find(s=>s.label.startsWith('Lost'));
        const total=(won?.count||0)+(lost?.count||0);
        const wr=total>0?((won?.count||0)/total):null;
@@ -4594,7 +4613,7 @@ function m15BuildPayloads({lines, job, propId, estId, isUpdate}){
   return { proposalRow, estimateRow, itemRows, totals:{base:Math.round(base),estMat:Math.round(estMat),estLab:Math.round(estLab)}, isUpdate:!!isUpdate };
 }
 
-const M15_STATUS_OPTS=['Bidding','Lead','Submitted','Negotiating'];
+const M15_STATUS_OPTS=['Lead','Bidding','Submitted'];
 
 const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone }) => {
   const blankJob = lock
@@ -4838,7 +4857,7 @@ const SettingsView=({proposals,lineItemsAll,settings,onSaveSettings,onExport,set
     <p className="text-sm text-stone-500 mb-3">SLA = your internal deadline for following up on bids. A bid shows as <span className="text-rose-700 font-semibold">overdue</span> in the queue once it exceeds this threshold with no logged contact. The clock resets every time you click "Log Call."</p>
     <div className="grid grid-cols-2 gap-4">
      <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Submitted → follow up after</label><div className="flex items-center gap-2 mt-1"><input type="number" value={settings.slaSubmitted} onChange={e=>onSaveSettings({...settings,slaSubmitted:Number(e.target.value)||0})} className="w-20 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">days (default 14)</span></div><p className="text-xs text-stone-400 mt-1">Call GC if no response in X days after submission.</p></div>
-     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Negotiating → follow up after</label><div className="flex items-center gap-2 mt-1"><input type="number" value={settings.slaNegotiating} onChange={e=>onSaveSettings({...settings,slaNegotiating:Number(e.target.value)||0})} className="w-20 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">days (default 7)</span></div><p className="text-xs text-stone-400 mt-1">Call if conversation goes quiet for X days.</p></div>
+     <div><label className="text-xs text-stone-600 uppercase tracking-widest font-semibold">Lead / Bidding → follow up after</label><div className="flex items-center gap-2 mt-1"><input type="number" value={settings.slaNegotiating} onChange={e=>onSaveSettings({...settings,slaNegotiating:Number(e.target.value)||0})} className="w-20 px-2 py-1 text-sm border border-stone-300 rounded-sm"/><span className="text-sm text-stone-600">days (default 7)</span></div><p className="text-xs text-stone-400 mt-1">Call if conversation goes quiet for X days.</p></div>
     </div>
    </section>
    <section className="bg-white border border-stone-200 p-5">
@@ -4907,7 +4926,7 @@ const YearFilter=({proposals,value,onChange})=>{
 };
 const parseDate=v=>{if(!v)return null;if(v instanceof Date)return v.toISOString().slice(0,10);const d=new Date(v);return isNaN(d)?null:d.toISOString().slice(0,10);};
 const parseNumber=v=>{if(v===null||v===undefined||v==='')return null;if(typeof v==='number')return v;const n=Number(String(v).replace(/[$,]/g,''));return isNaN(n)?null:n;};
-const mapStatus=s=>{if(!s)return 'Submitted';const m={'cold lead':'Lead','qualified':'Lead','bidding':'Bidding','submitted':'Submitted','follow-up':'Negotiating','discussing':'Negotiating','awarded':'Won','closed won':'Won','active':'Active','in progress':'Active','completed':'Complete','lost':'Lost','closed lost':'Lost','dead':'Dead','on hold':'Hold'};return m[String(s).toLowerCase().trim()]||String(s);};
+const mapStatus=s=>{if(!s)return 'Submitted';const m={'cold lead':'Lead','qualified':'Lead','bidding':'Bidding','submitted':'Submitted','follow-up':'Submitted','discussing':'Submitted','negotiating':'Submitted','awarded':'Awarded','won':'Awarded','closed won':'Awarded','active':'Active','in progress':'Active','completed':'Completed','complete':'Completed','lost':'Lost','closed lost':'Lost','dead':'Dead','canceled':'Dead','cancelled':'Dead','on hold':'Bidding','hold':'Bidding'};return m[String(s).toLowerCase().trim()]||String(s);};
 const cleanProject=val=>{if(!val||String(val).trim()==='nan')return'';let s=String(val);s=s.replace(/https?:\/\/\S+/g,'');s=s.replace(/\u00a0/g,' ');s=s.replace(/;\s*$/,'').trim();return s;};
 function App() {
  const [loaded, setLoaded] = useState(false);
