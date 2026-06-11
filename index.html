@@ -3334,29 +3334,19 @@ const EstimateSection = ({ section, items, onUpdate, onDelete, onAddItem, onAddV
   </div>
  );
 };
-const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onSaveEstimate, onSyncProposalFromHeader, onAddItem, onUpdateItem, onDeleteItem, onAddVE, allEstimateItems, onCloseEstimate, suppliers, installers, allGCs, gcs, gcStats }) => {
+const EstimateView = ({ proposal, estimate, estimateItems, pendingEdits, setPendingEdits, edit, onImported, onSaveEstimate, onSyncProposalFromHeader, onAddItem, onUpdateItem, onDeleteItem, onAddVE, allEstimateItems, onCloseEstimate, suppliers, installers, allGCs, gcs, gcStats }) => {
  const [headerExpanded, setHeaderExpanded] = useState(false);
  const [showImport, setShowImport] = useState(false);
  const [editingHeader, setEditingHeader] = useState(false);
  const [draftHeader, setDraftHeader] = useState(estimate);
  const [applyingDM, setApplyingDM] = useState(false);
- // FIX (Peter 6/10 #1): bidsheet cell edits used to upsert to Supabase on EVERY keystroke —
- // "saves without pressing Save". Field edits now stage into `pendingEdits` (id -> full patched
- // row) and only persist when the explicit "Save bidsheet" button flushes them. Discard restores
- // the live rows. Adds/deletes remain immediate (each is its own explicit click). Switching
- // projects clears any unsaved staging.
- const [pendingEdits, setPendingEdits] = useState({});
- const [savingEdits, setSavingEdits] = useState(false);
- const displayItems = useMemo(() => estimateItems.map(i => pendingEdits[i.id] || i), [estimateItems, pendingEdits]);
- const pendingCount = Object.keys(pendingEdits).length;
+ // FIX (Peter 6/10 #1): bidsheet cell edits stage locally instead of upserting per keystroke.
+ // [ONE SAVE 2026-06-11] The staged map lives in ProjectDrawer (survives tab switches); the
+ // single header Save commits everything. This view only stages and previews.
+ const displayItems = useMemo(() => estimateItems.map(i => (pendingEdits&&pendingEdits[i.id]) || i), [estimateItems, pendingEdits]);
+ const pendingCount = Object.keys(pendingEdits||{}).length;
  const stageItemEdit = (next) => setPendingEdits(p => ({ ...p, [next.id]: next }));
- const discardEdits = () => setPendingEdits({});
- const saveEdits = async () => {
-  setSavingEdits(true);
-  try { for (const it of Object.values(pendingEdits)) await onUpdateItem(it); setPendingEdits({}); }
-  finally { setSavingEdits(false); }
- };
- useEffect(() => { setDraftHeader(estimate); setEditingHeader(false); setPendingEdits({}); }, [estimate?.id]);
+ useEffect(() => { setDraftHeader(estimate); setEditingHeader(false); }, [estimate?.id]);
  const gcIntel = useMemo(() => {
   if (!proposal?.gc || !gcStats?.length) return null;
   const g = gcStats.find(x => x.gc === proposal.gc);
@@ -3710,14 +3700,10 @@ const EstimateView = ({ proposal, estimate, estimateItems, edit, onImported, onS
    )}
    {}
    {pendingCount > 0 && (
-    <div className="sticky bg-amber-50 shadow-lg px-4 py-2.5 flex items-center justify-between" style={{bottom:'104px',zIndex:20,border:'1px solid #fbbf24'}}>
+    <div className="sticky bg-amber-50 px-4 py-2 flex items-center" style={{bottom:'104px',zIndex:20,border:'1px solid #fbbf24'}}>
      <div className="text-sm text-amber-900 flex items-center gap-2">
       <Ico n="alertTri" size={14} />
-      <span><strong>{pendingCount} unsaved change{pendingCount === 1 ? '' : 's'}</strong> — nothing is written to the database until you save.</span>
-     </div>
-     <div className="flex items-center gap-2">
-      <button onClick={discardEdits} disabled={savingEdits} className="text-sm px-3 py-1.5 rounded-sm border border-stone-300 bg-white hover:bg-stone-100">Discard</button>
-      <button onClick={saveEdits} disabled={savingEdits} className="text-sm px-4 py-1.5 rounded-sm bg-emerald-700 text-white hover:bg-emerald-800 font-semibold">{savingEdits ? 'Saving…' : 'Save bidsheet'}</button>
+      <span><strong>{pendingCount} unsaved change{pendingCount === 1 ? '' : 's'}</strong> — use the green <strong>Save</strong> button (top right). Nothing is written until then.</span>
      </div>
     </div>
    )}
@@ -3831,15 +3817,31 @@ const FldSel=({label,value,edit,options,onChange,render})=>(
 const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onImported,onAddLineItem,onUpdateLineItem,onDeleteLineItem,onAddNote,onSelectGC,estimate,estimateItems,onSaveEstimate,onAddEstimateItem,onUpdateEstimateItem,onDeleteEstimateItem,onAddVEAlternative,allEstimateItems,suppliers,installers,allGCs,gcs,gcStats})=>{
  const [edit,setEdit]=useState(false);
  const [draft,setDraft]=useState(proposal);
+ // [ONE SAVE 2026-06-11 — Ben] Staged bidsheet edits live HERE (not in EstimateView) so they
+ // survive tab switches; the single header Save commits details draft + bidsheet edits together.
+ const [pendingEdits,setPendingEdits]=useState({});
+ const [savingAll,setSavingAll]=useState(false);
  const [previewHtml,setPreviewHtml]=useState(null);
  const [noteText,setNoteText]=useState('');
  const [activeTab,setActiveTab]=useState('details');
- useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('details');},[proposal?.id]);
+ useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('details');setPendingEdits({});},[proposal?.id]);
  if(!proposal) return null;
  // [STALE-DRAFT FIX 2026-06-08] Read the LATEST draft via the functional updater, not the closure
  // copy. Without this, a header-sync that just ran (setDraft) hadn't applied to this closure yet,
  // so the master Save persisted the pre-edit proposal and wiped the synced header fields.
  const save=()=>{setDraft(d=>{onSave(d);return d;});setEdit(false);};
+ const pendingCount=Object.keys(pendingEdits).length;
+ const anyDirty=edit||pendingCount>0;
+ const saveAll=async()=>{
+  const parts=[edit?'project details':null,pendingCount?pendingCount+' bidsheet change'+(pendingCount===1?'':'s'):null].filter(Boolean);
+  if(!window.confirm('Save '+parts.join(' and ')+'?')) return;
+  setSavingAll(true);
+  try{
+   if(edit) save();
+   if(pendingCount){ for(const it of Object.values(pendingEdits)) await onUpdateEstimateItem(it); setPendingEdits({}); }
+  } finally { setSavingAll(false); }
+ };
+ const cancelAll=()=>{ setDraft(proposal); setEdit(false); setPendingEdits({}); };
  // [HEADER->PROPOSAL SYNC 2026-06-08] Estimate Header writes the estimates table; Project Details
  // reads/edits the proposals draft. When the header saves shared fields, merge them into this
  // drawer's draft (so Details shows them immediately) and persist via onSave. Triggered by the
@@ -3872,12 +3874,12 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
       <div className="min-w-0"><div className="text-xs text-stone-500 font-mono flex items-center gap-1.5">#{proposal.id}{!edit&&<button onClick={()=>{const n=window.prompt('Renumber project #'+proposal.id+'\n\nEnter the new project number (e.g. the real proposal # once a Lead becomes a bid).\nThis updates the project AND all its estimate, line items and documents.',String(proposal.id));if(n!==null&&n.trim()&&n.trim()!==String(proposal.id)){if(window.confirm('Renumber  #'+proposal.id+'  \u2192  #'+n.trim()+' ?\n\nAll linked records move to the new number.')) onRenumber(proposal.id,n.trim());}}} className="text-[10px] text-stone-400 hover:text-stone-700 underline decoration-dotted" title="Change the project number (cascades to every linked record)">renumber</button>}</div><div className="font-serif text-xl text-stone-900 truncate">{proposal.project||'Untitled'}</div></div>
      </div>
      <div className="flex items-center gap-2">
-      {/* [UX 2026-06-11 FINAL] Original always-visible behavior. The labels carry the
-          disambiguation: header buttons say "Details", the bidsheet bar says "bidsheet". */}
-      {!edit&&<button onClick={()=>{if(window.confirm('Delete "'+(proposal.project||'this project')+'"  (#'+proposal.id+')?\n\nThis permanently removes the project and its estimate and ALL line items. This cannot be undone.')){onDelete(proposal.id);}}} className="text-sm px-3 py-1.5 rounded-sm border border-rose-300 text-rose-700 hover:bg-rose-50 flex items-center gap-1.5"><Ico n="trash2" size={13}/>Delete</button>}
-      {!edit?<button onClick={()=>setEdit(true)} className="text-sm bg-stone-900 text-white px-3 py-1.5 rounded-sm hover:bg-stone-800 flex items-center gap-1.5"><Ico n="edit3" size={13}/>Edit Details</button>:
-      <><button onClick={()=>{setDraft(proposal);setEdit(false);}} className="text-sm px-3 py-1.5 rounded-sm border border-stone-300 hover:bg-stone-100">Cancel</button>
-      <button onClick={save} className="text-sm bg-emerald-700 text-white px-3 py-1.5 rounded-sm hover:bg-emerald-800 flex items-center gap-1.5"><Ico n="save" size={13}/>Save Details</button></>}
+      {/* [ONE SAVE 2026-06-11 — Ben] Exactly ONE save button. It appears the moment anything is
+          dirty (details edit OR bidsheet cell edits), saves both with a confirm popup. */}
+      {!anyDirty&&<button onClick={()=>{if(window.confirm('Delete "'+(proposal.project||'this project')+'"  (#'+proposal.id+')?\n\nThis permanently removes the project and its estimate and ALL line items. This cannot be undone.')){onDelete(proposal.id);}}} className="text-sm px-3 py-1.5 rounded-sm border border-rose-300 text-rose-700 hover:bg-rose-50 flex items-center gap-1.5"><Ico n="trash2" size={13}/>Delete</button>}
+      {!anyDirty?<button onClick={()=>setEdit(true)} className="text-sm bg-stone-900 text-white px-3 py-1.5 rounded-sm hover:bg-stone-800 flex items-center gap-1.5"><Ico n="edit3" size={13}/>Edit Details</button>:
+      <><button onClick={cancelAll} disabled={savingAll} className="text-sm px-3 py-1.5 rounded-sm border border-stone-300 hover:bg-stone-100">Cancel</button>
+      <button onClick={saveAll} disabled={savingAll} className="text-sm bg-emerald-700 text-white px-3 py-1.5 rounded-sm hover:bg-emerald-800 flex items-center gap-1.5"><Ico n="save" size={13}/>{savingAll?'Saving…':'Save'+(pendingCount?' ('+pendingCount+')':'')}</button></>}
      </div>
     </div>
     {}
@@ -3948,6 +3950,8 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
       proposal={proposal}
       estimate={estimate}
       estimateItems={estimateItemsForThis}
+      pendingEdits={pendingEdits}
+      setPendingEdits={setPendingEdits}
       edit={edit}
       allEstimateItems={allEstimateItems||[]}
       onImported={onImported}
