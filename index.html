@@ -2056,14 +2056,17 @@ window.genProposal=function(est,items,notes,proposal){
     });
     return list;
   };
-  var noteSub=function(i){return i.notes?"<div style='font-size:10px;color:#9ca3af;font-style:italic'>"+i.notes+"</div>":"";};
+  // [C5 fix 2026-06-12] estimate_items.notes holds migration provenance (e.g. "markup gross-form
+  // (base AMOUNT)"), NOT customer-facing notes — do not render it on the proposal. Re-enable only
+  // after the column's contents are verified clean.
+  var fullTable=!allLump&&!allTotal;
   var makeRow=function(i,r){
     var dm=i.displayMode||'full';
-    if(dm==='lump_sum') return"<tr><td colspan='"+(allLump?'3':'4')+"' style='padding:5px 8px'>"+(i.itemCode?'<b>'+i.itemCode+'</b> ':'')+(i.description||'')+noteSub(i)+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";
-    if(dm==='total_only') return"<tr><td style='padding:5px 8px'>"+(i.itemCode||'')+"</td><td style='padding:5px 8px'>"+(i.description||'')+noteSub(i)+"</td><td style='padding:5px 8px;text-align:right'>"+(i.qty||'')+' '+(i.unit||'')+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";
-    return"<tr><td style='padding:5px 8px'>"+(i.itemCode||'')+"</td><td style='padding:5px 8px'>"+(i.description||'')+noteSub(i)+"</td><td style='padding:5px 8px;text-align:right'>"+(i.qty||'')+' '+(i.unit||'')+"</td><td style='padding:5px 8px;text-align:right'>"+fmt(r.mat)+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";
+    if(dm==='lump_sum') return"<tr><td colspan='"+(allLump?'3':(fullTable?'5':'4'))+"' style='padding:5px 8px'>"+(i.itemCode?'<b>'+i.itemCode+'</b> ':'')+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";
+    if(dm==='total_only') return"<tr><td style='padding:5px 8px'>"+(i.itemCode||'')+"</td><td style='padding:5px 8px'>"+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right'>"+(i.qty||'')+' '+(i.unit||'')+"</td><td colspan='"+(fullTable?'3':'1')+"' style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";
+    return"<tr><td style='padding:5px 8px'>"+(i.itemCode||'')+"</td><td style='padding:5px 8px'>"+(i.description||'')+"</td><td style='padding:5px 8px;text-align:right'>"+(i.qty||'')+' '+(i.unit||'')+"</td><td style='padding:5px 8px;text-align:right'>"+fmt(r.mat)+"</td><td style='padding:5px 8px;text-align:right'>"+fmt(r.lab)+"</td><td style='padding:5px 8px;text-align:right;font-weight:700'>"+fmt(r.tot)+"</td></tr>";
   };
-  var colCount=allLump?4:(allTotal?4:5);   // section header colspan must match the active table layout
+  var colCount=allLump?4:(allTotal?4:6);   // section header colspan must match the active table layout (full = 6 cols incl. Labor)
   var makeRows=function(its){
     var rows='';
     var secs=deriveSections(its);
@@ -2084,7 +2087,7 @@ window.genProposal=function(est,items,notes,proposal){
     ?"<thead><tr><th colspan='3'>Description</th><th style='text-align:right'>Total</th></tr></thead>"
     :allTotal
     ?"<thead><tr><th>Item</th><th>Description</th><th style='text-align:right'>QTY / Unit</th><th style='text-align:right'>Total</th></tr></thead>"
-    :"<thead><tr><th>Item</th><th>Description</th><th style='text-align:right'>QTY / Unit</th><th style='text-align:right'>Material</th><th style='text-align:right'>Total</th></tr></thead>";
+    :"<thead><tr><th>Item</th><th>Description</th><th style='text-align:right'>QTY / Unit</th><th style='text-align:right'>Material</th><th style='text-align:right'>Labor</th><th style='text-align:right'>Total</th></tr></thead>";
   var H="<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Proposal "+propNum+"</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;color:#1c1917}.pg{max-width:850px;margin:0 auto;padding:36px}table{width:100%;border-collapse:collapse;margin:10px 0}th{background:#1c1917;color:#fff;padding:6px 8px;font-size:10px;text-transform:uppercase;text-align:left}td{border-bottom:1px solid #e7e5e4}.bar{background:#1c1917;color:#fff;padding:14px;display:grid;grid-template-columns:1fr 1fr 1fr;text-align:center;gap:10px;margin:16px 0}.bl{font-size:9px;text-transform:uppercase;color:#aaa;margin-bottom:3px}.bv{font-size:20px;font-family:Georgia,serif}@media print{.np{display:none}}</style></head><body>";
     H+="<div class='pg'>";
   H+="<div style='display:flex;justify-content:space-between;padding-bottom:14px;margin-bottom:14px;border-bottom:2px solid #1c1917'>";
@@ -2099,8 +2102,8 @@ window.genProposal=function(est,items,notes,proposal){
   if(alts.length>0){
     var altM=0,altL=0,altRounded=0;alts.forEach(function(i){var r=calc(i);altM+=r.mat;altL+=r.lab;altRounded+=r.tot;});
     H+="<div style='margin-top:16px'><div style='font-size:10px;font-weight:700;text-transform:uppercase;color:#888;margin-bottom:4px;letter-spacing:1px'>Alternates <span style='color:#b45309'>\u2014 ADD to ABOVE</span></div>";
-    H+="<table><thead><tr style='background:#374151'><th>Item</th><th>Description</th><th style='text-align:right'>QTY / Unit</th><th style='text-align:right'>Material</th><th style='text-align:right'>Alt Total</th></tr></thead><tbody>"+makeRows(alts)+"</tbody>";
-    H+="<tfoot><tr><td colspan='4' style='padding:6px 8px;background:#f5f5f4;font-weight:700'>Alternates Subtotal</td><td style='padding:6px 8px;text-align:right;background:#f5f5f4;font-weight:700'>"+fmt(altRounded)+"</td></tr></tfoot></table></div>";
+    H+="<table><thead><tr style='background:#374151'><th>Item</th><th>Description</th><th style='text-align:right'>QTY / Unit</th><th style='text-align:right'>Material</th><th style='text-align:right'>Labor</th><th style='text-align:right'>Alt Total</th></tr></thead><tbody>"+makeRows(alts)+"</tbody>";
+    H+="<tfoot><tr><td colspan='5' style='padding:6px 8px;background:#f5f5f4;font-weight:700'>Alternates Subtotal</td><td style='padding:6px 8px;text-align:right;background:#f5f5f4;font-weight:700'>"+fmt(altRounded)+"</td></tr></tfoot></table></div>";
   }
   var roundedBase=base.reduce(function(s,i){return s+calc(i).tot;},0);
   var grandTotal=Number(proposal&&proposal.bidAmount)||Number(proposal&&proposal.contractAmount)||roundedBase;
