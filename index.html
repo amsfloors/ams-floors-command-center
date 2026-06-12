@@ -2026,6 +2026,9 @@ window.genProposal=function(est,items,notes,proposal){
   // [C5 2026-06-12] Header/footer completeness — render fields already captured on estimates.
   var pbName=est.preparedByName||'',pbEmail=est.preparedByEmail||'peter@amsfloors.com',pbPhone=est.preparedByPhone||'(941) 740-1555';
   var projNum=est.projectNumber||'',addm=est.addendum||'';
+  // Don't print "Project #" when it's just the AMS proposal number echoed back — it's the GC's
+  // job number or nothing. (e.g. #1768 defaulted projectNumber to the proposal id.)
+  if(String(projNum)===String(propNum)||String(projNum)===String(est.proposalNumber||''))projNum='';
   var fmtD=function(d){if(!d)return'';var p=String(d).split('T')[0].split('-');return p.length===3?(Number(p[1])+'/'+Number(p[2])+'/'+p[0]):String(d);};
   var plansD=fmtD(est.plansDated);
   var gcA1=est.gcAddressLine1||'',gcA2=est.gcAddressLine2||'';
