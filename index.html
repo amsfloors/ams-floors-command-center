@@ -2026,7 +2026,7 @@ window.genProposal=function(est,items,notes,proposal){
   // [C5 2026-06-12] Header/footer completeness — render fields already captured on estimates.
   var fmtPh=function(p){var d=String(p||'').replace(/\D/g,'');if(d.length===11&&d[0]==='1')d=d.slice(1);return d.length===10?'('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6):String(p||'');};
   var pbName=est.preparedByName||'',pbEmail=est.preparedByEmail||'peter@amsfloors.com',pbPhone=fmtPh(est.preparedByPhone||'(941) 740-1555');
-  var projNum=est.projectNumber||'',addm=est.addendum||'';
+  var projNum=est.projectNumber||(proposal&&proposal.projectNumber)||'',addm=est.addendum||'';
   // Don't print "Project #" when it's just the AMS proposal number echoed back — it's the GC's
   // job number or nothing. (e.g. #1768 defaulted projectNumber to the proposal id.)
   if(String(projNum)===String(propNum)||String(projNum)===String(est.proposalNumber||''))projNum='';
@@ -3620,17 +3620,21 @@ const EstimateView = ({ proposal, estimate, estimateItems, pendingEdits, setPend
   );
  }
  return (
-  <fieldset style={{border:'0',padding:'0',margin:'0',minInlineSize:'auto'}}>
-  {/* [FIX 2026-06-11] v1 set disabled={!edit} on this fieldset — that hard-disabled EVERY control
-      (including Import Bluebeam takeoff) until Edit Details was clicked. Obsolete under the
-      staged-save model: edits stage locally and nothing persists until the single green Save. */}
   <div className="space-y-3">
-   {}
+   {/* [GATE RESTORED 2026-06-12] The 6/11 fix removed disabled={!edit} to unblock the Import
+       button — which silently ungated the header inputs AND all bidsheet controls (the edit-gate
+       regression, observed live on #1778). Restored properly: the Import banner sits OUTSIDE the
+       fieldset so it stays clickable in view mode; everything inside the fieldset (header inputs,
+       line-item cells, F/T/L, add/delete) is disabled until Edit Details. Expand/Collapse is a
+       div (not a form control) so it keeps working in view mode by design. */}
    <div className="bg-white border border-stone-200 px-4 py-2.5 flex items-center justify-between gap-3">
     <div className="text-sm text-stone-600">Have a Bluebeam takeoff for this project? Import the CSV — quantities reconcile and every line is a candidate you confirm before it saves into <span className="font-mono">#{proposal.id}</span>.</div>
     <button onClick={()=>setShowImport(s=>!s)} className="text-sm bg-orange-800 text-white px-3 py-1.5 rounded-sm hover:bg-orange-900 flex items-center gap-1.5 whitespace-nowrap"><Ico n="plus" size={13}/>{showImport?'Hide import':'Import Bluebeam takeoff'}</button>
    </div>
    {showImport && <div className="bg-white border border-orange-200 px-4 pb-3"><TakeoffIntake lock={{id:proposal.id,project:proposal.project,gc:proposal.gc,contact:proposal.contact,email:proposal.email,phone:proposal.phone,location:proposal.location}} sb={sb} estimateItems={allEstimateItems} onImported={onImported} onDone={()=>setShowImport(false)}/></div>}
+  <fieldset disabled={!edit} style={{border:'0',padding:'0',margin:'0',minInlineSize:'auto'}}>
+  <div className="space-y-3">
+   {}
    <div className="bg-white border border-stone-200">
     <div className="px-4 py-2.5 bg-stone-50 border-b border-stone-200 flex items-center justify-between">
      <div className="flex items-center gap-3">
@@ -3888,6 +3892,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, pendingEdits, setPend
    </>}
   </div>
   </fieldset>
+  </div>
  );
 };
 // [UX FIX 2026-06-10 — Ben/Peter] Proposal Display Mode lives on the Proposal & POs tab —
@@ -4733,7 +4738,7 @@ function m15BuildPayloads({lines, job, propId, estId, isUpdate}){
   const proposalRow={ id:propId, project:job.projectName, location:job.location||'', gc:job.gc||'',
     contact:job.contact||'', email:job.email||'', phone:job.phone||'', submitted:job.submitted,
     bidAmount:Math.round(base), status:job.status||'Bidding',
-    owner:'Peter', estimator:'Peter', bdOwner:'Paul', pm:'', projectNumber:propId,
+    owner:'Peter', estimator:'Peter', bdOwner:'Paul', pm:'', projectNumber:'', /* [C5 2026-06-12] GC's job number — unknown at takeoff time; never echo the AMS propId here */
     notes:'Takeoff intake from '+job.fileName, retainage:0.1,
     estMaterial:Math.round(estMat), estLabor:Math.round(estLab), estOther:null,
     actMaterial:null, actLabor:null, actOther:null };
