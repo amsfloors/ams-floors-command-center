@@ -2024,7 +2024,8 @@ window.genProposal=function(est,items,notes,proposal){
   var location=(proposal&&proposal.location)||'';
   var propNum=(proposal&&proposal.id)||est.proposalNumber||'';
   // [C5 2026-06-12] Header/footer completeness — render fields already captured on estimates.
-  var pbName=est.preparedByName||'',pbEmail=est.preparedByEmail||'peter@amsfloors.com',pbPhone=est.preparedByPhone||'(941) 740-1555';
+  var fmtPh=function(p){var d=String(p||'').replace(/\D/g,'');if(d.length===11&&d[0]==='1')d=d.slice(1);return d.length===10?'('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6):String(p||'');};
+  var pbName=est.preparedByName||'',pbEmail=est.preparedByEmail||'peter@amsfloors.com',pbPhone=fmtPh(est.preparedByPhone||'(941) 740-1555');
   var projNum=est.projectNumber||'',addm=est.addendum||'';
   // Don't print "Project #" when it's just the AMS proposal number echoed back — it's the GC's
   // job number or nothing. (e.g. #1768 defaulted projectNumber to the proposal id.)
@@ -2033,7 +2034,7 @@ window.genProposal=function(est,items,notes,proposal){
   var plansD=fmtD(est.plansDated);
   var gcA1=est.gcAddressLine1||'',gcA2=est.gcAddressLine2||'';
   var gcCsz=([est.gcCity,est.gcState].filter(Boolean).join(', ')+(est.gcZip?' '+est.gcZip:'')).trim();
-  var phone=(proposal&&proposal.phone)||est.gcContactPhone||'';
+  var phone=fmtPh((proposal&&proposal.phone)||est.gcContactPhone||'');
   contact=contact||est.gcContactName||'';email=email||est.gcContactEmail||'';
   var base=items.filter(function(i){return!i.isAlternate&&!i.isVeAlternative;});
   var alts=items.filter(function(i){return i.isAlternate&&!i.isVeAlternative;});
@@ -3685,6 +3686,12 @@ const EstimateView = ({ proposal, estimate, estimateItems, pendingEdits, setPend
       <div>
        <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">GC Phone</div>
        <input value={draftHeader.gcContactPhone || ''} onChange={e => setDraftHeader({ ...draftHeader, gcContactPhone: e.target.value })} onBlur={saveHeader} className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
+      </div>
+      {/* C5 2026-06-12: GC's own job number (e.g. Benderson 25441). Renders on the proposal as
+          "Project #". Distinct from the AMS proposal number — the generator suppresses echoes. */}
+      <div>
+       <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">GC Project #</div>
+       <input value={draftHeader.projectNumber || ''} onChange={e => setDraftHeader({ ...draftHeader, projectNumber: e.target.value })} onBlur={saveHeader} placeholder="GC's job number (e.g. 25441)" className="w-full px-2 py-1 border border-stone-300 rounded-sm" />
       </div>
       <div>
        <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Plans dated</div>
