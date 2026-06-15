@@ -2722,6 +2722,8 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
   </div>
  );
 };
+const DNC_GCS=['bald hill','bbl','benderson','gray','tandem']; // David's personal relationships - shown but never auto-contacted
+const isDNC=(gc)=>{ const g=(gc||'').toLowerCase(); return DNC_GCS.some(k=>g.includes(k)); };
 const followUpDraft=(p)=>{
  const first=((p.contact||'').trim().split(' ')[0])||'there';
  const proj=p.project||'your project';
@@ -2799,6 +2801,7 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
         </div>
         <div className="flex items-center gap-3 text-sm text-stone-600 flex-wrap">
          <span className="inline-flex items-center gap-1"><Ico n="building2" size={13} className="text-stone-400"/><span onClick={e=>{e.stopPropagation();onSelectGC(p.gc);}} className="hover:underline hover:text-orange-800 cursor-pointer">{p.gc}</span></span>
+         {isDNC(p.gc)&&<span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-sm bg-violet-100 text-violet-800 whitespace-nowrap" title="David's personal relationship — do not auto-contact">David · no auto-contact</span>}
          {p.contact&&<span className="inline-flex items-center gap-1"><Ico n="user" size={13} className="text-stone-400"/>{p.contact}</span>}
          {p.phone&&<span className="inline-flex items-center gap-1 font-mono text-xs"><Ico n="phone" size={13} className="text-stone-400"/>{p.phone}</span>}
          <StatusPill status={p.status} size="xs"/>
@@ -2808,7 +2811,7 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
         {p.nextAction&&<div className="flex items-center gap-1.5 mt-1.5"><Ico n="arrowRight" size={11} className={p._naOD>0?'text-rose-600':'text-sky-600'}/><span className={`text-xs font-medium ${p._naOD>0?'text-rose-700':'text-sky-700'}`}>{p.nextAction}</span>{p.nextActionDate&&<span className={`text-[10px] font-mono ${p._naOD>0?'text-rose-600':'text-stone-400'}`}>· {p._naOD>0?`${p._naOD}d overdue`:p.nextActionDate===today?'Today':`${Math.round((new Date(p.nextActionDate)-new Date(today))/86400000)}d`}</span>}</div>}
         {p.notes&&<div className="text-xs text-stone-500 mt-1 line-clamp-1 italic">{p.notes.split('\n')[0]}</div>}
        </button>
-       <button onClick={e=>{e.stopPropagation();openFollowUpEmail(p);}} className="px-3 border-l border-stone-200 hover:bg-sky-50 hover:text-sky-800 text-stone-600 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0" title="Open a follow-up email in your mail app">✉<span className="hidden md:inline font-medium">Email</span></button>
+       <button onClick={e=>{e.stopPropagation(); if(!isDNC(p.gc)) openFollowUpEmail(p);}} disabled={isDNC(p.gc)} className={`px-3 border-l border-stone-200 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0 ${isDNC(p.gc)?'text-stone-300 cursor-not-allowed':'hover:bg-sky-50 hover:text-sky-800 text-stone-600'}`} title={isDNC(p.gc)?'David handles this GC — auto-contact off':'Open a follow-up email in your mail app'}>✉<span className="hidden md:inline font-medium">Email</span></button>
        <button onClick={e=>{e.stopPropagation();setScriptOpen(scriptOpen===p.id?null:p.id);}} className={`px-3 border-l border-stone-200 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0 ${scriptOpen===p.id?'bg-amber-50 text-amber-800':'hover:bg-amber-50 hover:text-amber-800 text-stone-600'}`} title="Show a phone call script"><Ico n="phone" size={15}/><span className="hidden md:inline font-medium">Script</span></button>
        <button onClick={e=>openLog(p.id,e)} className={`px-4 border-l border-stone-200 transition-colors text-sm flex items-center gap-1.5 flex-shrink-0 ${logOpen===p.id?'bg-emerald-50 text-emerald-800':'hover:bg-emerald-50 hover:text-emerald-800 text-stone-600'}`}>
         <Ico n="check2" size={15}/><span className="hidden md:inline text-xs font-medium">Log Call</span>
