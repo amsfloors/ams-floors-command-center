@@ -2743,6 +2743,45 @@ const openFollowUpEmail=(p)=>{
  if(url.length<1900){ window.location.href=url; }
  else { try{navigator.clipboard.writeText('To: '+to+'\nSubject: '+d.subject+'\n\n'+d.body);}catch(e){} alert('Follow-up draft copied to clipboard - paste into a new email.'); }
 };
+// [CONTACT LOG 2026-06-15 — Paul] The notes field already stores dated "[YYYY-MM-DD] …" log lines (newest-first,
+// via markContacted/addNote). Parse it into a contact-history timeline so the evolution of every contact is visible.
+const parseContactLog=(notes)=>{
+ if(!notes) return [];
+ const re=/\[(\d{4}-\d{2}-\d{2})[^\]]*\]\s*/g;
+ const out=[]; let m; const idxs=[];
+ while((m=re.exec(notes))!==null){ idxs.push({date:m[1],start:m.index,end:re.lastIndex}); }
+ if(!idxs.length) return [{date:null,kind:'note',text:notes.trim()}];
+ if(idxs[0].start>0){ const lead=notes.slice(0,idxs[0].start).trim(); if(lead) out.push({date:null,kind:'note',text:lead}); }
+ for(let i=0;i<idxs.length;i++){
+  const seg=notes.slice(idxs[i].end, i+1<idxs.length?idxs[i+1].start:undefined).trim();
+  if(!seg) continue;
+  const low=seg.toLowerCase();
+  let kind='note';
+  if(/✉|e-?mail|mailto|sent follow/.test(low)) kind='email';
+  else if(/📞|call|\bvm\b|voicemail|left a message|spoke|phone/.test(low)) kind='call';
+  else if(/🔄|sync|outlook|replied|reply|inbound|undeliverable|bounce/.test(low)) kind='sync';
+  out.push({date:idxs[i].date,kind,text:seg});
+ }
+ return out;
+};
+const KIND_META={email:{e:'✉',c:'bg-sky-50 border-sky-200'},call:{e:'📞',c:'bg-emerald-50 border-emerald-200'},sync:{e:'🔄',c:'bg-violet-50 border-violet-200'},note:{e:'📝',c:'bg-stone-50 border-stone-200'}};
+const ContactTimeline=({notes})=>{
+ const items=parseContactLog(notes);
+ if(!items.length) return <div className="text-sm text-stone-400 italic px-1 py-2">No contact history logged yet. Use Email or Log Call to start the trail.</div>;
+ return (
+  <div className="space-y-1.5 max-h-72 overflow-auto pr-1">
+   {items.map((it,i)=>{const meta=KIND_META[it.kind]||KIND_META.note;return(
+    <div key={i} className={`flex items-start gap-2 text-sm border ${meta.c} rounded-sm px-2.5 py-1.5`}>
+     <span className="flex-shrink-0 leading-5">{meta.e}</span>
+     <div className="min-w-0 flex-1">
+      <div className="whitespace-pre-wrap text-stone-700 break-words">{it.text}</div>
+      {it.date&&<div className="text-[10px] font-mono text-stone-400 mt-0.5">{it.date}</div>}
+     </div>
+    </div>
+   );})}
+  </div>
+ );
+};
 const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onMarkContacted,onSaveProposal})=>{
  const [filter,setFilter]=useState('overdue');
  const [logOpen,setLogOpen]=useState(null);
@@ -2811,7 +2850,7 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
         {p.nextAction&&<div className="flex items-center gap-1.5 mt-1.5"><Ico n="arrowRight" size={11} className={p._naOD>0?'text-rose-600':'text-sky-600'}/><span className={`text-xs font-medium ${p._naOD>0?'text-rose-700':'text-sky-700'}`}>{p.nextAction}</span>{p.nextActionDate&&<span className={`text-[10px] font-mono ${p._naOD>0?'text-rose-600':'text-stone-400'}`}>· {p._naOD>0?`${p._naOD}d overdue`:p.nextActionDate===today?'Today':`${Math.round((new Date(p.nextActionDate)-new Date(today))/86400000)}d`}</span>}</div>}
         {p.notes&&<div className="text-xs text-stone-500 mt-1 line-clamp-1 italic">{p.notes.split('\n')[0]}</div>}
        </button>
-       <button onClick={e=>{e.stopPropagation(); if(!isDNC(p.gc)) openFollowUpEmail(p);}} disabled={isDNC(p.gc)} className={`px-3 border-l border-stone-200 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0 ${isDNC(p.gc)?'text-stone-300 cursor-not-allowed':'hover:bg-sky-50 hover:text-sky-800 text-stone-600'}`} title={isDNC(p.gc)?'David handles this GC — auto-contact off':'Open a follow-up email in your mail app'}>✉<span className="hidden md:inline font-medium">Email</span></button>
+       <button onClick={e=>{e.stopPropagation(); if(isDNC(p.gc)) return; openFollowUpEmail(p); const _d=followUpDraft(p); onMarkContacted(p.id,'✉ Emailed follow-up · "'+_d.subject+'" → '+(p.email||'(no address on file)'));}} disabled={isDNC(p.gc)} className={`px-3 border-l border-stone-200 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0 ${isDNC(p.gc)?'text-stone-300 cursor-not-allowed':'hover:bg-sky-50 hover:text-sky-800 text-stone-600'}`} title={isDNC(p.gc)?'David handles this GC — auto-contact off':'Open a follow-up email in your mail app'}>✉<span className="hidden md:inline font-medium">Email</span></button>
        <button onClick={e=>{e.stopPropagation();setScriptOpen(scriptOpen===p.id?null:p.id);}} className={`px-3 border-l border-stone-200 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0 ${scriptOpen===p.id?'bg-amber-50 text-amber-800':'hover:bg-amber-50 hover:text-amber-800 text-stone-600'}`} title="Show a phone call script"><Ico n="phone" size={15}/><span className="hidden md:inline font-medium">Script</span></button>
        <button onClick={e=>openLog(p.id,e)} className={`px-4 border-l border-stone-200 transition-colors text-sm flex items-center gap-1.5 flex-shrink-0 ${logOpen===p.id?'bg-emerald-50 text-emerald-800':'hover:bg-emerald-50 hover:text-emerald-800 text-stone-600'}`}>
         <Ico n="check2" size={15}/><span className="hidden md:inline text-xs font-medium">Log Call</span>
@@ -4118,7 +4157,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
         <input value={noteText} onChange={e=>setNoteText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&noteText.trim()){onAddNote(proposal.id,noteText.trim());setNoteText('');}}} placeholder="Add a note — Enter to save with timestamp…" className="flex-1 px-3 py-1.5 text-sm border border-stone-200 bg-stone-50 focus:bg-white focus:outline-none focus:border-stone-400 rounded-sm"/>
         <button onClick={()=>{if(noteText.trim()){onAddNote(proposal.id,noteText.trim());setNoteText('');}}} className="text-sm bg-stone-900 text-white px-3 rounded-sm hover:bg-stone-800">Add</button>
        </div>
-       {proposal.notes&&<div className="text-sm bg-stone-50 border border-stone-200 p-3 whitespace-pre-wrap text-stone-700 max-h-60 overflow-auto">{proposal.notes}</div>}
+       <ContactTimeline notes={proposal.notes}/>
       </div>
      </section>
      </>}
