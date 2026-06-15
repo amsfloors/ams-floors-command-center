@@ -2806,6 +2806,7 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
   if(filter==='overdue') pool=pool.filter(p=>p._od>0||p._naOD>0);
   else if(filter==='large') pool=pool.filter(p=>p.bidAmount>=100000);
   else if(filter==='highWR') pool=pool.filter(p=>p._gcWR!==null&&p._gcWR>=0.5);
+  else if(filter==='done') return pool.filter(p=>p.lastTouched).sort((a,b)=>(b.lastTouched||'').localeCompare(a.lastTouched||''));
   return pool.sort((a,b)=>b._score-a._score);
  },[proposals,settings,filter,gcWR,today]);
  const openLog=(id,e)=>{e.stopPropagation();const p=proposals.find(x=>x.id===id);setLogOpen(id);setLogNote('');setLogNextAction(p?.nextAction||'');setLogNextDate(p?.nextActionDate||'');setTimeout(()=>logRef.current?.focus(),50);};
@@ -2819,12 +2820,12 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
   <div className="space-y-4">
    <div className="bg-gradient-to-br from-rose-50 to-amber-50 border border-rose-200 px-5 py-4">
     <div className="flex items-start gap-3"><Ico n="phone" size={18} className="text-rose-700 mt-1"/>
-     <div><h2 className="font-serif text-2xl text-stone-900">Today's Call Queue</h2><p className="text-sm text-stone-700 mt-1">{queue.length} {filter==='overdue'?'overdue follow-ups':'bids'} · <strong>{money(queue.reduce((s,p)=>s+(p.bidAmount||0),0),true)}</strong> on the line. Sorted by priority: <span className="font-mono text-xs">bid × overdue × win-rate</span>.</p></div>
+     <div><h2 className="font-serif text-2xl text-stone-900">Today's Call Queue</h2><p className="text-sm text-stone-700 mt-1">{queue.length} {filter==='overdue'?'overdue follow-ups':filter==='done'?'recently contacted (newest first)':'bids'} · <strong>{money(queue.reduce((s,p)=>s+(p.bidAmount||0),0),true)}</strong> on the line. Sorted by priority: <span className="font-mono text-xs">bid × overdue × win-rate</span>.</p></div>
     </div>
    </div>
    {/* [UX 2026-06-11 — Ben] Filter row pins below the sticky nav while the queue scrolls. */}
    <div className="flex items-center gap-2 flex-wrap bg-stone-100 sticky" style={{top:'64px',zIndex:15,paddingTop:'8px',paddingBottom:'8px',margin:'0 -8px',paddingLeft:'8px',paddingRight:'8px'}}>
-    {[['overdue','🔥 Overdue'],['all','All open'],['large','$100K+ only'],['highWR','High win-rate GCs']].map(([val,lbl])=>(
+    {[['overdue','🔥 Overdue'],['all','All open'],['done','✅ Done log'],['large','$100K+ only'],['highWR','High win-rate GCs']].map(([val,lbl])=>(
      <button key={val} onClick={()=>setFilter(val)} className={`px-3 py-1.5 text-sm rounded-sm border ${filter===val?'bg-stone-900 text-white border-stone-900':'bg-white border-stone-300 text-stone-700 hover:bg-stone-100'}`}>{lbl}</button>
     ))}
    </div>
@@ -2850,7 +2851,7 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
         {p.nextAction&&<div className="flex items-center gap-1.5 mt-1.5"><Ico n="arrowRight" size={11} className={p._naOD>0?'text-rose-600':'text-sky-600'}/><span className={`text-xs font-medium ${p._naOD>0?'text-rose-700':'text-sky-700'}`}>{p.nextAction}</span>{p.nextActionDate&&<span className={`text-[10px] font-mono ${p._naOD>0?'text-rose-600':'text-stone-400'}`}>· {p._naOD>0?`${p._naOD}d overdue`:p.nextActionDate===today?'Today':`${Math.round((new Date(p.nextActionDate)-new Date(today))/86400000)}d`}</span>}</div>}
         {p.notes&&<div className="text-xs text-stone-500 mt-1 line-clamp-1 italic">{p.notes.split('\n')[0]}</div>}
        </button>
-       <button onClick={e=>{e.stopPropagation(); if(isDNC(p.gc)) return; openFollowUpEmail(p); const _d=followUpDraft(p); onMarkContacted(p.id,'✉ Emailed follow-up · "'+_d.subject+'" → '+(p.email||'(no address on file)'));}} disabled={isDNC(p.gc)} className={`px-3 border-l border-stone-200 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0 ${isDNC(p.gc)?'text-stone-300 cursor-not-allowed':'hover:bg-sky-50 hover:text-sky-800 text-stone-600'}`} title={isDNC(p.gc)?'David handles this GC — auto-contact off':'Open a follow-up email in your mail app'}>✉<span className="hidden md:inline font-medium">Email</span></button>
+       <button onClick={e=>{e.stopPropagation(); if(isDNC(p.gc)) return; const _d=followUpDraft(p); openFollowUpEmail(p); setTimeout(()=>{ if(window.confirm('Did you actually SEND this email to '+(p.email||'the contact')+'?\n\nOK = log it as a sent follow-up.\nCancel = you aborted, nothing is logged.')) onMarkContacted(p.id,'✉ Emailed follow-up · "'+_d.subject+'" → '+(p.email||'(no address)')); },500);}} disabled={isDNC(p.gc)} className={`px-3 border-l border-stone-200 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0 ${isDNC(p.gc)?'text-stone-300 cursor-not-allowed':'hover:bg-sky-50 hover:text-sky-800 text-stone-600'}`} title={isDNC(p.gc)?'David handles this GC — auto-contact off':'Open a follow-up email in your mail app'}>✉<span className="hidden md:inline font-medium">Email</span></button>
        <button onClick={e=>{e.stopPropagation();setScriptOpen(scriptOpen===p.id?null:p.id);}} className={`px-3 border-l border-stone-200 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0 ${scriptOpen===p.id?'bg-amber-50 text-amber-800':'hover:bg-amber-50 hover:text-amber-800 text-stone-600'}`} title="Show a phone call script"><Ico n="phone" size={15}/><span className="hidden md:inline font-medium">Script</span></button>
        <button onClick={e=>openLog(p.id,e)} className={`px-4 border-l border-stone-200 transition-colors text-sm flex items-center gap-1.5 flex-shrink-0 ${logOpen===p.id?'bg-emerald-50 text-emerald-800':'hover:bg-emerald-50 hover:text-emerald-800 text-stone-600'}`}>
         <Ico n="check2" size={15}/><span className="hidden md:inline text-xs font-medium">Log Call</span>
