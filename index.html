@@ -2722,9 +2722,29 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
   </div>
  );
 };
+const followUpDraft=(p)=>{
+ const first=((p.contact||'').trim().split(' ')[0])||'there';
+ const proj=p.project||'your project';
+ const subject='Following up - '+proj+(p.id?' (#'+p.id+')':'');
+ const body='Hi '+first+',\n\nChecking in on '+proj+'. We submitted our flooring pricing and I want to make sure AMS is still in the running and see where things stand.\n\nA few quick things that help us:\n- Is the project still moving, and any updated timeline?\n- Anything shifted on scope we should re-price?\n- If our number needs to be sharper to compete, I am glad to take a look.\n\nWe would value the work and we are ready to go when you are. Appreciate any update you can share.\n\nBest,\nPaul Kidman\nAMS Floors\n941-238-6614 | www.amsfloors.com';
+ return {subject:subject,body:body};
+};
+const callScript=(p)=>{
+ const first=((p.contact||'').trim().split(' ')[0])||'there';
+ const proj=p.project||'the project';
+ return 'CALL - '+proj+(p.id?' (#'+p.id+')':'')+'\nContact: '+(p.contact||'-')+'   '+(p.phone||'')+'\n\nOpener: "Hi '+first+", it's Paul with AMS Floors, following up on "+proj+'. Wanted to make sure we are still in the mix and see where it stands."\n\nListen, then ask:\n- Is it still moving? Any timeline?\n- Who else is in the running / where does it lean?\n- Anything on scope or budget we should adjust to?\n\nClose: "We would love the work and we are ready when you are - can I check back next week?"\n\nThen hit Log Call to record what happened.';
+};
+const openFollowUpEmail=(p)=>{
+ const d=followUpDraft(p);
+ const to=p.email||'';
+ const url='mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(d.subject)+'&body='+encodeURIComponent(d.body);
+ if(url.length<1900){ window.location.href=url; }
+ else { try{navigator.clipboard.writeText('To: '+to+'\nSubject: '+d.subject+'\n\n'+d.body);}catch(e){} alert('Follow-up draft copied to clipboard - paste into a new email.'); }
+};
 const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onMarkContacted,onSaveProposal})=>{
  const [filter,setFilter]=useState('overdue');
  const [logOpen,setLogOpen]=useState(null);
+ const [scriptOpen,setScriptOpen]=useState(null);
  const [logNote,setLogNote]=useState('');
  const [logNextAction,setLogNextAction]=useState('');
  const [logNextDate,setLogNextDate]=useState('');
@@ -2788,6 +2808,8 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
         {p.nextAction&&<div className="flex items-center gap-1.5 mt-1.5"><Ico n="arrowRight" size={11} className={p._naOD>0?'text-rose-600':'text-sky-600'}/><span className={`text-xs font-medium ${p._naOD>0?'text-rose-700':'text-sky-700'}`}>{p.nextAction}</span>{p.nextActionDate&&<span className={`text-[10px] font-mono ${p._naOD>0?'text-rose-600':'text-stone-400'}`}>· {p._naOD>0?`${p._naOD}d overdue`:p.nextActionDate===today?'Today':`${Math.round((new Date(p.nextActionDate)-new Date(today))/86400000)}d`}</span>}</div>}
         {p.notes&&<div className="text-xs text-stone-500 mt-1 line-clamp-1 italic">{p.notes.split('\n')[0]}</div>}
        </button>
+       <button onClick={e=>{e.stopPropagation();openFollowUpEmail(p);}} className="px-3 border-l border-stone-200 hover:bg-sky-50 hover:text-sky-800 text-stone-600 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0" title="Open a follow-up email in your mail app">✉<span className="hidden md:inline font-medium">Email</span></button>
+       <button onClick={e=>{e.stopPropagation();setScriptOpen(scriptOpen===p.id?null:p.id);}} className={`px-3 border-l border-stone-200 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0 ${scriptOpen===p.id?'bg-amber-50 text-amber-800':'hover:bg-amber-50 hover:text-amber-800 text-stone-600'}`} title="Show a phone call script"><Ico n="phone" size={15}/><span className="hidden md:inline font-medium">Script</span></button>
        <button onClick={e=>openLog(p.id,e)} className={`px-4 border-l border-stone-200 transition-colors text-sm flex items-center gap-1.5 flex-shrink-0 ${logOpen===p.id?'bg-emerald-50 text-emerald-800':'hover:bg-emerald-50 hover:text-emerald-800 text-stone-600'}`}>
         <Ico n="check2" size={15}/><span className="hidden md:inline text-xs font-medium">Log Call</span>
        </button>
@@ -2805,6 +2827,12 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
         </div>
         <button onClick={()=>submitLog(p.id)} className="px-3 py-1.5 text-sm bg-emerald-700 text-white rounded-sm hover:bg-emerald-800 flex-shrink-0 self-start">Save</button>
         <button onClick={()=>setLogOpen(null)} className="text-stone-500 hover:text-stone-700 self-start"><Ico n="x" size={15}/></button>
+       </div>
+      )}
+      {scriptOpen===p.id&&(
+       <div className="border-t border-amber-200 bg-amber-50 px-4 py-3" onClick={e=>e.stopPropagation()}>
+        <div className="text-[11px] text-amber-800 font-semibold mb-1">Call script</div>
+        <pre className="text-xs text-stone-700 whitespace-pre-wrap" style={{fontFamily:'inherit',margin:0}}>{callScript(p)}</pre>
        </div>
       )}
      </div>
