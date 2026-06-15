@@ -2515,7 +2515,7 @@ const Empty=({icon='alertCirc',title,body})=>(
 const TH=({children,className=''})=>(
  <th className={`text-left text-[10px] uppercase tracking-widest font-semibold text-stone-500 px-3 py-2 border-b border-stone-200 ${className}`}>{children}</th>
 );
-const DashboardView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onNavigate})=>{
+const DashboardView=({proposals,settings,gcStats,estimateItems,onSelectProposal,onSelectGC,onNavigate})=>{
  const filtered=useMemo(()=>settings.yearFilter==='All'?proposals:proposals.filter(p=>p.submitted&&p.submitted.startsWith(String(settings.yearFilter))),[proposals,settings.yearFilter]);
  const kpis=useMemo(()=>{
   const open=filtered.filter(p=>OPEN_STATUSES.includes(p.status));
@@ -2528,6 +2528,14 @@ const DashboardView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onN
   const avgMargin=wonWithMargin.length?wonWithMargin.reduce((s,p)=>{const c=p.contractAmount||p.bidAmount||0;const cost=(p.estMaterial||0)+(p.estLabor||0);return s+(c>0?(c-cost)/c:0);},0)/wonWithMargin.length:null;
   return{openCount:open.length,openValue:open.reduce((s,p)=>s+(p.bidAmount||0),0),awardedValue:won.reduce((s,p)=>s+(p.contractAmount||p.bidAmount||0),0),awardedCount:won.length,winRate:settled>0?won.length/settled:null,overdueCount:overdue.length,overdueValue:overdue.reduce((s,p)=>s+(p.bidAmount||0),0),nextActionDue:nextActionDue.length,avgMargin};
  },[filtered,settings]);
+ const margins=useMemo(()=>{
+  const cost=new Map();
+  (estimateItems||[]).forEach(it=>{const k=String(it.proposalId);const m=cost.get(k)||{mc:0,mb:0};m.mc+=(Number(it.orderQty)||0)*(Number(it.unitCost)||0)+(Number(it.freight)||0);m.mb+=(Number(it.materialActual)||0);cost.set(k,m);});
+  const losers=[];let sum=0,n=0;
+  filtered.forEach(p=>{const m=cost.get(String(p.id));if(m&&m.mb>0){const mm=(m.mb-m.mc)/m.mb;sum+=mm;n++;if(mm<0.15)losers.push({id:p.id,mm,bid:p.bidAmount||0});}});
+  losers.sort((a,b)=>a.mm-b.mm);
+  return{avg:n?sum/n:null,covered:n,losers};
+ },[filtered,estimateItems]);
  const topFollowUps=useMemo(()=>{
   const gcWR=new Map(gcStats.map(g=>[g.gc,g.winRate]));
   return filtered.filter(p=>OPEN_STATUSES.includes(p.status)).map(p=>({...p,_od:overdueDays(p,settings)||0,_naOD:p.nextActionDate&&p.nextActionDate<=todayStr()?1:0,_score:followUpScore(p,settings,gcWR.get(p.gc))})).sort((a,b)=>b._score-a._score).slice(0,8);
@@ -2542,8 +2550,9 @@ const DashboardView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onN
   if(leak) out.push({severity:'warn',icon:'trendDown',title:`${leak.gc} — 0% win rate, ${money(leak.openValue,true)} still open`,body:`0 wins from ${leak.won+leak.lost} bids. Question whether to keep pursuing.`,action:'View scorecard',onAction:()=>onSelectGC(leak.gc)});
   const wonNoCost=filtered.filter(p=>WON_STATUSES.includes(p.status)&&!p.estMaterial&&!p.estLabor);
   if(wonNoCost.length) out.push({severity:'warn',icon:'alertTri',title:`${wonNoCost.length} awarded job${wonNoCost.length>1?'s':''} · no cost data`,body:`Import Peter's bidsheet or enter estimates to enable margin tracking.`,action:'View Active Jobs',onAction:()=>onNavigate('active')});
+  if(margins.losers.length) out.push({severity:'warn',icon:'trendDown',title:`${margins.losers.length} bid${margins.losers.length>1?'s':''} under 15% material margin`,body:`Thinnest: ${margins.losers.slice(0,3).map(r=>'#'+r.id+' '+pct(r.mm,0)).join(' · ')}. Possible money-losers — review pricing.${margins.avg!=null?` Avg material margin ${pct(margins.avg,0)} across ${margins.covered} priced bids.`:''}`,action:'View Pipeline',onAction:()=>onNavigate('pipeline')});
   return out;
- },[filtered,gcStats,kpis,settings,onNavigate,onSelectGC]);
+ },[filtered,gcStats,kpis,margins,settings,onNavigate,onSelectGC]);
  return (
   <div className="space-y-6">
    {/* KPI row — 4 cards, all clickable */}
@@ -5453,7 +5462,7 @@ function App() {
    </header>
    {}
    <main className="px-5 py-5" style={{maxWidth:'1600px',margin:'0 auto'}}>
-    {view==='dashboard'&&<DashboardView proposals={proposals} settings={settings} gcStats={gcStats} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
+    {view==='dashboard'&&<DashboardView proposals={proposals} settings={settings} gcStats={gcStats} estimateItems={estimateItems} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
     {view==='pipeline'&&<PipelineView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
     {view==='followups'&&<FollowUpsView proposals={proposals} settings={settings} gcStats={gcStats} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted} onSaveProposal={saveProposal}/>}
     {view==='gcs'&&!selectedGC&&<GCIntelView gcStats={gcStats} proposals={proposals} onSelectGC={setSelectedGC} settings={settings}/>}
