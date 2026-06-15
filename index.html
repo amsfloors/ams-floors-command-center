@@ -4052,6 +4052,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
  const [savingAll,setSavingAll]=useState(false);
  const [previewHtml,setPreviewHtml]=useState(null);
  const [noteText,setNoteText]=useState('');
+ const [showScript,setShowScript]=useState(false);
  const [activeTab,setActiveTab]=useState('details');
  useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('details');setPendingEdits({});},[proposal?.id]);
  if(!proposal) return null;
@@ -4167,6 +4168,13 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
      <section className="bg-white border border-stone-200">
       <div className="px-4 py-2.5 border-b border-stone-200 bg-stone-50"><h3 className="font-serif text-base text-stone-800">Activity & notes</h3></div>
       <div className="p-4 space-y-3">
+       <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mr-1">Next action →</span>
+        <button onClick={()=>{ if(isDNC(proposal.gc)) return; const _d=followUpDraft(proposal); openFollowUpEmail(proposal); setTimeout(()=>{ if(window.confirm('Did you actually SEND this email to '+(proposal.email||'the contact')+'?\n\nOK = log it as a sent follow-up.\nCancel = you aborted, nothing is logged.')) onAddNote(proposal.id,'✉ Emailed follow-up · "'+_d.subject+'" → '+(proposal.email||'(no address)')); },500); }} disabled={isDNC(proposal.gc)} className={`text-xs px-3 py-1.5 rounded-sm border flex items-center gap-1 ${isDNC(proposal.gc)?'text-stone-300 border-stone-200 cursor-not-allowed':'border-sky-300 text-sky-800 hover:bg-sky-50'}`} title={isDNC(proposal.gc)?'David handles this GC — no auto-contact':'Open a follow-up email draft, then log it'}>✉ Email</button>
+        <button onClick={()=>setShowScript(s=>!s)} className={`text-xs px-3 py-1.5 rounded-sm border flex items-center gap-1 ${showScript?'bg-amber-50 border-amber-300 text-amber-800':'border-stone-300 text-stone-700 hover:bg-stone-50'}`}>📞 Call script</button>
+        {proposal.phone&&<a href={'tel:'+proposal.phone} className="text-xs px-3 py-1.5 rounded-sm border border-stone-300 text-stone-700 hover:bg-stone-50">📱 {proposal.phone}</a>}
+       </div>
+       {showScript&&<pre className="text-xs text-stone-700 whitespace-pre-wrap bg-amber-50 border border-amber-200 rounded-sm p-3" style={{fontFamily:'inherit',margin:0}}>{callScript(proposal)}</pre>}
        <div className="flex gap-2">
         <input value={noteText} onChange={e=>setNoteText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&noteText.trim()){onAddNote(proposal.id,noteText.trim());setNoteText('');}}} placeholder="Add a note — Enter to save with timestamp…" className="flex-1 px-3 py-1.5 text-sm border border-stone-200 bg-stone-50 focus:bg-white focus:outline-none focus:border-stone-400 rounded-sm"/>
         <button onClick={()=>{if(noteText.trim()){onAddNote(proposal.id,noteText.trim());setNoteText('');}}} className="text-sm bg-stone-900 text-white px-3 rounded-sm hover:bg-stone-800">Add</button>
