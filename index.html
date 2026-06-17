@@ -2722,7 +2722,7 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
   </div>
  );
 };
-const DNC_GCS=['bald hill','bbl','benderson','gray','tandem']; // David's personal relationships - shown but never auto-contacted
+const DNC_GCS=['bald hill','bbl','benderson','gray','tandem','bandes']; // David's personal relationships - shown but never auto-contacted (Bandes added 2026-06-17 — David's personal connection)
 const isDNC=(gc)=>{ const g=(gc||'').toLowerCase(); return DNC_GCS.some(k=>g.includes(k)); };
 const followUpDraft=(p)=>{
  const first=((p.contact||'').trim().split(' ')[0])||'there';
@@ -2804,6 +2804,14 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
  const today=todayStr();
  const gcWR=useMemo(()=>new Map(gcStats.map(g=>[g.gc,g.winRate])),[gcStats]);
  const queue=useMemo(()=>{
+  // [DONE LOG FIX 2026-06-17 — Paul reported contacted bids never appearing here] The Done log is a
+  // record of EVERYTHING you've contacted, newest-first — so it reads from ALL proposals carrying a
+  // lastTouched stamp, independent of the open-status pool AND the year filter. (Previously it filtered
+  // the open/nextAction pool, so a contacted Lead, or an Awarded/Dead/Lost bid with no nextAction, or
+  // anything outside the active year filter, silently never showed even though the send was logged.)
+  if(filter==='done') return proposals.filter(p=>p.lastTouched)
+   .map(p=>({...p,_gcWR:gcWR.get(p.gc),_od:overdueDays(p,settings)||0,_naOD:0,_score:0}))
+   .sort((a,b)=>(b.lastTouched||'').localeCompare(a.lastTouched||''));
   // [FOLLOW-UP 2026-06-10 — Ben] The follow-up system applies to ALL statuses:
   // open statuses surface via SLA staleness; awarded/active/closed/lost rows surface
   // whenever they carry a nextAction (or it's overdue). $0 leads are included.
@@ -2817,7 +2825,6 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
   if(filter==='overdue') pool=pool.filter(p=>p._od>0||p._naOD>0);
   else if(filter==='large') pool=pool.filter(p=>p.bidAmount>=100000);
   else if(filter==='highWR') pool=pool.filter(p=>p._gcWR!==null&&p._gcWR>=0.5);
-  else if(filter==='done') return pool.filter(p=>p.lastTouched).sort((a,b)=>(b.lastTouched||'').localeCompare(a.lastTouched||''));
   return pool.sort((a,b)=>b._score-a._score);
  },[proposals,settings,filter,gcWR,today]);
  const openLog=(id,e)=>{e.stopPropagation();const p=proposals.find(x=>x.id===id);setLogOpen(id);setLogNote('');setLogNextAction(p?.nextAction||'');setLogNextDate(p?.nextActionDate||'');setTimeout(()=>logRef.current?.focus(),50);};
@@ -4739,6 +4746,14 @@ const M15_GROUP_RE=/^(.*\S)\s*\((\d+)\)\s*$/;
 const M15_UNNAMED_RE=/^\(\d+\)$/;
 const m15Num=s=>{ if(s==null)return 0; s=String(s).trim().replace(/,/g,''); if(s==='')return 0; const v=parseFloat(s); return isNaN(v)?0:v; };
 const m15r2=x=>Math.round(x*100)/100;
+// [IMPORTER 2026-06-17 — Paul] Split a takeoff "Section" cell ("096500 Resilient Flooring") into the
+// CSI code + name the bidsheet groups by (sectionCode|sectionName). Leading digit-run = code, rest =
+// name. No leading code → match the name against CSI_SECTIONS, else keep the name with a blank code.
+const m15ParseSection=(s)=>{ s=String(s||'').trim(); if(!s) return {code:'',name:''};
+  const m=s.match(/^(\d[\d\s]*\d|\d)\s+(.+)$/);
+  if(m) return {code:m[1].replace(/\s+/g,''), name:m[2].trim()};
+  const hit=CSI_SECTIONS.find(c=>c.name.toLowerCase()===s.toLowerCase());
+  return hit?{code:hit.code,name:hit.name}:{code:'',name:s}; };
 
 function m15ReadTakeoff(text,fileName){
   const rows=m15ParseCSV(text);
@@ -4746,10 +4761,13 @@ function m15ReadTakeoff(text,fileName){
   const header=rows[0].map(h=>h.trim());
   const col={}; header.forEach((nm,idx)=>{ if(!(nm in col)) col[nm]=idx; });
   const cell=(r,nm)=>{ const idx=col[nm]; return (idx!=null&&idx<r.length)?r[idx]:''; };
-  const details=new Map(); const headers={}; let junk=0;
+  const details=new Map(); const headers={}; const headerFields={}; let junk=0;
+  // [IMPORTER 2026-06-17] Optional job-wide header columns (the "Both" path: CSV wins when present).
+  const HEADER_COLS=['Project','GC','Contact','Email','Phone','Location','Architect','Architect Address','Architect Phone','Architect Email','Plans Dated','Addendum'];
   for(let k=1;k<rows.length;k++){
     const r=rows[k];
     if(!r.some(c=>String(c).trim()!=='')) continue;
+    HEADER_COLS.forEach(h=>{ if(h in col && !headerFields[h]){ const v=String(cell(r,h)).trim(); if(v) headerFields[h]=v; } });
     const label=String(cell(r,'Label')).trim();
     const subject=String(cell(r,'Subject')).trim();
     // PETER 6/10 #1: Bluebeam export now carries SIZE / MFR / ITEM COLOR columns.
@@ -4758,17 +4776,19 @@ function m15ReadTakeoff(text,fileName){
     const csvSize=String(cell(r,'Size')).trim();
     const csvMfr=String(cell(r,'MFR')).trim();
     const csvColor=String(cell(r,'Item Color')).trim();
+    const csvSection=String(cell(r,'Section')).trim();
     const area=m15Num(cell(r,'Area')), length=m15Num(cell(r,'Length')), count=m15Num(cell(r,'Count'));
     const m=label.match(M15_GROUP_RE);
     if(m&&subject===''){ const tag=m[1].trim(); if(tag==='')continue;
       headers[tag]={group_count:parseInt(m[2],10),area_sf:area,length_lf:length}; continue; }
     if(label===''||M15_UNNAMED_RE.test(label)){ junk++; continue; }
-    if(!details.has(label)) details.set(label,{subjects:new Set(),sizes:new Set(),mfrs:new Set(),colors:new Set(),area_sf:0,length_lf:0,count:0,n_measures:0});
+    if(!details.has(label)) details.set(label,{subjects:new Set(),sizes:new Set(),mfrs:new Set(),colors:new Set(),section:'',area_sf:0,length_lf:0,count:0,n_measures:0});
     const d=details.get(label);
     if(subject) d.subjects.add(subject);
     if(csvSize) d.sizes.add(csvSize);
     if(csvMfr) d.mfrs.add(csvMfr);
     if(csvColor) d.colors.add(csvColor);
+    if(csvSection&&!d.section) d.section=csvSection;
     d.area_sf+=area; d.length_lf+=length; d.count+=count; d.n_measures+=1;
   }
   const items=[];
@@ -4784,10 +4804,11 @@ function m15ReadTakeoff(text,fileName){
       size:d.sizes&&d.sizes.size?[...d.sizes].sort().join(' / '):'',
       mfr:d.mfrs&&d.mfrs.size?[...d.mfrs].sort().join(' / '):'',
       color:d.colors&&d.colors.size?[...d.colors].sort().join(' / '):'',
+      section:d.section||'',
       measure,qty,unit,n_measures:d.n_measures,recon_delta:recon});
   }
   items.sort((a,b)=>a.tag<b.tag?-1:a.tag>b.tag?1:0);
-  return {file:fileName,header,items,junk_rows:junk};
+  return {file:fileName,header,items,junk_rows:junk,headerFields};
 }
 
 // ---- unit-family guard (M15: blocks the SC-1 SF->EA $77k garbage multiply) ----
@@ -4856,8 +4877,18 @@ function m15BuildPayloads({lines, job, propId, estId, isUpdate}){
     notes:'Takeoff intake from '+job.fileName, retainage:0.1,
     estMaterial:Math.round(estMat), estLabor:Math.round(estLab), estOther:null,
     actMaterial:null, actLabor:null, actOther:null };
+  // [IMPORTER 2026-06-17 — Paul] Write a header-complete estimate (architect / plans-date / addendum /
+  // addresses), the same as a direct build. job._estHeader carries an existing project's header forward
+  // so a re-import never blanks it; CSV/form values on job take precedence.
+  const eh=job._estHeader||{};
   const estimateRow={ id:estId, proposalId:propId, proposalNumber:propId, projectName:job.projectName,
-    gcName:job.gc||'', gcContactName:job.contact||'', gcContactEmail:job.email||'', gcContactPhone:job.phone||'',
+    gcName:job.gc||eh.gcName||'', gcContactName:job.contact||eh.gcContactName||'', gcContactEmail:job.email||eh.gcContactEmail||'', gcContactPhone:job.phone||eh.gcContactPhone||'',
+    architectName:job.architectName||eh.architectName||'', architectAddress:job.architectAddress||eh.architectAddress||'',
+    architectPhone:job.architectPhone||eh.architectPhone||'', architectEmail:job.architectEmail||eh.architectEmail||'',
+    plansDated:job.plansDated||eh.plansDated||null, addendum:job.addendum||eh.addendum||'',
+    projectAddressLine1:eh.projectAddressLine1||'', projectAddressLine2:eh.projectAddressLine2||'',
+    projectCity:eh.projectCity||job.location||'', projectState:eh.projectState||'', projectZip:eh.projectZip||'',
+    gcAddressLine1:eh.gcAddressLine1||'', gcAddressLine2:eh.gcAddressLine2||'', gcCity:eh.gcCity||'', gcState:eh.gcState||'', gcZip:eh.gcZip||'',
     taxRate:tax, markupRate:markup, baseBidTotal:Math.round(base),
     preparedByName:'Peter Laitres', preparedByEmail:'peter@amsfloors.com', preparedByPhone:'9417401555' };
   return { proposalRow, estimateRow, itemRows, totals:{base:Math.round(base),estMat:Math.round(estMat),estLab:Math.round(estLab)}, isUpdate:!!isUpdate };
@@ -4866,9 +4897,12 @@ function m15BuildPayloads({lines, job, propId, estId, isUpdate}){
 const M15_STATUS_OPTS=['Lead','Bidding','Submitted'];
 
 const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone }) => {
+  // [IMPORTER 2026-06-17] header fields (architect / plans-date / addendum) ride on the job so the
+  // import writes a header-complete estimate, the same as a direct build.
+  const hdrBlank={architectName:'',architectAddress:'',architectPhone:'',architectEmail:'',plansDated:'',addendum:''};
   const blankJob = lock
-    ? {tax:0.07,markup:0.20,projectNumber:String(lock.id),projectName:lock.project||'',gc:lock.gc||'',contact:lock.contact||'',email:lock.email||'',phone:lock.phone||'',location:lock.location||'',status:'Bidding',fileName:''}
-    : {tax:0.07,markup:0.20,projectNumber:'',projectName:'',gc:'',contact:'',email:'',phone:'',location:'',status:'Bidding',fileName:''};
+    ? {tax:0.07,markup:0.20,projectNumber:String(lock.id),projectName:lock.project||'',gc:lock.gc||'',contact:lock.contact||'',email:lock.email||'',phone:lock.phone||'',location:lock.location||'',status:'Bidding',fileName:'',...hdrBlank}
+    : {tax:0.07,markup:0.20,projectNumber:'',projectName:'',gc:'',contact:'',email:'',phone:'',location:'',status:'Bidding',fileName:'',...hdrBlank};
   const [lines,setLines]=React.useState(null);
   const [job,setJob]=React.useState(blankJob);
   const [status,setStatus]=React.useState(null);
@@ -4876,6 +4910,19 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
   const [collision,setCollision]=React.useState(null);   // {existing} pending Peter's confirm
   const fileRef=React.useRef(null);
   const catalog=React.useMemo(()=>m15BuildCatalog(estimateItems||[]),[estimateItems]);
+
+  // [IMPORTER 2026-06-17 — Paul] When importing into an existing project, prefill the bidsheet header
+  // from its current estimate so a re-import PRESERVES the architect / addresses / plans-date instead
+  // of wiping them (doSave rebuilds the estimate). Stash the full header on job._estHeader so the
+  // payload builder carries the project/GC address lines forward too. CSV/form values still win.
+  React.useEffect(()=>{ if(!lock||!sb) return; let live=true;
+    sb.from('estimates').select('architectName,architectAddress,architectPhone,architectEmail,plansDated,addendum,gcName,gcContactName,gcContactEmail,gcContactPhone,projectAddressLine1,projectAddressLine2,projectCity,projectState,projectZip,gcAddressLine1,gcAddressLine2,gcCity,gcState,gcZip').eq('proposalId',String(lock.id)).maybeSingle()
+      .then(({data})=>{ if(!live||!data) return; setJob(j=>({...j,
+        architectName:j.architectName||data.architectName||'', architectAddress:j.architectAddress||data.architectAddress||'',
+        architectPhone:j.architectPhone||data.architectPhone||'', architectEmail:j.architectEmail||data.architectEmail||'',
+        plansDated:j.plansDated||data.plansDated||'', addendum:j.addendum||data.addendum||'', _estHeader:data })); })
+      .catch(()=>{});
+    return ()=>{live=false;}; },[lock,sb]);
 
   const resetAll=()=>{ setLines(null); setCollision(null); setStatus(null);
     setJob(blankJob);
@@ -4897,6 +4944,7 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
         const exact = keyMatch || (it.tag ? catalog.byCode[it.tag.toLowerCase()] : null);
         const kw = m15Candidates(it.subject||it.tag, catalog.arr);
         const cands = exact ? [exact, ...kw.filter(c=>c.key!==exact.key)] : kw;
+        const sec = m15ParseSection(it.section);   // [IMPORTER 2026-06-17] CSI section from the CSV "Section" column
         // CSV values win when present ("ready to go" per Peter); blanks keep the existing
         // pulldown-history behavior (catalog prefill from an exact match, candidates otherwise).
         return {
@@ -4907,13 +4955,19 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
           unitCost: exact?exact.unitCost:'', orderUnit: exact?(exact.orderUnit||it.unit):it.unit,
           coverage: exact&&exact.coverageFactor?exact.coverageFactor:1,
           laborRate: exact?exact.laborRate:0, freight: exact?exact.freight:0,
-          sectionCode:'', sectionName:'Flooring',
+          sectionCode:sec.code, sectionName:sec.name||'Flooring',
           include:true,
           size: it.size || '',
           color: it.color || '',
         };
       });
-      setJob(j=>({...j,fileName:file.name}));
+      const hf=parsed.headerFields||{};   // [IMPORTER 2026-06-17] "Both": CSV header columns fill blanks; locked project values stay.
+      setJob(j=>({...j, fileName:file.name,
+        gc:j.gc||hf['GC']||'', contact:j.contact||hf['Contact']||'', email:j.email||hf['Email']||'',
+        phone:j.phone||hf['Phone']||'', location:j.location||hf['Location']||'', projectName:j.projectName||hf['Project']||'',
+        architectName:hf['Architect']||j.architectName||'', architectAddress:hf['Architect Address']||j.architectAddress||'',
+        architectPhone:hf['Architect Phone']||j.architectPhone||'', architectEmail:hf['Architect Email']||j.architectEmail||'',
+        plansDated:hf['Plans Dated']||j.plansDated||'', addendum:hf['Addendum']||j.addendum||'' }));
       setLines(newLines);
       setStatus({ok:true,msg:'Parsed '+priceable.length+' priceable line'+(priceable.length===1?'':'s')+' · '+parsed.junk_rows+' annotation rows skipped. Every line is a CANDIDATE — confirm product + cost before saving.'});
     }catch(e){ setStatus({ok:false,msg:'Read failed: '+e.message}); }
@@ -5026,7 +5080,12 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
                 {lines.map((l,idx)=>{ const st=lineState(l); const pv=st.label==='ready'?linePreview(l):null;
                   return (<tr key={idx} className="border-t border-stone-100 align-top">
                     <td className={cellCls}><input type="checkbox" checked={l.include} onChange={e=>updateLine(idx,{include:e.target.checked})}/></td>
-                    <td className={cellCls}><div className="font-mono font-semibold text-stone-800">{l.tag}</div><div className="text-[11px] text-stone-400">{l.subject}</div>{(l.size||l.color)&&<div className="text-[11px] text-stone-500">{[l.size,l.color].filter(Boolean).join(' · ')}</div>}<div className="font-mono text-stone-600 mt-0.5">{Number(l.measured_qty).toLocaleString()} {l.measured_unit}{l.recon!=null&&Math.abs(l.recon)>0.01?<span className="text-amber-600" title="detail vs Bluebeam subtotal"> ({l.recon>0?'+':''}{l.recon})</span>:null}</div></td>
+                    <td className={cellCls}><div className="font-mono font-semibold text-stone-800">{l.tag}</div><div className="text-[11px] text-stone-400">{l.subject}</div>{(l.size||l.color)&&<div className="text-[11px] text-stone-500">{[l.size,l.color].filter(Boolean).join(' · ')}</div>}<div className="font-mono text-stone-600 mt-0.5">{Number(l.measured_qty).toLocaleString()} {l.measured_unit}{l.recon!=null&&Math.abs(l.recon)>0.01?<span className="text-amber-600" title="detail vs Bluebeam subtotal"> ({l.recon>0?'+':''}{l.recon})</span>:null}</div>
+                      <select className="mt-1 w-full border border-stone-300 rounded-sm px-1 py-0.5 text-[11px] bg-white" value={l.sectionCode||''} title="CSI section — how this line is grouped on the bidsheet" onChange={e=>{const code=e.target.value; const hit=CSI_SECTIONS.find(c=>c.code===code); updateLine(idx,{sectionCode:code, sectionName:hit?hit.name:(code?l.sectionName:'Flooring')});}}>
+                        {l.sectionCode&&!CSI_SECTIONS.some(c=>c.code===l.sectionCode)&&<option value={l.sectionCode}>{l.sectionCode} {l.sectionName}</option>}
+                        {CSI_SECTIONS.map(c=><option key={c.code} value={c.code}>{c.code} {c.name}</option>)}
+                        <option value="">— no section —</option>
+                      </select></td>
                     <td className={cellCls}>
                       {(()=>{ const candKeys=new Set((l.candidates||[]).map(c=>c.key));
                         const rest=catalog.arr.filter(e=>!candKeys.has(e.key));
@@ -5069,6 +5128,13 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
             <label className="text-xs text-stone-600">Markup rate<input className={inp + ' font-mono'} type="number" step="0.01" value={job.markup} onChange={e=>setJob(j=>({...j,markup:e.target.value}))}/></label>
             <label className="text-xs text-stone-600">Contact<input className={inp} value={job.contact} onChange={e=>setJob(j=>({...j,contact:e.target.value}))}/></label>
             <label className="text-xs text-stone-600">Email<input className={inp} value={job.email} onChange={e=>setJob(j=>({...j,email:e.target.value}))}/></label>
+            <label className="text-xs text-stone-600">Phone<input className={inp} value={job.phone||''} onChange={e=>setJob(j=>({...j,phone:e.target.value}))}/></label>
+            <label className="text-xs text-stone-600">Location<input className={inp} value={job.location||''} onChange={e=>setJob(j=>({...j,location:e.target.value}))}/></label>
+            <label className="text-xs text-stone-600">Architect<input className={inp} value={job.architectName||''} onChange={e=>setJob(j=>({...j,architectName:e.target.value}))} placeholder="e.g. Lawson Group"/></label>
+            <label className="text-xs text-stone-600">Architect phone<input className={inp} value={job.architectPhone||''} onChange={e=>setJob(j=>({...j,architectPhone:e.target.value}))}/></label>
+            <label className="text-xs text-stone-600">Plans dated<input type="date" className={inp} value={(job.plansDated||'').slice(0,10)} onChange={e=>setJob(j=>({...j,plansDated:e.target.value}))}/></label>
+            <label className="text-xs text-stone-600">Addendum<input className={inp} value={job.addendum||''} onChange={e=>setJob(j=>({...j,addendum:e.target.value}))} placeholder="e.g. Permit Set"/></label>
+            <label className="text-xs text-stone-600 col-span-2 md:col-span-4">Architect address<input className={inp} value={job.architectAddress||''} onChange={e=>setJob(j=>({...j,architectAddress:e.target.value}))} placeholder="street, city, state zip"/></label>
           </div>
 
           <div className="flex items-center justify-between mt-3 pb-8">
