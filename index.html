@@ -2046,7 +2046,7 @@ window.genProposal=function(est,items,notes,proposal){
   // ceiling each 1671 bidsheet line reproduces every proposal line, section total, and the $55,570
   // grand total exactly. r10 applies to the displayed LINE TOTAL; mat/lab components stay exact.
   var r10=function(t){return Math.ceil(t/10)*10;};
-  var calc=function(i){var q=Number(i.qty)||0,c=Number(i.unitCost)||Number(i.costPerUnit)||0,f=Number(i.freight)||0,lr=Number(i.laborRate)||0,muL=(i.lineMarkupRate!=null?Number(i.lineMarkupRate):mu),a=q*c,mat=(i.materialActual!=null&&i.materialActual!=='')?(Number(i.materialActual)||0):(a+a*tax+f+a*muL),lab=q*lr;return{mat:mat,lab:lab,tot:r10(mat+lab)};};
+  var calc=function(i){var q=Number(i.qty)||0,c=Number(i.unitCost)||Number(i.costPerUnit)||0,f=Number(i.freight)||0,lr=Number(i.laborRate)||0,muL=(i.lineMarkupRate!=null?Number(i.lineMarkupRate):mu),a=((i.orderQty!=null&&Number(i.orderQty)>0)?Number(i.orderQty):q)*c,mat=(i.materialActual!=null&&i.materialActual!=='')?(Number(i.materialActual)||0):(a+a*tax+f+a*muL),lab=q*lr;return{mat:mat,lab:lab,tot:r10(mat+lab)};};
   var tM=0,tL=0;base.forEach(function(i){var r=calc(i);tM+=r.mat;tL+=r.lab;});
   // Detect dominant display mode for header
   var modes=base.map(function(i){return i.displayMode||'full';});
