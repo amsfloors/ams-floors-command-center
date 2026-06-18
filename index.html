@@ -2339,6 +2339,68 @@ window.genPriceRequest=function(est,items,proposal,suppliers,opts){
   var sep='\n\n'+new Array(60).join('─')+'\n\n';
   return blocks.join(sep);
 };
+// [PRICE REQUEST 2026-06-18 — Paul] "Copy as table" variant. Same data/recipients as genPriceRequest
+// but returns rich HTML (teal header, CSI section rows, formatted GC/architect footer) matching
+// Peter's real email so it pastes into Outlook as a formatted table. Inline styles only (email-safe).
+window.genPriceRequestHTML=function(est,items,proposal,suppliers,opts){
+  est=est||{}; items=items||[]; opts=opts||{}; var recips=opts.recipients||{};
+  var esc=function(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');};
+  var supById={},supByName={};
+  (suppliers||[]).forEach(function(s){if(s){if(s.id!=null)supById[String(s.id)]=s;if(s.name)supByName[String(s.name).trim().toLowerCase()]=s;}});
+  var findSupplier=function(name){var k=String(name||'').trim().toLowerCase();if(!k||k==='supplier')return null;if(supByName[k])return supByName[k];for(var key in supByName){if(key&&(k.indexOf(key)>=0||key.indexOf(k)>=0))return supByName[key];}return null;};
+  var fmtPh=function(p){var d=String(p||'').replace(/\D/g,'');if(d.length===11&&d[0]==='1')d=d.slice(1);return d.length===10?'('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6):String(p||'');};
+  var caseName=function(s){s=String(s||'');return /[a-z]/.test(s)?s:s.replace(/\b([A-Z])([A-Z]+)\b/g,function(_,a,b){return a+b.toLowerCase();});};
+  var ceilQ=function(i){var q=window._ordQ?window._ordQ(i):(Number(i.orderQty)||Number(i.qty)||0);return Math.max(0,Math.ceil(Number(q)||0));};
+  var isTile=function(i){var sc=String(i.sectionCode||'');if(sc)return sc.slice(0,4)==='0930';var s=((i.sectionName||'')+' '+(i.description||'')+' '+(i.itemCode||'')).toLowerCase();return /\b(tile|porcelain|ceramic|mosaic|zellige)\b/.test(s)&&!/transition|schiene|reducer|\btrim\b/.test(s);};
+  var num=function(n){return(Number(n)||0).toLocaleString('en-US');};
+  var firstName=function(s){s=String(s||'').trim();return s?s.split(/\s+/)[0]:'';};
+  var byS={},order=[];
+  items.filter(function(i){return!i.isVeAlternative;}).forEach(function(i){var k=((i.supplierName||i.manufacturer||'Supplier').trim())||'Supplier';if(!byS[k]){byS[k]=[];order.push(k);}byS[k].push(i);});
+  var fmtD=function(d){if(!d)return'';var p=String(d).split('T')[0].split('-');return p.length===3?(Number(p[1])+'/'+Number(p[2])+'/'+p[0]):String(d);};
+  var projName=(proposal&&proposal.project)||est.projectName||'';
+  var projAddr1=[est.projectAddressLine1,est.projectAddressLine2].filter(Boolean).join(', ');
+  var projCsz=([est.projectCity,est.projectState].filter(Boolean).join(', ')+(est.projectZip?' '+est.projectZip:'')).trim();
+  var propNum=(proposal&&proposal.id)||est.proposalNumber||'';
+  var projNum=est.projectNumber||(proposal&&proposal.projectNumber)||'';if(String(projNum)===String(propNum)||String(projNum)===String(est.proposalNumber||''))projNum='';
+  var gcName=(proposal&&proposal.gc)||est.gcName||'',gcContact=caseName(est.gcContactName||(proposal&&proposal.contact)||''),gcPhone=fmtPh(est.gcContactPhone||(proposal&&proposal.phone)||''),gcEmail=(est.gcContactEmail||(proposal&&proposal.email)||'').toLowerCase();
+  var gcAddr=[[est.gcAddressLine1,est.gcAddressLine2].filter(Boolean).join(', '),([est.gcCity,est.gcState].filter(Boolean).join(', ')+(est.gcZip?' '+est.gcZip:'')).trim()].filter(Boolean).join(', ');
+  var arName=est.architectName||'',arPhone=fmtPh(est.architectPhone||''),arEmail=(est.architectEmail||'').toLowerCase(),arAddr=String(est.architectAddress||'').replace(/\n/g,', ');
+  var TEAL='#3f6f86',BODY='#eaf2f6',SEC='#d4e4ec',BORD='#9fc1cf';
+  var td=function(c,extra){return '<td style="border:1px solid '+BORD+';padding:5px 9px;'+(extra||'')+'">'+c+'</td>';};
+  var footerHTML=function(){
+    var H='<table role="presentation" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px;margin-top:12px"><tr>';
+    H+='<td style="vertical-align:top;padding-right:48px"><div style="font-weight:bold">Project:</div><div>'+esc(projName)+'</div>'+(projAddr1?'<div>'+esc(projAddr1)+'</div>':'')+(projCsz?'<div>'+esc(projCsz)+'</div>':'')+'</td>';
+    var r=[];if(fmtD(est.plansDated))r.push('<div><b>Plans Dated:</b> '+esc(fmtD(est.plansDated))+'</div>');if(est.addendum)r.push('<div><b>Addendum:</b> '+esc(est.addendum)+'</div>');if(projNum)r.push('<div><b>Project #:</b> '+esc(projNum)+'</div>');
+    H+='<td style="vertical-align:top">'+r.join('')+'</td></tr></table>';
+    if(gcName||gcContact||gcPhone||gcEmail||gcAddr)H+='<div style="font-family:Arial,sans-serif;font-size:12px;margin-top:8px"><b>GC:</b> '+esc([gcName,gcContact,gcPhone,gcEmail].filter(Boolean).join(' · '))+(gcAddr?'<br>'+esc(gcAddr):'')+'</div>';
+    if(arName||arPhone||arEmail||arAddr)H+='<div style="font-family:Arial,sans-serif;font-size:12px;margin-top:6px"><b>Architect:</b> '+esc([arName,arPhone,arEmail].filter(Boolean).join(' · '))+(arAddr?'<br>'+esc(arAddr):'')+'</div>';
+    return H;
+  };
+  var blocks=order.map(function(k){
+    var its=byS[k],rec=recips[k]||{};
+    var sup=(rec.vendorId&&supById[String(rec.vendorId)])||findSupplier(k);
+    var who=firstName(rec.name)||caseName(firstName(sup&&sup.contactName))||(k==='Supplier'?'there':k);
+    var H='<div style="font-family:Arial,sans-serif;font-size:13px;margin:0 0 8px 0">Hey '+esc(who)+'! I need pricing on the items below. Thanks! &mdash; Peter</div>';
+    if(sup){var sl=[sup.name,caseName(sup.contactName),fmtPh(sup.contactPhone),(sup.contactEmail||'').toLowerCase()].filter(Boolean).join(' · ');if(sl)H+='<div style="font-family:Arial,sans-serif;font-size:12px;color:#555;margin:0 0 8px 0"><b>Supplier:</b> '+esc(sl)+'</div>';}
+    H+='<table role="presentation" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px"><thead><tr>';
+    H+=['ITEM','SIZE','MFR','DESCRIPTION','COLOR','QTY','UNIT'].map(function(h){return '<th style="background:'+TEAL+';color:#fff;border:1px solid '+TEAL+';padding:5px 9px;text-align:'+(h==='QTY'?'right':'left')+'">'+h+'</th>';}).join('');
+    H+='</tr></thead><tbody>';
+    var lastSec='__x__';
+    its.forEach(function(i){
+      var sc=String(i.sectionCode||''),sn=String(i.sectionName||''),sk=sc+'|'+sn;
+      if(sk!==lastSec&&(sc||sn)){lastSec=sk;H+='<tr style="background:'+SEC+'">'+td(esc(sc),'font-weight:bold')+td(esc(sn),'font-weight:bold')+td('')+td('')+td('')+td('')+td('')+'</tr>';}
+      H+='<tr style="background:'+BODY+'">'+td(esc(i.itemCode||''))+td(esc(i.size||''))+td(esc(i.manufacturer||''))+td(esc(i.description||''))+td(esc(i.color||''))+td(num(ceilQ(i)),'text-align:right')+td(esc(i.orderUnit||i.unit||'SF'))+'</tr>';
+    });
+    H+='</tbody></table>';
+    if(its.some(isTile)){
+      var tileSF=its.filter(isTile).reduce(function(s,i){var u=(i.orderUnit||i.unit||'SF').toUpperCase();return s+(u==='SF'?ceilQ(i):0);},0);
+      H+='<div style="font-family:Arial,sans-serif;font-size:12px;margin-top:8px"><b>Tile-setting materials &mdash; please also quote'+(tileSF>0?' (approx '+num(tileSF)+' SF of tile)':'')+':</b><ul style="margin:4px 0 0 0;padding-left:20px"><li>Thinset mortar &mdash; full coverage for the tile above</li><li>Grout &mdash; EPOXY grout in wet areas (showers, tub surrounds, restrooms); standard grout elsewhere</li><li>Waterproofing membrane &mdash; wet areas (showers + tub surrounds)</li></ul></div>';
+    }
+    H+=footerHTML();
+    return H;
+  });
+  return blocks.join('<hr style="border:none;border-top:2px solid #ccc;margin:22px 0">');
+};
 window.genInstallerPO=function(est,items,proposal){
   var fmt=function(n){return'$'+Math.round(n||0).toLocaleString('en-US');};
   var projName=(proposal&&proposal.project)||est.projectName||'';
@@ -4413,7 +4475,17 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
   try{setPrText(window.genPriceRequest(estimate||{},sel,draft,suppliers||[],{recipients:prRecip}));}catch(err){alert('Price Request error: '+err.message);return;}
   try{sb.from('proposal_documents').insert({proposalId:String(draft.id),documentType:'Price Request',generatedAt:new Date().toISOString(),generatedBy:'AMS'}).then(()=>{},()=>{});}catch(e){}
  };
- const copyPR=()=>{const ta=document.getElementById('pr-textarea');const val=(ta&&ta.value)||prText||'';if(ta){ta.focus();ta.select();}try{if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(val);else document.execCommand('copy');}catch(e){try{document.execCommand('copy');}catch(_){}}setPrCopied(true);setTimeout(()=>setPrCopied(false),1500);};
+ const copyPR=()=>{const ta=document.getElementById('pr-textarea');const val=(ta&&ta.value)||prText||'';if(ta){ta.focus();ta.select();}try{if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(val);else document.execCommand('copy');}catch(e){try{document.execCommand('copy');}catch(_){}}setPrCopied('text');setTimeout(()=>setPrCopied(false),1500);};
+ const copyPRTable=()=>{
+  const sel=[];prGroups.forEach(g=>g.items.forEach(x=>{if(prSel&&prSel.has(x.key))sel.push(x.i);}));
+  if(!sel.length){alert('Pick at least one line.');return;}
+  let html='';try{html=window.genPriceRequestHTML(estimate||{},sel,draft,suppliers||[],{recipients:prRecip});}catch(e){alert('Table build error: '+e.message);return;}
+  const plain=(document.getElementById('pr-textarea')||{}).value||prText||'';
+  const viaExec=()=>{const h=document.createElement('div');h.contentEditable='true';h.style.cssText='position:fixed;left:-99999px;top:0;opacity:0';h.innerHTML=html;document.body.appendChild(h);const r=document.createRange();r.selectNodeContents(h);const s=window.getSelection();s.removeAllRanges();s.addRange(r);let ok=false;try{ok=document.execCommand('copy');}catch(e){ok=false;}s.removeAllRanges();document.body.removeChild(h);return ok;};
+  const done=()=>{setPrCopied('table');setTimeout(()=>setPrCopied(false),1500);};
+  if(navigator.clipboard&&window.ClipboardItem){try{const item=new window.ClipboardItem({'text/html':new Blob([html],{type:'text/html'}),'text/plain':new Blob([plain],{type:'text/plain'})});navigator.clipboard.write([item]).then(done,function(){viaExec();done();});return;}catch(e){}}
+  viaExec();done();
+ };
  return (
   <>
    <div className="fixed inset-0 bg-stone-900/30 z-40" onClick={onClose}/>
@@ -4707,10 +4779,11 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
          </>
         ):(
          <>
-          <div style={{padding:'10px 16px',borderBottom:'1px solid #e7e5e4',display:'flex',gap:'8px',alignItems:'center',flexShrink:0}}>
-           <button onClick={copyPR} style={{background:'#16a34a',color:'white',border:'none',padding:'7px 16px',cursor:'pointer',fontWeight:700,fontSize:'12px'}}>{prCopied?'✓ Copied':'📋 Copy'}</button>
+          <div style={{padding:'10px 16px',borderBottom:'1px solid #e7e5e4',display:'flex',gap:'8px',alignItems:'center',flexShrink:0,flexWrap:'wrap'}}>
+           <button onClick={copyPR} style={{background:'#16a34a',color:'white',border:'none',padding:'7px 14px',cursor:'pointer',fontWeight:700,fontSize:'12px'}}>{prCopied==='text'?'✓ Copied':'📋 Copy text'}</button>
+           <button onClick={copyPRTable} style={{background:'#0e7490',color:'white',border:'none',padding:'7px 14px',cursor:'pointer',fontWeight:700,fontSize:'12px'}}>{prCopied==='table'?'✓ Copied':'📊 Copy as table'}</button>
            <button onClick={()=>setPrText(null)} style={{background:'#44403c',color:'white',border:'none',padding:'7px 14px',cursor:'pointer',fontSize:'12px'}}>← Back to selection</button>
-           <span style={{fontSize:'12px',color:'#78716c',marginLeft:'auto'}}>✏️ Editable — tweak anything, then Copy. Paste into your email to each supplier.</span>
+           <span style={{fontSize:'12px',color:'#78716c',marginLeft:'auto'}}>Copy text = editable plain text · Copy as table = formatted (pastes into Outlook). One block per supplier.</span>
           </div>
           <textarea id="pr-textarea" value={prText} onChange={e=>setPrText(e.target.value)} spellCheck={false} style={{flex:1,minHeight:'200px',border:'none',width:'100%',padding:'14px 16px',fontFamily:'ui-monospace,Menlo,Consolas,monospace',fontSize:'12px',lineHeight:1.5,resize:'none',outline:'none',whiteSpace:'pre',overflow:'auto',boxSizing:'border-box'}}/>
          </>
