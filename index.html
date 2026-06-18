@@ -2361,6 +2361,40 @@ const CSI_SECTIONS = [
  {code:'099100', name:'Painting'},
 ];
 const UNITS = ['SF','SY','LF','EA','CTN','PC','ROLLS','GAL','BAG','PAIL','BOX','LB','TN','HR'];
+// [PRICING LIBRARY 2026-06-18 — Paul] Market reference (web scan, June 2026; material-only, national
+// retail proxy — FL contractor typically runs ~10-20% under). Used ONLY as a fallback starting cost
+// when a line has NO past-order history; Peter reviews/adjusts every line. Promote to an editable
+// table later. Baked from migration_run/plan/web_pricing.json.
+const PRICING_LIBRARY=[
+ {key:'porcelain',  label:'Porcelain Tile',  sec:['093000'], kw:['porcelain'],                                   unit:'SF',  low:2.00,  typ:5.00,  high:12.00},
+ {key:'ceramic',    label:'Ceramic Tile',    sec:['093000'], kw:['ceramic','tile'],                              unit:'SF',  low:1.50,  typ:4.00,  high:8.00},
+ {key:'lvp',        label:'LVP (vinyl plank)',sec:['096500'],kw:['lvp','vinyl plank','plank'],                   unit:'SF',  low:1.50,  typ:3.00,  high:5.50},
+ {key:'lvt',        label:'LVT (vinyl tile)',sec:['096500'], kw:['lvt','luxury vinyl'],                          unit:'SF',  low:1.30,  typ:2.50,  high:5.00},
+ {key:'vct',        label:'VCT',             sec:['096500'], kw:['vct','composition'],                           unit:'SF',  low:0.90,  typ:1.75,  high:3.25},
+ {key:'sheet',      label:'Sheet Vinyl',     sec:['096500'], kw:['sheet vinyl','sheet'],                         unit:'SF',  low:1.00,  typ:2.25,  high:4.00},
+ {key:'rubber',     label:'Rubber Flooring', sec:['096500'], kw:['rubber'],                                      unit:'SF',  low:2.00,  typ:5.50,  high:10.00},
+ {key:'base',       label:'Cove / Wall Base',sec:['096500'], kw:['cove base','wall base','cove','base'],         unit:'LF',  low:0.75,  typ:1.04,  high:1.60},
+ {key:'carpettile', label:'Carpet Tile',     sec:['096800'], kw:['carpet tile'],                                 unit:'SF',  low:1.78,  typ:3.25,  high:5.00},
+ {key:'broadloom',  label:'Carpet Broadloom',sec:['096800'], kw:['broadloom','carpet'],                          unit:'SY',  low:8.00,  typ:22.00, high:45.00},
+ {key:'engwood',    label:'Engineered Wood', sec:['096400'], kw:['engineered'],                                  unit:'SF',  low:2.22,  typ:4.42,  high:9.38},
+ {key:'hardwood',   label:'Hardwood',        sec:['096400'], kw:['hardwood','solid wood','wood floor'],          unit:'SF',  low:2.00,  typ:4.33,  high:10.00},
+ {key:'adhesive',   label:'Adhesive',        sec:[],         kw:['adhesive','glue','mastic'],                    unit:'GAL', low:18.00, typ:28.00, high:55.00},
+ {key:'slu',        label:'Self-Leveling Underlayment', sec:[], kw:['self-level','self leveling','underlayment','leveling compound','slu'], unit:'BAG', low:29.99, typ:55.00, high:80.00},
+];
+// Map an item to its best PRICING_LIBRARY entry (section +2, each keyword +3). Returns null if nothing scores.
+const libraryPriceFor=(item)=>{
+ if(!item) return null;
+ const text=((item.description||'')+' '+(item.itemCode||'')+' '+(item.size||'')+' '+(item.manufacturer||'')+' '+(item.product||'')+' '+(item.subject||'')).toLowerCase();
+ const sec=(item.sectionCode||'').trim();
+ let best=null, bestScore=0;
+ PRICING_LIBRARY.forEach(L=>{
+  let s=0;
+  if(sec&&L.sec.includes(sec)) s+=2;
+  L.kw.forEach(k=>{ if(text.includes(k)) s+=3; });
+  if(s>bestScore){ bestScore=s; best=L; }
+ });
+ return bestScore>0?best:null;
+};
 const DISPLAY_MODES = [
  {value:'full', label:'Full detail', desc:'QTY | UNIT | MATERIAL | LABOR | LINE TOTAL'},
  {value:'total_only', label:'Total only', desc:'QTY | UNIT | LINE TOTAL (hides material/labor split)'},
@@ -3489,11 +3523,18 @@ const EstimateItemRow = ({ item, onUpdate, onDelete, onAddVE, taxRate, markupRat
    </td>
    <td className="px-1 py-1">
     <ACInput value={item.unitCost ?? item.costPerUnit} onChange={v => updateField('unitCost', v)} type="number" className="text-right font-mono" style={{ minWidth: '60px' }} />
-    {priceHint && priceHint.lastCost > 0 && (
-     <div className={`text-[9px] font-mono text-right pr-2 mt-0.5 ${driftColor}`} title={`Last: $${priceHint.lastCost.toFixed(2)} · 60d avg: $${priceHint.avg60.toFixed(2)} · ${priceHint.count} prior bids`}>
+    {priceHint && priceHint.lastCost > 0 ? (
+     <button type="button" onClick={() => updateField('unitCost', priceHint.lastCost)}
+      className={`block w-full text-[9px] font-mono text-right pr-2 mt-0.5 cursor-pointer hover:underline ${driftColor}`}
+      title={`Click to use last $${priceHint.lastCost.toFixed(2)} · 60d avg $${priceHint.avg60.toFixed(2)} · ${priceHint.count} prior bids`}>
       {driftIcon} ${priceHint.lastCost.toFixed(2)}{priceHint.daysAgo !== null ? ` · ${priceHint.daysAgo}d ago` : ''}
-     </div>
-    )}
+     </button>
+    ) : (!(Number(item.unitCost) > 0) && (() => { const lib = libraryPriceFor(item); return lib ? (
+     <button type="button" onClick={() => updateField('unitCost', lib.typ)}
+      className="block w-full text-[9px] font-mono text-right pr-2 mt-0.5 cursor-pointer text-sky-600 hover:underline"
+      title={`Library estimate (${lib.label}): $${lib.low}–$${lib.high}/${lib.unit}. Click to use $${lib.typ}.`}>
+      lib ${lib.typ}
+     </button>) : null; })())}
    </td>
    <td className="px-1 py-1 text-right font-mono text-xs text-stone-600">{money(calc.amount)}</td>
    <td className="px-1 py-1 text-right font-mono text-xs text-stone-500" title={`Tax @ ${pct(taxRate)}`}>{money(calc.salesTax)}</td>
@@ -5066,6 +5107,9 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
         const kw = m15Candidates(it.subject||it.tag, catalog.arr);
         const cands = exact ? [exact, ...kw.filter(c=>c.key!==exact.key)] : kw;
         const sec = m15ParseSection(it.section);   // [IMPORTER 2026-06-17] CSI section from the CSV "Section" column
+        // [AUTO-PRICE 2026-06-18 — Paul] No history match -> fall back to the pricing library so the line
+        // still arrives pre-priced (flagged "library est - verify" for Peter to confirm).
+        const lib = exact ? null : libraryPriceFor({subject:it.subject, itemCode:it.tag, size:it.size, manufacturer:it.mfr, sectionCode:sec.code});
         // CSV values win when present ("ready to go" per Peter); blanks keep the existing
         // pulldown-history behavior (catalog prefill from an exact match, candidates otherwise).
         return {
@@ -5073,7 +5117,8 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
           candidates:cands,
           product: it.subject || (exact?exact.label:''),
           manufacturer: it.mfr || (exact?exact.manufacturer:''),
-          unitCost: exact?exact.unitCost:'', orderUnit: exact?(exact.orderUnit||it.unit):it.unit,
+          unitCost: exact?exact.unitCost:(lib?lib.typ:''), orderUnit: exact?(exact.orderUnit||it.unit):it.unit,
+          priceSource: exact?'history':(lib?'library':''),
           coverage: exact&&exact.coverageFactor?exact.coverageFactor:1,
           laborRate: exact?exact.laborRate:0, freight: exact?exact.freight:0,
           sectionCode:sec.code, sectionName:sec.name||'Flooring',
@@ -5108,6 +5153,7 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
     // Block only the unconverted case — coverage = 1 across unit families is the SC-1 $77k bug.
     if(!m15UnitsCompatible(l.measured_unit,l.orderUnit) && (Number(l.coverage)||1)===1)
       return {label:'set coverage →',cls:'text-amber-700 font-semibold'};
+    if(l.priceSource==='library') return {label:'library est — verify',cls:'text-sky-700 font-semibold'};
     return {label:'ready',cls:'text-emerald-700'};
   };
   const linePreview=l=>{ const qty=Number(l.measured_qty)||0;
