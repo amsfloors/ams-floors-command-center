@@ -2146,7 +2146,7 @@ window.genSupplierPOs=function(est,items,_notes,proposal,suppliers){
   var supByName={};(suppliers||[]).forEach(function(s){ if(s&&s.name) supByName[String(s.name).trim().toLowerCase()]=s; });
   var findSupplier=function(name){ var k=String(name||'').trim().toLowerCase(); if(supByName[k])return supByName[k];
     for(var key in supByName){ if(key&&(k.indexOf(key)>=0||key.indexOf(k)>=0)) return supByName[key]; } return null; };
-  var byS={};(items||[]).filter(function(i){return!i.isVeAlternative;}).forEach(function(i){var k=((i.manufacturer||i.supplierName||'Supplier').trim());if(!byS[k])byS[k]=[];byS[k].push(i);});
+  var byS={};(items||[]).filter(function(i){return!i.isVeAlternative;}).forEach(function(i){var k=((i.supplierName||i.manufacturer||'Supplier').trim());if(!byS[k])byS[k]=[];byS[k].push(i);});
   var today=new Date().toLocaleDateString('en-US'); var n=1;
   var H="<!DOCTYPE html><html><head><meta charset='UTF-8'><style>"
    +"body{font-family:Arial,sans-serif;font-size:11px;color:#1c1917;margin:0}"
@@ -2198,6 +2198,10 @@ window.genSupplierPOs=function(est,items,_notes,proposal,suppliers){
       +(projCSZ?"<div>"+esc(projCSZ)+"</div>":"")
       +"<div style='margin-top:8px;font-weight:700'>FREIGHT CONTACT:</div>"
       +"<div>(941)699-6250 - David Minchuk</div></td></tr></table>";
+    var terms=(sup&&sup.notes&&((sup.notes.match(/Net\s*\d+/i)||[])[0]))||'';
+    H+="<div style='margin-top:8px;border:1px solid #cbd5e1;padding:6px 8px;font-size:11px'>"
+      +"<span style='font-weight:700;color:#3f5e7a'>BILL TO: </span>AMS Floors, LLC — 1001 Corporate Ave., Ste. 100, North Port, FL 34289 · (941)238-6614"
+      +(terms?" &nbsp;|&nbsp; <b>Vendor Terms:</b> "+esc(terms):"")+"</div>";
     // ---- requisitioner bar ----
     H+="<table style='width:100%;border-collapse:collapse;margin-top:12px'><tr>"
       +"<td style='width:22%'><div class='band'>Requisitioner</div></td>"
@@ -2206,7 +2210,7 @@ window.genSupplierPOs=function(est,items,_notes,proposal,suppliers){
       +"<td style='width:34%'><div class='band'>Shipping Terms</div></td></tr><tr>"
       +"<td class='cell' style='text-align:center'>Peter Laitres</td>"
       +"<td class='cell' style='text-align:center'>ASAP</td>"
-      +"<td class='cell' style='text-align:center'>__________</td>"
+      +"<td class='cell' style='text-align:center'>"+esc(sup&&sup.accountNumber||'__________')+"</td>"
       +"<td class='cell' style='text-align:center;background:#fef08a;font-weight:700'>Best Way</td></tr></table>";
     // ---- items table (SIZE | DESCRIPTION | QTY | UNIT | UNIT PRICE | TOTAL), padded like the sample ----
     H+="<table class='items'><thead><tr><th style='width:12%'>Size</th><th>Description</th><th style='width:9%;text-align:right'>Qty</th><th style='width:8%'>Unit</th><th style='width:12%;text-align:right'>Unit Price</th><th style='width:13%;text-align:right'>Total</th></tr></thead><tbody>";
@@ -2223,7 +2227,6 @@ window.genSupplierPOs=function(est,items,_notes,proposal,suppliers){
       +"<tr><td class='cell' style='font-weight:700'>SUBTOTAL</td><td class='cell' style='text-align:right'>"+fmt(subtotal)+"</td></tr>"
       +"<tr><td class='cell'>"+(tax*100).toLocaleString('en-US',{maximumFractionDigits:2})+"% TAX</td><td class='cell' style='text-align:right'>"+fmt(taxAmt)+"</td></tr>"
       +"<tr><td class='cell'>FREIGHT</td><td class='cell' style='text-align:right'>"+(freight>0?fmt(freight):'TBD')+"</td></tr>"
-      +"<tr><td class='cell'>CREDIT CARD</td><td class='cell'>&nbsp;</td></tr>"
       +"<tr><td class='cell' style='font-weight:700;background:#e2e8f0'>TOTAL</td><td class='cell' style='text-align:right;font-weight:700;background:#e2e8f0'>"+fmt(total)+"</td></tr></table>";
     // ---- footer ----
     H+="<div style='text-align:center;margin-top:26px;font-weight:700;font-size:11px'>If you have any questions about this purchase order, please contact<br/>Peter Laitres - (941)740-1555 - peter@amsfloors.com</div>";
@@ -3482,7 +3485,7 @@ const requestPricingEmail = (projectName, propNum, items) => {
  if (navigator.clipboard) navigator.clipboard.writeText('Subject: ' + subject + '\n\n' + body);
  return 'clipboard';
 };
-const EstimateItemRow = ({ item, onUpdate, onDelete, onAddVE, taxRate, markupRate, suggestions, isChild = false, priceHint }) => {
+const EstimateItemRow = ({ item, onUpdate, onDelete, onAddVE, taxRate, markupRate, suggestions, isChild = false, priceHint, suppliers }) => {
  const calc = calcEstimateItem(item, taxRate, markupRate);
  const updateField = (field, val) => onUpdate({ ...item, [field]: val });
  const dmConfig = {
@@ -3506,7 +3509,14 @@ const EstimateItemRow = ({ item, onUpdate, onDelete, onAddVE, taxRate, markupRat
        must render EMPTY, not show ghost defaults that read as data. */}
    <td className="px-1 py-1"><ACInput value={item.itemCode} onChange={v => updateField('itemCode', v)} suggestions={suggestions?.itemCodes} /></td>
    <td className="px-1 py-1"><ACInput value={item.size} onChange={v => updateField('size', v)} suggestions={suggestions?.sizes} /></td>
-   <td className="px-1 py-1"><ACInput value={item.manufacturer} onChange={v => updateField('manufacturer', v)} suggestions={suggestions?.manufacturers} /></td>
+   <td className="px-1 py-1">
+    <ACInput value={item.manufacturer} onChange={v => updateField('manufacturer', v)} suggestions={suggestions?.manufacturers} />
+    <select value={item.supplierName || ''} onChange={e => { const s=(suppliers||[]).find(x => x.name === e.target.value); onUpdate({ ...item, supplierName: e.target.value, supplierId: s ? s.id : '' }); }}
+     className="mt-0.5 w-full text-[9px] bg-transparent border-0 text-stone-500 hover:bg-stone-100 focus:bg-white rounded-sm" title="Supplier we buy from (drives the PO vendor block)">
+     <option value="">supplier…</option>
+     {(suppliers || []).map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+    </select>
+   </td>
    <td className="px-1 py-1"><ACInput value={item.description} onChange={v => updateField('description', v)} suggestions={suggestions?.descriptions} /></td>
    <td className="px-1 py-1"><ACInput value={item.color} onChange={v => updateField('color', v)} suggestions={suggestions?.colors} /></td>
    <td className="px-1 py-1"><ACInput value={item.qty} onChange={v => updateField('qty', v)} type="number" className="text-right font-mono" style={{ minWidth: '55px' }} /></td>
@@ -3568,7 +3578,7 @@ const EstimateItemRow = ({ item, onUpdate, onDelete, onAddVE, taxRate, markupRat
   </tr>
  );
 };
-const EstimateSection = ({ section, items, onUpdate, onDelete, onAddItem, onAddVE, taxRate, markupRate, suggestions, onUpdateSection, onDeleteSection, allItems, getPriceHint }) => {
+const EstimateSection = ({ section, items, onUpdate, onDelete, onAddItem, onAddVE, taxRate, markupRate, suggestions, onUpdateSection, onDeleteSection, allItems, getPriceHint, suppliers }) => {
  const parentItems = items.filter(i => !i.parentItemId);
  const childItems = (parentId) => items.filter(i => i.parentItemId === parentId);
  const sectionTotals = items.reduce((acc, item) => {
@@ -3673,6 +3683,7 @@ const EstimateSection = ({ section, items, onUpdate, onDelete, onAddItem, onAddV
           markupRate={markupRate}
           suggestions={suggestions}
           priceHint={getPriceHint ? getPriceHint(item) : null}
+          suppliers={suppliers}
          />
          {childItems(item.id).map(child => (
           <EstimateItemRow
@@ -3686,6 +3697,7 @@ const EstimateSection = ({ section, items, onUpdate, onDelete, onAddItem, onAddV
            suggestions={suggestions}
            isChild={true}
            priceHint={getPriceHint ? getPriceHint(child) : null}
+           suppliers={suppliers}
           />
          ))}
         </React.Fragment>
@@ -4049,6 +4061,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, pendingEdits, setPend
        }}
        allItems={displayItems}
        getPriceHint={getPriceHint}
+       suppliers={suppliers}
       />
      ))}
      {sections.filter(s => s.isAlternate).length > 0 && (
@@ -4078,6 +4091,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, pendingEdits, setPend
        }}
        allItems={displayItems}
        getPriceHint={getPriceHint}
+       suppliers={suppliers}
       />
      ))}
      <div className="flex items-center gap-2 mt-3">
@@ -4993,7 +5007,8 @@ function m15BuildCatalog(estimateItems){
     if(!prev||date>prev.date){
       map.set(key,{ key, label:(mfr?mfr+' ':'')+desc, manufacturer:mfr, description:desc,
         itemCode:(it.itemCode||'').trim(), unitCost:m15r2(cost), orderUnit:(it.orderUnit||it.unit||'').trim(),
-        coverageFactor:cov, laborRate:Number(it.laborRate)||0, freight:Number(it.freight)||0, date, n:1 });
+        coverageFactor:cov, laborRate:Number(it.laborRate)||0, freight:Number(it.freight)||0,
+        supplierName:(it.supplierName||'').trim(), supplierId:(it.supplierId||'').trim(), date, n:1 });
     } else { prev.n+=1; }
   });
   const arr=[...map.values()].sort((a,b)=>a.label.localeCompare(b.label));
@@ -5025,7 +5040,7 @@ function m15BuildPayloads({lines, job, propId, estId, isUpdate}){
     estMat+=c.material; estLab+=c.labor; base+=c.total;
     return { id:'ei_'+propId+'_'+l.tag+'_'+(ord++), estimateId:estId, proposalId:propId,
       sortOrder:ord, sectionCode:l.sectionCode||'', sectionName:l.sectionName||'Flooring',
-      itemCode:l.tag||'', size:l.size||'', manufacturer:l.manufacturer||'',
+      itemCode:l.tag||'', size:l.size||'', manufacturer:l.manufacturer||'', supplierId:l.supplierId||'', supplierName:l.supplierName||'',
       // PETER'S RULE (6/10): CSV "SUBJECT" = AMS "description"
       description:l.subject||l.product||'',
       color:l.color||'', qty, unit:l.measured_unit, orderQty, orderUnit:item.orderUnit,
@@ -5119,6 +5134,7 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
           manufacturer: it.mfr || (exact?exact.manufacturer:''),
           unitCost: exact?exact.unitCost:(lib?lib.typ:''), orderUnit: exact?(exact.orderUnit||it.unit):it.unit,
           priceSource: exact?'history':(lib?'library':''),
+          supplierName: exact?(exact.supplierName||''):'', supplierId: exact?(exact.supplierId||''):'',
           coverage: exact&&exact.coverageFactor?exact.coverageFactor:1,
           laborRate: exact?exact.laborRate:0, freight: exact?exact.freight:0,
           sectionCode:sec.code, sectionName:sec.name||'Flooring',
@@ -5142,7 +5158,7 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
   const updateLine=(idx,patch)=>setLines(ls=>ls.map((l,i)=>i===idx?{...l,...patch}:l));
   const pickProduct=(idx,key)=>{ const e=catalog.byKey.get(key); if(!e)return;
     updateLine(idx,{product:e.label,manufacturer:e.manufacturer,unitCost:e.unitCost,
-      orderUnit:e.orderUnit||lines[idx].measured_unit,coverage:e.coverageFactor||1,laborRate:e.laborRate,freight:e.freight,include:true}); };
+      orderUnit:e.orderUnit||lines[idx].measured_unit,coverage:e.coverageFactor||1,laborRate:e.laborRate,freight:e.freight,supplierName:e.supplierName||'',supplierId:e.supplierId||'',include:true}); };
   const addLine=()=>setLines(ls=>[...(ls||[]),{tag:'NEW-'+((ls||[]).length+1),subject:'',measured_qty:0,measured_unit:'SF',recon:null,candidates:[],product:'',manufacturer:'',unitCost:'',orderUnit:'SF',coverage:1,laborRate:0,freight:0,sectionCode:'',sectionName:'Flooring',include:true,size:'',color:''}]);
   const removeLine=idx=>setLines(ls=>ls.filter((_,i)=>i!==idx));
 
