@@ -2236,6 +2236,95 @@ window.genSupplierPOs=function(est,items,_notes,proposal,suppliers){
   });
   return H+"</body></html>";
 };
+// [SAVE & TRACK POs 2026-06-18 — Paul] Build persistable purchase_orders rows from the estimate,
+// mirroring genSupplierPOs grouping/totals (one PO per assigned supplier). id is deterministic per
+// proposal+PO# so re-saving upserts (no dupes). Pulls vendor account# + AMS bill-to.
+window.buildPORecords=function(est,items,proposal,suppliers){
+  var tax=(est&&est.taxRate!=null?est.taxRate:0.07);
+  var supByName={};(suppliers||[]).forEach(function(s){if(s&&s.name)supByName[String(s.name).trim().toLowerCase()]=s;});
+  var findSupplier=function(name){var k=String(name||'').trim().toLowerCase();if(supByName[k])return supByName[k];for(var key in supByName){if(key&&(k.indexOf(key)>=0||key.indexOf(k)>=0))return supByName[key];}return null;};
+  var byS={};(items||[]).filter(function(i){return!i.isVeAlternative;}).forEach(function(i){var k=((i.supplierName||i.manufacturer||'Supplier').trim());if(!byS[k])byS[k]=[];byS[k].push(i);});
+  var propNum=(proposal&&proposal.id)||est.proposalNumber||'';
+  var ordQ=window._ordQ;
+  var perOrderCost=function(i){var c=Number(i.unitCost)||Number(i.costPerUnit)||0;if(i.orderQty!=null&&Number(i.orderQty)>0)return c;if(i.usedMaterial&&i.sfPerCtn&&Number(i.sfPerCtn)>0)return c*Number(i.sfPerCtn);return c;};
+  var n=1,out=[];
+  Object.keys(byS).forEach(function(supName){
+    var its=byS[supName],sup=findSupplier(supName),subtotal=0,freight=0,lines=[];
+    its.forEach(function(i){var oq=ordQ?ordQ(i):(Number(i.orderQty)||Number(i.qty)||0),c=perOrderCost(i);subtotal+=oq*c;freight+=Number(i.freight)||0;
+      lines.push({size:i.size||'',description:i.description||'',color:i.color||'',itemCode:i.itemCode||'',qty:oq,unit:i.orderUnit||i.unit||'SF',unitCost:c,total:Math.round(oq*c*100)/100});});
+    var taxAmt=subtotal*tax,total=subtotal+taxAmt+freight,poNo=(propNum?propNum+'-':'')+(n++);
+    out.push({id:'po_'+String(propNum).replace(/[^a-zA-Z0-9]/g,'_')+'_'+String(poNo).replace(/[^a-zA-Z0-9]/g,'_'),
+      proposalId:String(propNum),poNumber:poNo,supplierId:(sup&&sup.id)||'',supplierName:supName,status:'Draft',
+      shipToName:'JOB SITE',shipToAddress:[(proposal&&proposal.project)||est.projectName||'',(proposal&&proposal.location)||'',[est.projectCity,est.projectState,est.projectZip].filter(Boolean).join(', ')].filter(Boolean).join(' · '),
+      billToName:'AMS Floors, LLC',billToAddress:'1001 Corporate Ave., Ste. 100, North Port, FL 34289',
+      requisitioner:'Peter Laitres',shippingTerms:'Best Way',accountNumber:(sup&&sup.accountNumber)||'',
+      subtotal:Math.round(subtotal*100)/100,tax:Math.round(taxAmt*100)/100,freight:freight,total:Math.round(total*100)/100,
+      lineItems:lines,notes:'',updatedAt:new Date().toISOString()});
+  });
+  return out;
+};
+// [PRICE REQUEST 2026-06-18 — Paul/Peter] Peter emails suppliers for live pricing BEFORE finalizing
+// a bid (catalog/old prices are unreliable on big jobs). Output = COPY-PASTE TEXT, one block per
+// supplier, NOT a PDF. Groups by supplierName||manufacturer (mirrors genSupplierPOs). QTY = order
+// qty WITH WASTE via window._ordQ (ceil'd to a whole unit) so suppliers quote real volume. Tile
+// blocks (CSI 0930xx) get a thinset / grout / membrane request. Each block ends with the project
+// header. Caller passes the already-SELECTED items (supplier+line picking happens in the UI).
+window.genPriceRequest=function(est,items,proposal,suppliers){
+  est=est||{}; items=items||[];
+  var supByName={};(suppliers||[]).forEach(function(s){if(s&&s.name)supByName[String(s.name).trim().toLowerCase()]=s;});
+  var findSupplier=function(name){var k=String(name||'').trim().toLowerCase();if(!k)return null;if(supByName[k])return supByName[k];for(var key in supByName){if(key&&(k.indexOf(key)>=0||key.indexOf(k)>=0))return supByName[key];}return null;};
+  var ceilQ=function(i){var q=window._ordQ?window._ordQ(i):(Number(i.orderQty)||Number(i.qty)||0);return Math.max(0,Math.ceil(Number(q)||0));};
+  // Tile detection: trust the CSI section first (0930xx = Ceramic Tile); fall back to a keyword
+  // sniff ONLY when the line carries no section. Excludes Schluter transitions (096500) so a
+  // transition-only block doesn't get a thinset request.
+  var isTile=function(i){var sc=String(i.sectionCode||'');if(sc)return sc.slice(0,4)==='0930';var s=((i.sectionName||'')+' '+(i.description||'')+' '+(i.itemCode||'')).toLowerCase();return /\b(tile|porcelain|ceramic|mosaic|zellige)\b/.test(s)&&!/transition|schiene|reducer|\btrim\b/.test(s);};
+  // group EXACTLY like genSupplierPOs (supplierName, then manufacturer, then 'Supplier')
+  var byS={},order=[];
+  items.filter(function(i){return!i.isVeAlternative;}).forEach(function(i){var k=((i.supplierName||i.manufacturer||'Supplier').trim())||'Supplier';if(!byS[k]){byS[k]=[];order.push(k);}byS[k].push(i);});
+  var num=function(n){return(Number(n)||0).toLocaleString('en-US');};
+  var pad=function(s,w){s=String(s==null?'':s);while(s.length<w)s+=' ';return s;};
+  var padL=function(s,w){s=String(s==null?'':s);while(s.length<w)s=' '+s;return s;};
+  var table=function(its){
+    var head=['ITEM','SIZE','MFR','DESCRIPTION','COLOR','QTY','UNIT'];
+    var rows=its.map(function(i){return[i.itemCode||'',i.size||'',i.manufacturer||'',i.description||'',i.color||'',num(ceilQ(i)),i.orderUnit||i.unit||'SF'];});
+    var w=head.map(function(h,c){var m=h.length;rows.forEach(function(r){if(String(r[c]).length>m)m=String(r[c]).length;});return m;});
+    var line=function(r){return r.map(function(cell,c){return c===5?padL(cell,w[c]):pad(cell,w[c]);}).join('  ').replace(/\s+$/,'');};
+    return[line(head)].concat(rows.map(line)).join('\n');
+  };
+  // project header (mirrors genProposal's field usage)
+  var fmtD=function(d){if(!d)return'';var p=String(d).split('T')[0].split('-');return p.length===3?(Number(p[1])+'/'+Number(p[2])+'/'+p[0]):String(d);};
+  var projName=(proposal&&proposal.project)||est.projectName||'';
+  var pjA1=est.projectAddressLine1||'',pjCsz=([est.projectCity,est.projectState].filter(Boolean).join(', ')+(est.projectZip?' '+est.projectZip:'')).trim();
+  var addr=[pjA1,pjCsz].filter(Boolean).join(', ')||((proposal&&proposal.location)||'');
+  var propNum=(proposal&&proposal.id)||est.proposalNumber||'';
+  var projNum=est.projectNumber||(proposal&&proposal.projectNumber)||'';
+  if(String(projNum)===String(propNum)||String(projNum)===String(est.proposalNumber||''))projNum='';
+  var gc=(proposal&&proposal.gc)||est.gcName||'';
+  var arch=[est.architectName,est.architectAddress&&String(est.architectAddress).replace(/\n/g,', '),est.architectPhone].filter(Boolean).join(', ');
+  var hdr=[];
+  hdr.push('Project: '+[projName,addr].filter(Boolean).join(', ')+(fmtD(est.plansDated)?' · Plans Dated: '+fmtD(est.plansDated):'')+(est.addendum?' · Addendum: '+est.addendum:''));
+  var l2=[];if(gc)l2.push('GC: '+gc);if(arch)l2.push('Architect: '+arch);if(projNum)l2.push('Project #: '+projNum);
+  if(l2.length)hdr.push(l2.join(' · '));
+  var firstName=function(s){s=String(s||'').trim();return s?s.split(/\s+/)[0]:'';};
+  var blocks=order.map(function(k){
+    var its=byS[k],sup=findSupplier(k);
+    var who=firstName(sup&&sup.contactName)||(k==='Supplier'?'there':k);
+    var T='Hey '+who+'! I need pricing on the items below. Thanks! — Peter\n';
+    if(k==='Supplier')T+='(These lines have no supplier/MFR yet — assign one in the bidsheet.)\n';
+    T+='\n'+table(its);
+    if(its.some(isTile)){
+      var tileSF=its.filter(isTile).reduce(function(s,i){var u=(i.orderUnit||i.unit||'SF').toUpperCase();return s+(u==='SF'?ceilQ(i):0);},0);
+      T+='\n\nTile-setting materials — please also quote'+(tileSF>0?' (approx '+num(tileSF)+' SF of tile)':'')+':';
+      T+='\n  • Thinset mortar — full coverage for the tile above';
+      T+='\n  • Grout — EPOXY grout in wet areas (showers, tub surrounds, restrooms); standard grout elsewhere';
+      T+='\n  • Waterproofing membrane — wet areas (showers + tub surrounds)';
+    }
+    T+='\n\n'+hdr.join('\n');
+    return T;
+  });
+  var sep='\n\n'+new Array(41).join('─')+'\n\n';
+  return blocks.join(sep);
+};
 window.genInstallerPO=function(est,items,proposal){
   var fmt=function(n){return'$'+Math.round(n||0).toLocaleString('en-US');};
   var projName=(proposal&&proposal.project)||est.projectName||'';
@@ -4234,10 +4323,19 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
  const [pendingEdits,setPendingEdits]=useState({});
  const [savingAll,setSavingAll]=useState(false);
  const [previewHtml,setPreviewHtml]=useState(null);
+ const [poToSave,setPoToSave]=useState(null);
+ const [savedPOs,setSavedPOs]=useState([]);
  const [noteText,setNoteText]=useState('');
  const [showScript,setShowScript]=useState(false);
  const [activeTab,setActiveTab]=useState('details');
- useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('details');setPendingEdits({});},[proposal?.id]);
+ const [prOpen,setPrOpen]=useState(false);   // [PRICE REQUEST] modal open
+ const [prText,setPrText]=useState(null);    // null = selection view; string = generated-text view
+ const [prSel,setPrSel]=useState(null);       // Set of selected line keys
+ const [prCopied,setPrCopied]=useState(false);
+ useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('details');setPendingEdits({});setPrOpen(false);setPrText(null);},[proposal?.id]);
+ useEffect(()=>{ if(!proposal||typeof sb==='undefined'||!sb) return; let live=true;
+  sb.from('purchase_orders').select('*').eq('proposalId',String(proposal.id)).order('poNumber').then(function(r){ if(live&&r&&r.data) setSavedPOs(r.data); },function(){});
+  return function(){live=false;}; },[proposal?.id]);
  if(!proposal) return null;
  // [STALE-DRAFT FIX 2026-06-08] Read the LATEST draft via the functional updater, not the closure
  // copy. Without this, a header-sync that just ran (setDraft) hadn't applied to this closure yet,
@@ -4277,6 +4375,25 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
   const c=calcEstimateItem(it,(estimate?.taxRate!=null?estimate.taxRate:0.07),(estimate?.markupRate!=null?estimate.markupRate:0.20));
   return s+c.total;
  },0);
+ // [PRICE REQUEST 2026-06-18] Group lines by supplier||MFR (mirrors genSupplierPOs) for the
+ // pick-suppliers / pick-lines selector; each line carries a stable key for the selection Set.
+ const prGroups=useMemo(()=>{
+  const base=(estimateItemsForThis||[]).filter(i=>!i.isVeAlternative);
+  const m={},ord=[];
+  base.forEach((i,idx)=>{const k=((i.supplierName||i.manufacturer||'Supplier').trim())||'Supplier';if(!m[k]){m[k]=[];ord.push(k);}m[k].push({i,key:i.id!=null?String(i.id):('idx'+idx)});});
+  return ord.map(k=>({name:k,items:m[k]}));
+ },[estimateItemsForThis]);
+ const openPriceRequest=()=>{const all=new Set();prGroups.forEach(g=>g.items.forEach(x=>all.add(x.key)));setPrSel(all);setPrText(null);setPrCopied(false);setPrOpen(true);};
+ const togglePrLine=key=>setPrSel(prev=>{const n=new Set(prev);if(n.has(key))n.delete(key);else n.add(key);return n;});
+ const togglePrGroup=(g,allOn)=>setPrSel(prev=>{const n=new Set(prev);g.items.forEach(x=>allOn?n.delete(x.key):n.add(x.key));return n;});
+ const generatePR=()=>{
+  const sel=[];prGroups.forEach(g=>g.items.forEach(x=>{if(prSel&&prSel.has(x.key))sel.push(x.i);}));
+  if(!sel.length){alert('Pick at least one line.');return;}
+  if(typeof window.genPriceRequest!=='function'){alert('Generator not loaded — please refresh the page.');return;}
+  try{setPrText(window.genPriceRequest(estimate||{},sel,draft,suppliers||[]));}catch(err){alert('Price Request error: '+err.message);return;}
+  try{sb.from('proposal_documents').insert({proposalId:String(draft.id),documentType:'Price Request',generatedAt:new Date().toISOString(),generatedBy:'AMS'}).then(()=>{},()=>{});}catch(e){}
+ };
+ const copyPR=()=>{const ta=document.getElementById('pr-textarea');if(ta){ta.focus();ta.select();}try{if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(prText||'');else document.execCommand('copy');}catch(e){try{document.execCommand('copy');}catch(_){}}setPrCopied(true);setTimeout(()=>setPrCopied(false),1500);};
  return (
   <>
    <div className="fixed inset-0 bg-stone-900/30 z-40" onClick={onClose}/>
@@ -4485,29 +4602,92 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
       {estimateItemsForThis&&estimateItemsForThis.length>0&&<ProposalDisplayModePanel items={estimateItemsForThis} onUpdateItem={onUpdateEstimateItem}/>}
       {[['Proposal Document','Full PDF with logo, GC info, line items and totals.','genProposal','Generate Proposal'],
        ['Supplier Purchase Orders','One PO per supplier shipped to job site.','genSupplierPOs','Generate POs'],
+       ['Price Request','Copy-paste pricing request to suppliers — pick suppliers & lines. Text, not PDF.','__priceRequest','Generate Price Request'],
        ['Installer Work Order','Labor scope with quantities and rates.','genInstallerPO','Generate Work Order']
       ].map(([t,d,fnName,lb])=><div key={lb} style={{background:'white',border:'1px solid #e7e5e4',padding:'16px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px'}}>
        <div><div style={{fontFamily:'Georgia,serif',fontSize:'15px',color:'#1c1917',marginBottom:'2px'}}>{t}</div><div style={{fontSize:'12px',color:'#a8a29e'}}>{d}</div></div>
        <button onClick={()=>{
+        if(fnName==='__priceRequest'){openPriceRequest();return;}
         const fn=window[fnName];
         if(typeof fn!=='function'){alert('Generator not loaded — please refresh the page.');return;}
         if(!estimateItemsForThis||!estimateItemsForThis.length){alert('No line items found. Import Peter\'s bidsheet first.');return;}
         try{
          const html=fn(estimate||{},estimateItemsForThis,'',draft,suppliers||[]);
          setPreviewHtml(html);
+         if(fnName==='genSupplierPOs'){ try{ setPoToSave(window.buildPORecords(estimate||{},estimateItemsForThis,draft,suppliers||[])); }catch(e){ setPoToSave(null); } } else { setPoToSave(null); }
          sb.from('proposal_documents').insert({proposalId:String(draft.id),documentType:lb,generatedAt:new Date().toISOString(),generatedBy:'AMS'}).then(()=>{},()=>{});
         }catch(err){alert('Generator error: '+err.message);}
        }} style={{background:'#1c1917',color:'white',border:'none',padding:'8px 14px',cursor:'pointer',fontSize:'12px',fontWeight:'600',flexShrink:0}}>{lb}</button>
       </div>)}
+      {savedPOs.length>0&&<div style={{background:'white',border:'1px solid #e7e5e4',padding:'16px'}}>
+       <div style={{fontFamily:'Georgia,serif',fontSize:'15px',color:'#1c1917',marginBottom:'8px'}}>Saved Purchase Orders <span style={{fontSize:'12px',color:'#a8a29e'}}>({savedPOs.length})</span></div>
+       <table style={{width:'100%',fontSize:'12px',borderCollapse:'collapse'}}>
+        <thead><tr style={{textAlign:'left',color:'#78716c'}}><th style={{padding:'4px 6px'}}>PO #</th><th style={{padding:'4px 6px'}}>Supplier</th><th style={{padding:'4px 6px',textAlign:'right'}}>Total</th><th style={{padding:'4px 6px'}}>Status</th><th style={{padding:'4px 6px'}}>Saved</th></tr></thead>
+        <tbody>{savedPOs.map(po=><tr key={po.id} style={{borderTop:'1px solid #f5f5f4'}}>
+         <td style={{padding:'4px 6px',fontFamily:'monospace'}}>{po.poNumber}</td>
+         <td style={{padding:'4px 6px'}}>{po.supplierName}</td>
+         <td style={{padding:'4px 6px',textAlign:'right',fontFamily:'monospace'}}>{money(po.total)}</td>
+         <td style={{padding:'4px 6px'}}><select value={po.status||'Draft'} onChange={async e=>{const ns=e.target.value;setSavedPOs(ps=>ps.map(x=>x.id===po.id?{...x,status:ns}:x));await sb.from('purchase_orders').update({status:ns,updatedAt:new Date().toISOString()}).eq('id',po.id);}} style={{fontSize:'11px',border:'1px solid #e7e5e4',borderRadius:'3px',padding:'2px 4px'}}><option>Draft</option><option>Issued</option><option>Received</option></select></td>
+         <td style={{padding:'4px 6px',color:'#a8a29e'}}>{String(po.createdAt||po.updatedAt||'').slice(0,10)}</td>
+        </tr>)}</tbody>
+       </table>
+      </div>}
       {previewHtml&&<div style={{position:'fixed',inset:0,background:'white',zIndex:9999,display:'flex',flexDirection:'column'}}>
        <div style={{background:'#1c1917',color:'white',padding:'10px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
         <span style={{fontSize:'13px',fontWeight:600}}>{draft.project} — Preview</span>
         <div style={{display:'flex',gap:'8px'}}>
+         {poToSave&&poToSave.length>0&&<button onClick={async()=>{const{error}=await sb.from('purchase_orders').upsert(poToSave);if(error){alert('Could not save POs — '+(error.message||error.code||'rejected by database'));return;}const r=await sb.from('purchase_orders').select('*').eq('proposalId',String(draft.id)).order('poNumber');if(r&&r.data)setSavedPOs(r.data);setPoToSave(null);setPreviewHtml(null);}} style={{background:'#16a34a',color:'white',border:'none',padding:'7px 16px',cursor:'pointer',fontWeight:700,fontSize:'12px'}}>💾 Save {poToSave.length} PO{poToSave.length>1?'s':''}</button>}
          <button onClick={()=>{const f=document.querySelector('#proposal-frame');if(f)f.contentWindow.print();}} style={{background:'#ea580c',color:'white',border:'none',padding:'7px 16px',cursor:'pointer',fontWeight:700,fontSize:'12px'}}>Print / Save PDF</button>
          <button onClick={()=>setPreviewHtml(null)} style={{background:'#44403c',color:'white',border:'none',padding:'7px 16px',cursor:'pointer',fontSize:'12px'}}>✕ Close</button>
         </div>
        </div>
        <iframe id="proposal-frame" srcDoc={previewHtml} style={{flex:1,border:'none',width:'100%'}} title="Proposal Preview"/>
+      </div>}
+      {prOpen&&<div onClick={()=>setPrOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:10000,display:'flex',alignItems:'center',justifyContent:'center',padding:'24px'}}>
+       <div onClick={e=>e.stopPropagation()} style={{background:'white',width:'100%',maxWidth:'860px',maxHeight:'88vh',display:'flex',flexDirection:'column',boxShadow:'0 12px 48px rgba(0,0,0,0.35)'}}>
+        <div style={{background:'#1c1917',color:'white',padding:'12px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+         <span style={{fontSize:'14px',fontWeight:600}}>Price Request — {draft.project}</span>
+         <button onClick={()=>setPrOpen(false)} style={{background:'#44403c',color:'white',border:'none',padding:'6px 12px',cursor:'pointer',fontSize:'12px'}}>✕ Close</button>
+        </div>
+        {prText===null?(
+         <>
+          <div style={{padding:'10px 16px',fontSize:'12px',color:'#57534e',borderBottom:'1px solid #e7e5e4'}}>Pick the suppliers and lines to request pricing for. One block per supplier; QTY includes waste (order qty).</div>
+          <div style={{overflowY:'auto',padding:'10px 16px',flex:1}}>
+           {prGroups.length===0?<div style={{color:'#a8a29e',fontSize:'13px',padding:'20px 0',textAlign:'center'}}>No line items to request.</div>:prGroups.map(g=>{
+            const allOn=g.items.every(x=>prSel&&prSel.has(x.key));
+            const someOn=g.items.some(x=>prSel&&prSel.has(x.key));
+            return <div key={g.name} style={{marginBottom:'10px',border:'1px solid #e7e5e4'}}>
+             <label style={{display:'flex',alignItems:'center',gap:'8px',background:'#f5f5f4',padding:'8px 10px',cursor:'pointer',fontWeight:600,fontSize:'13px'}}>
+              <input type="checkbox" checked={allOn} ref={el=>{if(el)el.indeterminate=someOn&&!allOn;}} onChange={()=>togglePrGroup(g,allOn)}/>
+              {g.name==='Supplier'?'— No supplier / MFR assigned —':g.name}<span style={{color:'#a8a29e',fontWeight:400}}>&nbsp;({g.items.length})</span>
+             </label>
+             <div style={{padding:'4px 10px 8px 30px'}}>
+              {g.items.map(x=>{const i=x.i;const oq=Math.ceil(Number(window._ordQ?window._ordQ(i):(i.orderQty||i.qty||0))||0);return <label key={x.key} style={{display:'flex',alignItems:'center',gap:'8px',padding:'3px 0',fontSize:'12px',cursor:'pointer'}}>
+               <input type="checkbox" checked={prSel?prSel.has(x.key):false} onChange={()=>togglePrLine(x.key)}/>
+               <span style={{fontFamily:'monospace',color:'#1c1917',flexShrink:0}}>{i.itemCode||'(no code)'}</span>
+               <span style={{color:'#78716c',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{i.description||''}</span>
+               <span style={{marginLeft:'auto',color:'#a8a29e',whiteSpace:'nowrap',flexShrink:0}}>{oq.toLocaleString('en-US')} {i.orderUnit||i.unit||'SF'}</span>
+              </label>;})}
+             </div>
+            </div>;
+           })}
+          </div>
+          <div style={{padding:'10px 16px',borderTop:'1px solid #e7e5e4',display:'flex',justifyContent:'space-between',alignItems:'center',flexShrink:0}}>
+           <span style={{fontSize:'12px',color:'#78716c'}}>{prSel?prSel.size:0} line{(prSel&&prSel.size===1)?'':'s'} selected</span>
+           <button onClick={generatePR} style={{background:'#1c1917',color:'white',border:'none',padding:'8px 16px',cursor:'pointer',fontWeight:600,fontSize:'12px'}}>Generate Price Request →</button>
+          </div>
+         </>
+        ):(
+         <>
+          <div style={{padding:'10px 16px',borderBottom:'1px solid #e7e5e4',display:'flex',gap:'8px',alignItems:'center',flexShrink:0}}>
+           <button onClick={copyPR} style={{background:'#16a34a',color:'white',border:'none',padding:'7px 16px',cursor:'pointer',fontWeight:700,fontSize:'12px'}}>{prCopied?'✓ Copied':'📋 Copy'}</button>
+           <button onClick={()=>setPrText(null)} style={{background:'#44403c',color:'white',border:'none',padding:'7px 14px',cursor:'pointer',fontSize:'12px'}}>← Back to selection</button>
+           <span style={{fontSize:'12px',color:'#78716c',marginLeft:'auto'}}>Paste into your email to each supplier.</span>
+          </div>
+          <textarea id="pr-textarea" readOnly value={prText} style={{flex:1,border:'none',width:'100%',padding:'14px 16px',fontFamily:'ui-monospace,Menlo,Consolas,monospace',fontSize:'12px',lineHeight:1.5,resize:'none',outline:'none',whiteSpace:'pre',overflow:'auto',boxSizing:'border-box'}}/>
+         </>
+        )}
+       </div>
       </div>}
      </div>}
     </div>
