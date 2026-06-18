@@ -2267,16 +2267,21 @@ window.buildPORecords=function(est,items,proposal,suppliers){
 // a bid (catalog/old prices are unreliable on big jobs). Output = COPY-PASTE TEXT, one block per
 // supplier, NOT a PDF. Groups by supplierName||manufacturer (mirrors genSupplierPOs). QTY = order
 // qty WITH WASTE via window._ordQ (ceil'd to a whole unit) so suppliers quote real volume. Tile
-// blocks (CSI 0930xx) get a thinset / grout / membrane request. Each block ends with the project
-// header. Caller passes the already-SELECTED items (supplier+line picking happens in the UI).
-window.genPriceRequest=function(est,items,proposal,suppliers){
-  est=est||{}; items=items||[];
-  var supByName={};(suppliers||[]).forEach(function(s){if(s&&s.name)supByName[String(s.name).trim().toLowerCase()]=s;});
-  var findSupplier=function(name){var k=String(name||'').trim().toLowerCase();if(!k)return null;if(supByName[k])return supByName[k];for(var key in supByName){if(key&&(k.indexOf(key)>=0||key.indexOf(k)>=0))return supByName[key];}return null;};
+// blocks (CSI 0930xx) get a thinset / grout / membrane request. Each block ends with a full header
+// (project + address, plans/addendum/proj#, GC contact+address, architect contact+address). The UI
+// passes the SELECTED items + opts.recipients ({groupKey:{vendorId,name}}) so Peter can redirect a
+// block to any of the 48 vendors or type a contact; the output textarea is then freely editable.
+window.genPriceRequest=function(est,items,proposal,suppliers,opts){
+  est=est||{}; items=items||[]; opts=opts||{}; var recips=opts.recipients||{};
+  var supById={},supByName={};
+  (suppliers||[]).forEach(function(s){if(s){if(s.id!=null)supById[String(s.id)]=s;if(s.name)supByName[String(s.name).trim().toLowerCase()]=s;}});
+  var findSupplier=function(name){var k=String(name||'').trim().toLowerCase();if(!k||k==='supplier')return null;if(supByName[k])return supByName[k];for(var key in supByName){if(key&&(k.indexOf(key)>=0||key.indexOf(k)>=0))return supByName[key];}return null;};
+  var fmtPh=function(p){var d=String(p||'').replace(/\D/g,'');if(d.length===11&&d[0]==='1')d=d.slice(1);return d.length===10?'('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6):String(p||'');};
+  var caseName=function(s){s=String(s||'');return /[a-z]/.test(s)?s:s.replace(/\b([A-Z])([A-Z]+)\b/g,function(_,a,b){return a+b.toLowerCase();});}; // DB stores contacts ALL-CAPS -> "HOPE GOUGH" => "Hope Gough"
   var ceilQ=function(i){var q=window._ordQ?window._ordQ(i):(Number(i.orderQty)||Number(i.qty)||0);return Math.max(0,Math.ceil(Number(q)||0));};
   // Tile detection: trust the CSI section first (0930xx = Ceramic Tile); fall back to a keyword
-  // sniff ONLY when the line carries no section. Excludes Schluter transitions (096500) so a
-  // transition-only block doesn't get a thinset request.
+  // sniff ONLY when the line carries no section. Excludes transitions/Schiene so a transition-only
+  // block doesn't get a thinset request.
   var isTile=function(i){var sc=String(i.sectionCode||'');if(sc)return sc.slice(0,4)==='0930';var s=((i.sectionName||'')+' '+(i.description||'')+' '+(i.itemCode||'')).toLowerCase();return /\b(tile|porcelain|ceramic|mosaic|zellige)\b/.test(s)&&!/transition|schiene|reducer|\btrim\b/.test(s);};
   // group EXACTLY like genSupplierPOs (supplierName, then manufacturer, then 'Supplier')
   var byS={},order=[];
@@ -2291,26 +2296,35 @@ window.genPriceRequest=function(est,items,proposal,suppliers){
     var line=function(r){return r.map(function(cell,c){return c===5?padL(cell,w[c]):pad(cell,w[c]);}).join('  ').replace(/\s+$/,'');};
     return[line(head)].concat(rows.map(line)).join('\n');
   };
-  // project header (mirrors genProposal's field usage)
+  // full header (mirrors genProposal's field usage; GC + architect now carry contact + address)
   var fmtD=function(d){if(!d)return'';var p=String(d).split('T')[0].split('-');return p.length===3?(Number(p[1])+'/'+Number(p[2])+'/'+p[0]):String(d);};
+  var dot=function(arr){return arr.filter(Boolean).join('  ·  ');};
   var projName=(proposal&&proposal.project)||est.projectName||'';
-  var pjA1=est.projectAddressLine1||'',pjCsz=([est.projectCity,est.projectState].filter(Boolean).join(', ')+(est.projectZip?' '+est.projectZip:'')).trim();
-  var addr=[pjA1,pjCsz].filter(Boolean).join(', ')||((proposal&&proposal.location)||'');
+  var projAddr=[[est.projectAddressLine1,est.projectAddressLine2].filter(Boolean).join(', '),([est.projectCity,est.projectState].filter(Boolean).join(', ')+(est.projectZip?' '+est.projectZip:'')).trim()].filter(Boolean).join(', ')||((proposal&&proposal.location)||'');
   var propNum=(proposal&&proposal.id)||est.proposalNumber||'';
   var projNum=est.projectNumber||(proposal&&proposal.projectNumber)||'';
   if(String(projNum)===String(propNum)||String(projNum)===String(est.proposalNumber||''))projNum='';
-  var gc=(proposal&&proposal.gc)||est.gcName||'';
-  var arch=[est.architectName,est.architectAddress&&String(est.architectAddress).replace(/\n/g,', '),est.architectPhone].filter(Boolean).join(', ');
-  var hdr=[];
-  hdr.push('Project: '+[projName,addr].filter(Boolean).join(', ')+(fmtD(est.plansDated)?' · Plans Dated: '+fmtD(est.plansDated):'')+(est.addendum?' · Addendum: '+est.addendum:''));
-  var l2=[];if(gc)l2.push('GC: '+gc);if(arch)l2.push('Architect: '+arch);if(projNum)l2.push('Project #: '+projNum);
-  if(l2.length)hdr.push(l2.join(' · '));
+  var gcName=(proposal&&proposal.gc)||est.gcName||'';
+  var gcContact=est.gcContactName||(proposal&&proposal.contact)||'';
+  var gcPhone=fmtPh(est.gcContactPhone||(proposal&&proposal.phone)||'');
+  var gcEmail=(est.gcContactEmail||(proposal&&proposal.email)||'').toLowerCase();
+  var gcAddr=[[est.gcAddressLine1,est.gcAddressLine2].filter(Boolean).join(', '),([est.gcCity,est.gcState].filter(Boolean).join(', ')+(est.gcZip?' '+est.gcZip:'')).trim()].filter(Boolean).join(', ');
+  var arName=est.architectName||'',arPhone=fmtPh(est.architectPhone||''),arEmail=(est.architectEmail||'').toLowerCase(),arAddr=String(est.architectAddress||'').replace(/\n/g,', ');
+  var hdr=['— PROJECT —'];
+  hdr.push('Project:    '+dot([projName,projAddr]));
+  var pl=dot([fmtD(est.plansDated)?'Plans Dated: '+fmtD(est.plansDated):'',est.addendum?'Addendum: '+est.addendum:'',projNum?'Project #: '+projNum:'']);
+  if(pl)hdr.push('            '+pl);
+  if(gcName||gcContact||gcPhone||gcEmail||gcAddr){hdr.push('GC:         '+dot([gcName,caseName(gcContact),gcPhone,gcEmail]));if(gcAddr)hdr.push('            '+gcAddr);}
+  if(arName||arPhone||arEmail||arAddr){hdr.push('Architect:  '+dot([arName,arPhone,arEmail]));if(arAddr)hdr.push('            '+arAddr);}
+  var headerText=hdr.join('\n');
   var firstName=function(s){s=String(s||'').trim();return s?s.split(/\s+/)[0]:'';};
   var blocks=order.map(function(k){
-    var its=byS[k],sup=findSupplier(k);
-    var who=firstName(sup&&sup.contactName)||(k==='Supplier'?'there':k);
+    var its=byS[k],rec=recips[k]||{};
+    var sup=(rec.vendorId&&supById[String(rec.vendorId)])||findSupplier(k);
+    var who=firstName(rec.name)||caseName(firstName(sup&&sup.contactName))||(k==='Supplier'?'there':k);
     var T='Hey '+who+'! I need pricing on the items below. Thanks! — Peter\n';
-    if(k==='Supplier')T+='(These lines have no supplier/MFR yet — assign one in the bidsheet.)\n';
+    if(sup){var supLine=dot([sup.name,caseName(sup.contactName),fmtPh(sup.contactPhone),(sup.contactEmail||'').toLowerCase()]);if(supLine)T+='Supplier:   '+supLine+'\n';}
+    else if(k==='Supplier'){T+='(No supplier/MFR on these lines — pick one above, or type a contact.)\n';}
     T+='\n'+table(its);
     if(its.some(isTile)){
       var tileSF=its.filter(isTile).reduce(function(s,i){var u=(i.orderUnit||i.unit||'SF').toUpperCase();return s+(u==='SF'?ceilQ(i):0);},0);
@@ -2319,10 +2333,10 @@ window.genPriceRequest=function(est,items,proposal,suppliers){
       T+='\n  • Grout — EPOXY grout in wet areas (showers, tub surrounds, restrooms); standard grout elsewhere';
       T+='\n  • Waterproofing membrane — wet areas (showers + tub surrounds)';
     }
-    T+='\n\n'+hdr.join('\n');
+    T+='\n\n'+headerText;
     return T;
   });
-  var sep='\n\n'+new Array(41).join('─')+'\n\n';
+  var sep='\n\n'+new Array(60).join('─')+'\n\n';
   return blocks.join(sep);
 };
 window.genInstallerPO=function(est,items,proposal){
@@ -4331,6 +4345,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
  const [prOpen,setPrOpen]=useState(false);   // [PRICE REQUEST] modal open
  const [prText,setPrText]=useState(null);    // null = selection view; string = generated-text view
  const [prSel,setPrSel]=useState(null);       // Set of selected line keys
+ const [prRecip,setPrRecip]=useState({});     // {groupName:{vendorId,name}} per-supplier recipient override
  const [prCopied,setPrCopied]=useState(false);
  useEffect(()=>{setDraft(proposal);setEdit(false);setActiveTab('details');setPendingEdits({});setPrOpen(false);setPrText(null);},[proposal?.id]);
  useEffect(()=>{ if(!proposal||typeof sb==='undefined'||!sb) return; let live=true;
@@ -4376,24 +4391,29 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
   return s+c.total;
  },0);
  // [PRICE REQUEST 2026-06-18] Group lines by supplier||MFR (mirrors genSupplierPOs) for the
- // pick-suppliers / pick-lines selector; each line carries a stable key for the selection Set.
+ // pick-suppliers / pick-lines selector; each line carries a stable key, each group an auto-matched
+ // vendor id (best substring match into the 48 suppliers) used as the Send-to dropdown default.
  const prGroups=useMemo(()=>{
   const base=(estimateItemsForThis||[]).filter(i=>!i.isVeAlternative);
   const m={},ord=[];
   base.forEach((i,idx)=>{const k=((i.supplierName||i.manufacturer||'Supplier').trim())||'Supplier';if(!m[k]){m[k]=[];ord.push(k);}m[k].push({i,key:i.id!=null?String(i.id):('idx'+idx)});});
-  return ord.map(k=>({name:k,items:m[k]}));
- },[estimateItemsForThis]);
- const openPriceRequest=()=>{const all=new Set();prGroups.forEach(g=>g.items.forEach(x=>all.add(x.key)));setPrSel(all);setPrText(null);setPrCopied(false);setPrOpen(true);};
+  const byName={};(suppliers||[]).forEach(s=>{if(s&&s.name)byName[String(s.name).trim().toLowerCase()]=s;});
+  const match=name=>{const kk=String(name||'').trim().toLowerCase();if(!kk||kk==='supplier')return'';if(byName[kk])return String(byName[kk].id);for(const key in byName){if(key&&(kk.indexOf(key)>=0||key.indexOf(kk)>=0))return String(byName[key].id);}return'';};
+  return ord.map(k=>({name:k,items:m[k],matchId:match(k)}));
+ },[estimateItemsForThis,suppliers]);
+ const openPriceRequest=()=>{const all=new Set();const rec={};prGroups.forEach(g=>{g.items.forEach(x=>all.add(x.key));rec[g.name]={vendorId:g.matchId||'',name:''};});setPrSel(all);setPrRecip(rec);setPrText(null);setPrCopied(false);setPrOpen(true);};
  const togglePrLine=key=>setPrSel(prev=>{const n=new Set(prev);if(n.has(key))n.delete(key);else n.add(key);return n;});
  const togglePrGroup=(g,allOn)=>setPrSel(prev=>{const n=new Set(prev);g.items.forEach(x=>allOn?n.delete(x.key):n.add(x.key));return n;});
+ const setPrRecipVendor=(name,v)=>setPrRecip(prev=>({...prev,[name]:{...(prev[name]||{}),vendorId:v}}));
+ const setPrRecipName=(name,v)=>setPrRecip(prev=>({...prev,[name]:{...(prev[name]||{}),name:v}}));
  const generatePR=()=>{
   const sel=[];prGroups.forEach(g=>g.items.forEach(x=>{if(prSel&&prSel.has(x.key))sel.push(x.i);}));
   if(!sel.length){alert('Pick at least one line.');return;}
   if(typeof window.genPriceRequest!=='function'){alert('Generator not loaded — please refresh the page.');return;}
-  try{setPrText(window.genPriceRequest(estimate||{},sel,draft,suppliers||[]));}catch(err){alert('Price Request error: '+err.message);return;}
+  try{setPrText(window.genPriceRequest(estimate||{},sel,draft,suppliers||[],{recipients:prRecip}));}catch(err){alert('Price Request error: '+err.message);return;}
   try{sb.from('proposal_documents').insert({proposalId:String(draft.id),documentType:'Price Request',generatedAt:new Date().toISOString(),generatedBy:'AMS'}).then(()=>{},()=>{});}catch(e){}
  };
- const copyPR=()=>{const ta=document.getElementById('pr-textarea');if(ta){ta.focus();ta.select();}try{if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(prText||'');else document.execCommand('copy');}catch(e){try{document.execCommand('copy');}catch(_){}}setPrCopied(true);setTimeout(()=>setPrCopied(false),1500);};
+ const copyPR=()=>{const ta=document.getElementById('pr-textarea');const val=(ta&&ta.value)||prText||'';if(ta){ta.focus();ta.select();}try{if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(val);else document.execCommand('copy');}catch(e){try{document.execCommand('copy');}catch(_){}}setPrCopied(true);setTimeout(()=>setPrCopied(false),1500);};
  return (
   <>
    <div className="fixed inset-0 bg-stone-900/30 z-40" onClick={onClose}/>
@@ -4644,7 +4664,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
        <iframe id="proposal-frame" srcDoc={previewHtml} style={{flex:1,border:'none',width:'100%'}} title="Proposal Preview"/>
       </div>}
       {prOpen&&<div onClick={()=>setPrOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:10000,display:'flex',alignItems:'center',justifyContent:'center',padding:'24px'}}>
-       <div onClick={e=>e.stopPropagation()} style={{background:'white',width:'100%',maxWidth:'860px',maxHeight:'88vh',display:'flex',flexDirection:'column',boxShadow:'0 12px 48px rgba(0,0,0,0.35)'}}>
+       <div onClick={e=>e.stopPropagation()} style={{background:'white',width:'100%',maxWidth:'1040px',height:'90vh',maxHeight:'90vh',display:'flex',flexDirection:'column',boxShadow:'0 12px 48px rgba(0,0,0,0.35)'}}>
         <div style={{background:'#1c1917',color:'white',padding:'12px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
          <span style={{fontSize:'14px',fontWeight:600}}>Price Request — {draft.project}</span>
          <button onClick={()=>setPrOpen(false)} style={{background:'#44403c',color:'white',border:'none',padding:'6px 12px',cursor:'pointer',fontSize:'12px'}}>✕ Close</button>
@@ -4661,6 +4681,14 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
               <input type="checkbox" checked={allOn} ref={el=>{if(el)el.indeterminate=someOn&&!allOn;}} onChange={()=>togglePrGroup(g,allOn)}/>
               {g.name==='Supplier'?'— No supplier / MFR assigned —':g.name}<span style={{color:'#a8a29e',fontWeight:400}}>&nbsp;({g.items.length})</span>
              </label>
+             <div style={{display:'flex',gap:'8px',alignItems:'center',padding:'7px 10px 3px 30px',fontSize:'12px',flexWrap:'wrap'}}>
+              <span style={{color:'#78716c',whiteSpace:'nowrap'}}>Send to:</span>
+              <select value={(prRecip[g.name]&&prRecip[g.name].vendorId)||''} onChange={e=>setPrRecipVendor(g.name,e.target.value)} style={{fontSize:'12px',border:'1px solid #d6d3d1',borderRadius:'3px',padding:'3px 6px',maxWidth:'240px'}}>
+               <option value="">— use “{g.name==='Supplier'?'(unassigned)':g.name}” —</option>
+               {(suppliers||[]).map(s=><option key={s.id} value={String(s.id)}>{s.name}</option>)}
+              </select>
+              <input value={(prRecip[g.name]&&prRecip[g.name].name)||''} onChange={e=>setPrRecipName(g.name,e.target.value)} placeholder="or type a contact name" style={{fontSize:'12px',border:'1px solid #d6d3d1',borderRadius:'3px',padding:'3px 6px',flex:1,minWidth:'150px'}}/>
+             </div>
              <div style={{padding:'4px 10px 8px 30px'}}>
               {g.items.map(x=>{const i=x.i;const oq=Math.ceil(Number(window._ordQ?window._ordQ(i):(i.orderQty||i.qty||0))||0);return <label key={x.key} style={{display:'flex',alignItems:'center',gap:'8px',padding:'3px 0',fontSize:'12px',cursor:'pointer'}}>
                <input type="checkbox" checked={prSel?prSel.has(x.key):false} onChange={()=>togglePrLine(x.key)}/>
@@ -4682,9 +4710,9 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
           <div style={{padding:'10px 16px',borderBottom:'1px solid #e7e5e4',display:'flex',gap:'8px',alignItems:'center',flexShrink:0}}>
            <button onClick={copyPR} style={{background:'#16a34a',color:'white',border:'none',padding:'7px 16px',cursor:'pointer',fontWeight:700,fontSize:'12px'}}>{prCopied?'✓ Copied':'📋 Copy'}</button>
            <button onClick={()=>setPrText(null)} style={{background:'#44403c',color:'white',border:'none',padding:'7px 14px',cursor:'pointer',fontSize:'12px'}}>← Back to selection</button>
-           <span style={{fontSize:'12px',color:'#78716c',marginLeft:'auto'}}>Paste into your email to each supplier.</span>
+           <span style={{fontSize:'12px',color:'#78716c',marginLeft:'auto'}}>✏️ Editable — tweak anything, then Copy. Paste into your email to each supplier.</span>
           </div>
-          <textarea id="pr-textarea" readOnly value={prText} style={{flex:1,border:'none',width:'100%',padding:'14px 16px',fontFamily:'ui-monospace,Menlo,Consolas,monospace',fontSize:'12px',lineHeight:1.5,resize:'none',outline:'none',whiteSpace:'pre',overflow:'auto',boxSizing:'border-box'}}/>
+          <textarea id="pr-textarea" value={prText} onChange={e=>setPrText(e.target.value)} spellCheck={false} style={{flex:1,minHeight:'200px',border:'none',width:'100%',padding:'14px 16px',fontFamily:'ui-monospace,Menlo,Consolas,monospace',fontSize:'12px',lineHeight:1.5,resize:'none',outline:'none',whiteSpace:'pre',overflow:'auto',boxSizing:'border-box'}}/>
          </>
         )}
        </div>
