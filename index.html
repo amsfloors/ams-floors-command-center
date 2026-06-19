@@ -5848,6 +5848,16 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
         // [AUTO-PRICE 2026-06-18 — Paul] No history match -> fall back to the pricing library so the line
         // still arrives pre-priced (flagged "library est - verify" for Peter to confirm).
         const lib = exact ? null : libraryPriceFor({subject:it.subject, itemCode:it.tag, size:it.size, manufacturer:it.mfr, sectionCode:sec.code});
+        // [CARPET 2026-06-19 — Paul/Peter #5] Carpet is ordered & priced per SQUARE YARD in AMS's
+        // history (broadloom and carpet tile both run SY). So when a NEW carpet line — one with no
+        // exact history match to carry its own unit forward — is measured in SF, default the ORDER
+        // to SY with a 1/9 coverage factor (orderQty = SF/9 = SY) while qty/unit stay SF for the
+        // adhesive math. Exact-match lines keep their own historical unit/coverage; the reviewer can
+        // still override orderUnit/coverage on any line. (No "Mater Surfaces" exception — that
+        // supplier doesn't exist in the data.)
+        const isCarpet = /^0968/.test(sec.code||'') || /carpet|broadloom/i.test(it.subject||'');
+        const measuredInSF = ['SF','SQFT'].includes(String(it.unit||'').toUpperCase());
+        const carpetSY = isCarpet && measuredInSF && !exact;
         // CSV values win when present ("ready to go" per Peter); blanks keep the existing
         // pulldown-history behavior (catalog prefill from an exact match, candidates otherwise).
         return {
@@ -5855,10 +5865,10 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
           candidates:cands,
           product: it.subject || (exact?exact.label:''),
           manufacturer: it.mfr || (exact?exact.manufacturer:''),
-          unitCost: exact?exact.unitCost:(lib?lib.typ:''), orderUnit: exact?(exact.orderUnit||it.unit):it.unit,
+          unitCost: exact?exact.unitCost:(lib?lib.typ:''), orderUnit: exact?(exact.orderUnit||it.unit):(carpetSY?'SY':it.unit),
           priceSource: exact?'history':(lib?'library':''),
           supplierName: exact?(exact.supplierName||''):'', supplierId: exact?(exact.supplierId||''):'',
-          coverage: exact&&exact.coverageFactor?exact.coverageFactor:1,
+          coverage: exact&&exact.coverageFactor?exact.coverageFactor:(carpetSY?(1/9):1),
           laborRate: exact?exact.laborRate:0, freight: exact?exact.freight:0,
           sectionCode:sec.code, sectionName:sec.name||'Flooring',
           include:true,
