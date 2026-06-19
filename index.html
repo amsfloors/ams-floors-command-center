@@ -2988,6 +2988,33 @@ const followUpDraft=(p,replyText,forceGeneric)=>{
  }
  return {subject:subject,body:body,state:state,winner:winner};
 };
+// [DRAFT FIX 2026-06-19 #1/#3 — Paul] Time-aware bump for when PAUL spoke last and is waiting on THEM.
+//  'nudge'   = we reached out and they never replied → "circling back, it's been N days since I sent pricing"
+//  'handled' = we already answered their note → soft check-in, NEVER a re-send of what Paul just wrote
+// Both reference days elapsed and avoid duplicating the prior letter (fixes the "draft echoes what I already sent"
+// and "first-touch letter on an unanswered follow-up" complaints).
+const timeNudgeDraft=(p,kind,days)=>{
+ const first=((p.contact||'').trim().split(' ')[0])||'there';
+ const proj=p.project||'your project';
+ const tag=(p.id?' (#'+String(p.id).replace(/-RP\d*$/,'')+')':'');
+ const sig='\n\nBest,\nPaul Kidman\nAMS Floors\n941-238-6614 | www.amsfloors.com';
+ const span=days>=1?('about '+days+' day'+(days===1?'':'s')):'';
+ let subject,body;
+ if(kind==='handled'){
+  subject='Re: '+proj+tag;
+  const lead=span
+   ? 'Just following back up on '+proj+'. It has been '+span+' since I last wrote, so I wanted to make sure my note came through'
+   : 'Just following back up on '+proj+' to make sure my note came through';
+  body='Hi '+first+',\n\n'+lead+' and see whether you need anything further from me to keep things moving.\n\nHappy to hop on a quick call if that is easier. Appreciate it.'+sig;
+ } else {
+  subject='Following up - '+proj+tag;
+  const lead=span
+   ? 'Circling back on '+proj+'. It has been '+span+' since I sent over our flooring pricing and I have not heard back, so I wanted to make sure it reached you'
+   : 'Circling back on '+proj+' to make sure our flooring pricing reached you';
+  body='Hi '+first+',\n\n'+lead+' and that AMS is still in the running.\n\nNo rush at all - whenever you have a moment, a quick note on where things stand (timeline, scope, or where our number needs to be) would be a big help.'+sig;
+ }
+ return {subject:subject,body:body};
+};
 const callScript=(p)=>{
  const first=((p.contact||'').trim().split(' ')[0])||'there';
  const proj=p.project||'the project';
@@ -3127,19 +3154,41 @@ async function buildThreadContext(p){
  const email=(p.email||'').trim();
  const me=(currentUserEmail()||'').toLowerCase();
  const latest=await findLatestMsgWith(token,email);
- let thread=[],target=null;
+ let thread=[],lastIn=null,lastOut=null;
+ const addrOf=m=>(((m.from&&m.from.emailAddress&&m.from.emailAddress.address)||'').toLowerCase());
  if(latest){
   if(latest.conversationId){ try{ thread=await fetchThread(token,latest.conversationId); }catch(e){ thread=[]; } }
   if(!thread.length) thread=[latest];
-  const inbound=thread.filter(m=>(((m.from&&m.from.emailAddress&&m.from.emailAddress.address)||'').toLowerCase())!==me);
-  target=inbound.length?inbound[inbound.length-1]:null;   // only reply INTO a message THEY sent — never reply-to-self
+  const inbound=thread.filter(m=>addrOf(m)!==me);   // messages THEY sent
+  const outbound=thread.filter(m=>addrOf(m)===me);  // messages PAUL sent
+  lastIn=inbound.length?inbound[inbound.length-1]:null;
+  lastOut=outbound.length?outbound[outbound.length-1]:null;
  }
- const mode=target?'reply':'fresh';
+ // Who spoke LAST decides the draft (Paul's Turn-6 asks):
+ //  reply   — they wrote last → answer THEIR message (ball in our court)
+ //  handled — we already replied after their note → soft, non-duplicate check-in (ball in their court)  [#1]
+ //  nudge   — we reached out, they never replied → time-aware "circling back, it's been N days"          [#3]
+ //  fresh   — no prior email at all → first-touch
+ const dt=m=>(m&&m.receivedDateTime)||'';
+ let mode;
+ if(!lastIn&&!lastOut) mode='fresh';
+ else if(lastIn&&(!lastOut||dt(lastIn)>=dt(lastOut))) mode='reply';
+ else if(lastIn) mode='handled';
+ else mode='nudge';
+ const target=mode==='reply'?lastIn:null;   // only reply INTO a message THEY sent — never reply-to-self
+ let daysSinceOut=0; if(lastOut){ const t=new Date(dt(lastOut)).getTime(); if(isFinite(t)) daysSinceOut=Math.max(0,Math.floor((Date.now()-t)/86400000)); }
  const questions=target?extractQuestions((target.body&&target.body.content)||target.bodyPreview||''):[];
- const draftText=mode==='reply'?composeReplyBody(p,target,questions):followUpDraft(p,null,true).body;
- const baseSubj=(target&&target.subject)?target.subject:((thread.length&&thread[thread.length-1].subject)||(p.project||''));
- const subject=mode==='reply'?('Re: '+String(baseSubj).replace(/^(re:\s*)+/i,'')):followUpDraft(p,null,true).subject;
- return {email,thread,target,questions,draftText,subject,mode,srcId:target&&target.id};
+ let draftText,subject;
+ if(mode==='reply'){
+  draftText=composeReplyBody(p,target,questions);
+  const baseSubj=(target&&target.subject)||(thread.length&&thread[thread.length-1].subject)||(p.project||'');
+  subject='Re: '+String(baseSubj).replace(/^(re:\s*)+/i,'');
+ } else if(mode==='handled'||mode==='nudge'){
+  const d=timeNudgeDraft(p,mode,daysSinceOut); draftText=d.body; subject=d.subject;
+ } else {
+  const d=followUpDraft(p,null,true); draftText=d.body; subject=d.subject;
+ }
+ return {email,thread,target,questions,draftText,subject,mode,daysSinceOut,lastOutDate:dt(lastOut),srcId:target&&target.id};
 }
 // email(lowercased) -> most recent date Paul SENT them something. Used to hide bids already emailed (#1).
 async function fetchRecentSentMap(token){
@@ -3494,6 +3543,8 @@ const ThreadPreviewModal=({state,onClose,onConfirm,currentEmail})=>{
               <div className="text-stone-600 mt-0.5" style={{display:'-webkit-box',WebkitLineClamp:3,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{m.bodyPreview||''}</div>
              </div>; })}
            </div>
+           {ctx.mode==='handled'&&<div className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-sm px-2.5 py-1.5 mt-1.5">You already replied{ctx.lastOutDate?' on '+fmt(ctx.lastOutDate):''} — the ball is in their court. This is a light check-in, <strong>not</strong> a re-send of what you wrote, and it goes out as a fresh email to {ctx.email||'the contact'}.</div>}
+           {ctx.mode==='nudge'&&<div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-2.5 py-1.5 mt-1.5">No reply yet to your last email{ctx.daysSinceOut>=1?' ('+ctx.daysSinceOut+' day'+(ctx.daysSinceOut===1?'':'s')+' ago)':''} — this is a time-aware bump to {ctx.email||'the contact'}, not a first-touch letter.</div>}
            {ctx.mode==='fresh'&&<div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-2.5 py-1.5 mt-1.5">No reply from them yet — this sends a fresh email to {ctx.email||'the contact'} rather than a reply into the thread.</div>}
           </div>
         : <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-3 py-2">No earlier email found with {ctx.email||'this contact'} — the address may have bounced. This will start a fresh email.</div>}
