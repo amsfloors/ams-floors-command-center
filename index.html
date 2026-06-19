@@ -2937,28 +2937,32 @@ const isDNC=(gc)=>{ const g=(gc||'').toLowerCase(); return DNC_GCS.some(k=>g.inc
 // named winner out of the text for the "who got it?" ask. Email goes to p.email, which the reconciler
 // updates when a contact gives a new address — so replies route to the latest known address.
 const WINNER_RE=/(?:awarded to|went (?:to|with)|lost to|winner[:\s-]+|bought by|going with)\s+([A-Z][A-Za-z0-9&'\- ]{1,40})/;
-const analyzeReply=(p)=>{
- const na=(p.nextAction||''); const notes=(p.notes||'');
- const t=(na+' '+notes).toLowerCase();
- const wm=(notes+' '+na).match(WINNER_RE);
+// [DRAFT FIX 2026-06-19 — Paul] Classify from a TEXT string — the GC's ACTUAL reply when we have it, tracker
+// notes only as an offline fallback. (Was reading p.nextAction+p.notes, which made it answer a "60-day hold"
+// reply with the generic letter, and fabricate a "we lost" reply when the GC had not written back at all.)
+const analyzeReply=(text)=>{
+ const t=String(text||'').toLowerCase();
+ const wm=String(text||'').match(WINNER_RE);
  let winner=wm?wm[1].trim():null;
  // Trim run-on text the broad capture can grab (e.g. "...Construction. New email …" or "...ABC but they may rebid").
  if(winner){ winner=winner.split(/\s+(?:new\s+email|e-?mail|phone|tel\b|please\b|but\b|\()/i)[0].trim().replace(/[.,;:\-\s]+$/,''); }
  let state='followup';
  if(/re-?pitch clone/.test(t)) state='pitch';
  else if(/remove me|take me off|do not contact|don'?t contact|unsubscribe|stop emailing|no longer (?:with|at|here)|wrong person/.test(t)) state='removal';
- else if(/not awarded|awarded to (?:another|someone)|another (?:gc|contractor)|went (?:with|to)|lost to|did not (?:get|win)|unsuccessful|we lost/.test(t)) state='lost';
+ else if(/not awarded|awarded (?:it )?to|going (?:with|in another)|went with|decided to (?:go|use)|(?:chose|selected|picked) (?:another|someone|a different)|not (?:be )?selected|lost to|did not (?:get|win)|unsuccessful|we lost/.test(t)) state='lost';
  else if(/too high|over budget|sharpen|price is high|come down|beat (?:the|their)|more competitive|number.*high/.test(t)) state='price';
- else if(/on hold|hold till|holding|delayed|pushed|postpon|on pause/.test(t)) state='hold';
+ else if(/on hold|day hold|hold for|hold till|holding|on pause|paused|postpon|delayed|pushed|on ice/.test(t)) state='hold';
  else if(/\?|question|clarif|can you (?:send|provide|confirm|get)|please (?:send|provide|forward)|need (?:the|a|your|updated)|resend|send (?:over|me)|scope|spec|submittal|sample|breakdown/.test(t)) state='question';
  return {state:state,winner:winner};
 };
-const followUpDraft=(p)=>{
+const followUpDraft=(p,replyText,forceGeneric)=>{
  const first=((p.contact||'').trim().split(' ')[0])||'there';
  const proj=p.project||'your project';
  const tag=(p.id?' (#'+String(p.id).replace(/-RP\d*$/,'')+')':'');
  const sig='\n\nBest,\nPaul Kidman\nAMS Floors\n941-238-6614 | www.amsfloors.com';
- const a=analyzeReply(p); const state=a.state; const winner=a.winner;
+ // forceGeneric -> a plain first-touch nudge (used when Graph confirms NO reply yet, so notes can't fabricate
+ // a "lost/hold" story). Otherwise classify from the real reply text, falling back to tracker notes offline.
+ const a=forceGeneric?{state:'followup',winner:null}:analyzeReply((replyText&&replyText.trim())?replyText:((p.nextAction||'')+' '+(p.notes||''))); const state=a.state; const winner=a.winner;
  let subject,body;
  if(state==='pitch'){
   subject='AMS Floors - flooring proposal for '+proj+tag;
@@ -3107,7 +3111,9 @@ function senderFirstName(m){
 }
 // #3 — build a reply that enumerates the contact's actual asks (Paul fills the "→" answers). Falls back to the smart template when no asks are detected.
 function composeReplyBody(p,target,questions){
- if(!questions||!questions.length) return followUpDraft(p).body;
+ // No explicit asks? Don't fall back to a blind template — read what they ACTUALLY wrote (hold / lost /
+ // pricing / etc.) so the reply answers their message instead of the generic "are we still in it" letter.
+ if(!questions||!questions.length){ const replyText=splitOffQuote(htmlToText((target&&target.body&&target.body.content)||(target&&target.bodyPreview)||'')); return followUpDraft(p,replyText).body; }
  const first=senderFirstName(target)||((p.contact||'').trim().split(' ')[0])||'there';
  const proj=p.project||'your project';
  let body='Hi '+first+',\n\nThanks for getting back to me on '+proj+' — happy to help. Taking your points in order:\n\n';
@@ -3130,9 +3136,9 @@ async function buildThreadContext(p){
  }
  const mode=target?'reply':'fresh';
  const questions=target?extractQuestions((target.body&&target.body.content)||target.bodyPreview||''):[];
- const draftText=mode==='reply'?composeReplyBody(p,target,questions):followUpDraft(p).body;
+ const draftText=mode==='reply'?composeReplyBody(p,target,questions):followUpDraft(p,null,true).body;
  const baseSubj=(target&&target.subject)?target.subject:((thread.length&&thread[thread.length-1].subject)||(p.project||''));
- const subject=mode==='reply'?('Re: '+String(baseSubj).replace(/^(re:\s*)+/i,'')):followUpDraft(p).subject;
+ const subject=mode==='reply'?('Re: '+String(baseSubj).replace(/^(re:\s*)+/i,'')):followUpDraft(p,null,true).subject;
  return {email,thread,target,questions,draftText,subject,mode,srcId:target&&target.id};
 }
 // email(lowercased) -> most recent date Paul SENT them something. Used to hide bids already emailed (#1).
@@ -3224,7 +3230,7 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
    .sort((a,b)=>ev(b)-ev(a)),[proposals,gcStats,recentSent]);
  const rePitch=useMemo(()=>proposals
    .filter(p=>LOST_STATUSES.includes(p.status))
-   .map(p=>{const w=analyzeReply(p).winner;return w?{...p,_winner:w}:null;})
+   .map(p=>{const w=analyzeReply((p.nextAction||'')+' '+(p.notes||'')).winner;return w?{...p,_winner:w}:null;})
    .filter(Boolean)
    .sort((a,b)=>(b.bidAmount||0)-(a.bidAmount||0)),[proposals]);
  const newOpps=useMemo(()=>proposals
