@@ -2492,7 +2492,7 @@ const ESTIMATE_ITEM_COLS=['id','estimateId','proposalId','parentItemId','sortOrd
 const LINE_ITEM_COLS=['id','proposalId','type','item','vendor','qty','unit','estUnit','estTotal','actUnit','actTotal','status','createdAt'];
 const pickCols=(obj,cols)=>{const out={};for(const k of cols) if(obj[k]!==undefined) out[k]=obj[k];return out;};
 const toDbEstimate=obj=>pickCols(obj,ESTIMATE_COLS);
-const toDbEstimateItem=obj=>pickCols(obj,ESTIMATE_ITEM_COLS);
+const toDbEstimateItem=obj=>{const r=pickCols(obj,ESTIMATE_ITEM_COLS);for(const k of ['supplierId','installerId']) if(r[k]==='') r[k]=null;return r;};  // [FK FIX 2026-06-19] empty supplier/installer link -> null (DB rejects '' on the FK)
 const toDbLineItem=obj=>pickCols(obj,LINE_ITEM_COLS);
 const STATUS_CONFIG = {
  // [STATUS TAXONOMY 2026-06-10 — Ben] Natural business flow:
@@ -5606,7 +5606,7 @@ function m15BuildPayloads({lines, job, propId, estId, isUpdate}){
     estMat+=c.material; estLab+=c.labor; base+=c.total;
     return { id:'ei_'+propId+'_'+l.tag+'_'+(ord++), estimateId:estId, proposalId:propId,
       sortOrder:ord, sectionCode:l.sectionCode||'', sectionName:l.sectionName||'Flooring',
-      itemCode:l.tag||'', size:l.size||'', manufacturer:l.manufacturer||'', supplierId:l.supplierId||'', supplierName:l.supplierName||'',
+      itemCode:l.tag||'', size:l.size||'', manufacturer:l.manufacturer||'', supplierId:l.supplierId||null, supplierName:l.supplierName||'',  /* [FK FIX 2026-06-19] no supplier match -> null, never '' (DB FK rejects blank) */
       // PETER'S RULE (6/10): CSV "SUBJECT" = AMS "description"
       description:l.subject||l.product||'',
       color:l.color||'', qty, unit:l.measured_unit, orderQty, orderUnit:item.orderUnit,
