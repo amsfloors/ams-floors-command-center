@@ -5678,6 +5678,39 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
       .catch(()=>{});
     return ()=>{live=false;}; },[lock,sb]);
 
+  // [IMPORTER 2026-06-19 — Paul] Peter #4: remember GC + Architect from PAST jobs so they don't get re-typed.
+  // Build a name-keyed directory once: GC contact/email/phone from the proposals list + GC address and ALL
+  // architect fields from prior estimates. Typing a known company/architect shows a pick-list that auto-fills.
+  const [hist,setHist]=React.useState({gc:{},arch:{},gcNames:[],archNames:[]});
+  React.useEffect(()=>{ if(!sb) return; let live=true;
+    sb.from('estimates').select('gcName,gcContactName,gcContactEmail,gcContactPhone,gcAddressLine1,gcCity,gcState,gcZip,architectName,architectAddress,architectPhone,architectEmail')
+      .then(({data})=>{ if(!live) return; const gc={},arch={};
+        (proposals||[]).forEach(p=>{ const k=(p.gc||'').trim().toLowerCase(); if(!k) return; const e=gc[k]||(gc[k]={name:(p.gc||'').trim()});
+          if(p.contact&&!e.contact)e.contact=p.contact; if(p.email&&!e.email)e.email=p.email; if(p.phone&&!e.phone)e.phone=p.phone; });
+        (data||[]).forEach(d=>{
+          const gk=(d.gcName||'').trim().toLowerCase();
+          if(gk){ const e=gc[gk]||(gc[gk]={name:(d.gcName||'').trim()}); e.name=(d.gcName||'').trim();
+            if(d.gcContactName&&!e.contact)e.contact=d.gcContactName; if(d.gcContactEmail&&!e.email)e.email=d.gcContactEmail; if(d.gcContactPhone&&!e.phone)e.phone=d.gcContactPhone;
+            if(d.gcAddressLine1&&!e.street)e.street=d.gcAddressLine1; if(d.gcCity&&!e.city)e.city=d.gcCity; if(d.gcState&&!e.state)e.state=d.gcState; if(d.gcZip&&!e.zip)e.zip=d.gcZip; }
+          const ak=(d.architectName||'').trim().toLowerCase();
+          if(ak){ const e=arch[ak]||(arch[ak]={name:(d.architectName||'').trim()}); e.name=(d.architectName||'').trim();
+            if(d.architectAddress&&!e.address)e.address=d.architectAddress; if(d.architectPhone&&!e.phone)e.phone=d.architectPhone; if(d.architectEmail&&!e.email)e.email=d.architectEmail; }
+        });
+        setHist({gc,arch,gcNames:Object.values(gc).map(x=>x.name).filter(Boolean).sort((a,b)=>a.localeCompare(b)),archNames:Object.values(arch).map(x=>x.name).filter(Boolean).sort((a,b)=>a.localeCompare(b))}); })
+      .catch(()=>{});
+    return ()=>{live=false;}; },[sb,proposals]);
+  const [gcOpen,setGcOpen]=React.useState(false);
+  const [archOpen,setArchOpen]=React.useState(false);
+  const gcMatches=React.useMemo(()=>{ const q=(job.gc||'').trim().toLowerCase(); return (q?hist.gcNames.filter(n=>n.toLowerCase().includes(q)&&n.toLowerCase()!==q):hist.gcNames).slice(0,8); },[job.gc,hist.gcNames]);
+  const archMatches=React.useMemo(()=>{ const q=(job.architectName||'').trim().toLowerCase(); return (q?hist.archNames.filter(n=>n.toLowerCase().includes(q)&&n.toLowerCase()!==q):hist.archNames).slice(0,8); },[job.architectName,hist.archNames]);
+  // best-effort split of a one-column stored architect address — confident only when it ends "…, City, ST 12345";
+  // otherwise the whole address rides in the street box (the user can tidy it). GC address is already columned.
+  const parseArchAddr=addr=>{ if(!addr) return {}; const one=String(addr).replace(/\s*\n\s*/g,', ').replace(/,\s*,/g,',').replace(/\s+/g,' ').trim();
+    const parts=one.split(',').map(s=>s.trim()).filter(Boolean); const tail=parts.length?parts[parts.length-1]:''; const m=tail.match(/^([A-Za-z]{2})\.?\s+(\d{5}(?:-\d{4})?)$/);
+    if(m&&parts.length>=3) return {street:parts.slice(0,-2).join(', '), city:parts[parts.length-2], state:m[1].toUpperCase(), zip:m[2]}; return {street:one}; };
+  const pickGC=name=>{ const e=hist.gc[(name||'').trim().toLowerCase()]||{}; setJob(j=>({...j, gc:e.name||name||'', contact:e.contact||j.contact, email:e.email||j.email, phone:e.phone||j.phone, gcStreet:e.street||j.gcStreet, gcCity:e.city||j.gcCity, gcState:e.state||j.gcState, gcZip:e.zip||j.gcZip})); setGcOpen(false); };
+  const pickArch=name=>{ const e=hist.arch[(name||'').trim().toLowerCase()]||{}; const a=parseArchAddr(e.address); setJob(j=>({...j, architectName:e.name||name||'', architectPhone:e.phone||j.architectPhone, architectEmail:e.email||j.architectEmail, architectStreet:a.street||j.architectStreet, architectCity:a.city||j.architectCity, architectState:a.state||j.architectState, architectZip:a.zip||j.architectZip})); setArchOpen(false); };
+
   const resetAll=()=>{ setLines(null); setCollision(null); setStatus(null);
     setJob(blankJob);
     if(fileRef.current) fileRef.current.value=''; };
@@ -5898,7 +5931,13 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
             {/* GC / CLIENT */}
             <div className="bg-white border border-stone-200 p-3 rounded-sm">
               <div className="text-[11px] font-semibold uppercase tracking-widest text-stone-500 mb-2">GC / Client</div>
-              <label className="text-xs text-stone-600 block mb-1.5">Company<input className={inp} value={job.gc} onChange={e=>setJob(j=>({...j,gc:e.target.value}))}/></label>
+              <div className="relative mb-1.5">
+                <label className="text-xs text-stone-600 block">Company<input className={inp} value={job.gc} autoComplete="off" onChange={e=>{setJob(j=>({...j,gc:e.target.value}));setGcOpen(true);}} onFocus={()=>setGcOpen(true)} onBlur={()=>setTimeout(()=>setGcOpen(false),150)}/></label>
+                {gcOpen&&gcMatches.length>0&&<div className="absolute z-20 top-full left-0 right-0 bg-white border border-stone-300 shadow-lg max-h-44 overflow-y-auto rounded-sm">
+                  <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-stone-400 border-b border-stone-100">From past jobs — click to auto-fill</div>
+                  {gcMatches.map(n=><button type="button" key={n} onMouseDown={()=>pickGC(n)} className="block w-full text-left px-2 py-1.5 text-xs hover:bg-orange-50 text-stone-700">{n}</button>)}
+                </div>}
+              </div>
               <label className="text-xs text-stone-600 block mb-1.5">Contact<input className={inp} value={job.contact} onChange={e=>setJob(j=>({...j,contact:e.target.value}))}/></label>
               <label className="text-xs text-stone-600 block mb-1.5">Email<input className={inp} value={job.email} onChange={e=>setJob(j=>({...j,email:e.target.value}))}/></label>
               <label className="text-xs text-stone-600 block mb-1.5">Phone<input className={inp} value={job.phone||''} onChange={e=>setJob(j=>({...j,phone:e.target.value}))}/></label>
@@ -5912,7 +5951,13 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
             {/* ARCHITECT */}
             <div className="bg-white border border-stone-200 p-3 rounded-sm">
               <div className="text-[11px] font-semibold uppercase tracking-widest text-stone-500 mb-2">Architect</div>
-              <label className="text-xs text-stone-600 block mb-1.5">Name<input className={inp} value={job.architectName||''} onChange={e=>setJob(j=>({...j,architectName:e.target.value}))} placeholder="e.g. Lawson Group"/></label>
+              <div className="relative mb-1.5">
+                <label className="text-xs text-stone-600 block">Name<input className={inp} value={job.architectName||''} autoComplete="off" placeholder="e.g. Lawson Group" onChange={e=>{setJob(j=>({...j,architectName:e.target.value}));setArchOpen(true);}} onFocus={()=>setArchOpen(true)} onBlur={()=>setTimeout(()=>setArchOpen(false),150)}/></label>
+                {archOpen&&archMatches.length>0&&<div className="absolute z-20 top-full left-0 right-0 bg-white border border-stone-300 shadow-lg max-h-44 overflow-y-auto rounded-sm">
+                  <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-stone-400 border-b border-stone-100">From past jobs — click to auto-fill</div>
+                  {archMatches.map(n=><button type="button" key={n} onMouseDown={()=>pickArch(n)} className="block w-full text-left px-2 py-1.5 text-xs hover:bg-orange-50 text-stone-700">{n}</button>)}
+                </div>}
+              </div>
               <label className="text-xs text-stone-600 block mb-1.5">Email<input className={inp} value={job.architectEmail||''} onChange={e=>setJob(j=>({...j,architectEmail:e.target.value}))}/></label>
               <label className="text-xs text-stone-600 block mb-1.5">Phone<input className={inp} value={job.architectPhone||''} onChange={e=>setJob(j=>({...j,architectPhone:e.target.value}))}/></label>
               <label className="text-xs text-stone-600 block mb-1.5">Street<input className={inp} value={job.architectStreet||''} onChange={e=>setJob(j=>({...j,architectStreet:e.target.value}))}/></label>
