@@ -1968,6 +1968,7 @@ video {
 <script src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3/lib/msal-browser.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -2438,6 +2439,10 @@ window._SEED = [{"id":1796,"project":"Infiniti Naples","location":"Naples, FL 34
 const SB_URL  = 'https://ohuuhomzhvcrvfghqlmu.supabase.co';
 const SB_KEY  = 'sb_publishable_n7mO5gZT8sDMHcfAFMYRtg_XmGR2KoV';
 const sb = window.supabase.createClient(SB_URL, SB_KEY);
+// [GRAPH 2026-06-19 — Paul] Microsoft Graph (Outlook draft replies). Single-tenant SPA app reg
+// "AMS Command Center". Neither value is a secret — they live in the SPA front-end by design.
+const MSAL_CONFIG = { clientId:'1f469b73-346b-4239-baab-594078b8cac6', tenantId:'564d34be-cecd-4fa0-91f0-40a5de9e566c' };
+const GRAPH_SCOPES = ['Mail.ReadWrite'];   // draft-only: read a thread + create the draft. No Mail.Send.
 // [FIX 2026-06-05] Supabase/PostgREST caps every query at 1000 rows by default.
 // estimate_items has 2722 rows, so a single select('*') only returned the first
 // 1000 — which (ordered by sortOrder across all estimates) cut every estimate off
@@ -2984,7 +2989,87 @@ const callScript=(p)=>{
  const proj=p.project||'the project';
  return 'CALL - '+proj+(p.id?' (#'+p.id+')':'')+'\nContact: '+(p.contact||'-')+'   '+(p.phone||'')+'\n\nOpener: "Hi '+first+", it's Paul with AMS Floors, following up on "+proj+'. Wanted to make sure we are still in the mix and see where it stands."\n\nListen, then ask:\n- Is it still moving? Any timeline?\n- Who else is in the running / where does it lean?\n- Anything on scope or budget we should adjust to?\n\nClose: "We would love the work and we are ready when you are - can I check back next week?"\n\nThen hit Log Call to record what happened.';
 };
-const openFollowUpEmail=(p)=>{
+/* ===== Microsoft Graph — Outlook draft reply (added 2026-06-19) =====
+   When Paul is signed in with Microsoft we create a real DRAFT in his Outlook, prefilled with the
+   smart letter above — as an in-thread reply when we can find the contact's last message, otherwise
+   a fresh draft addressed to them. Draft only: no Mail.Send, nothing ever auto-sends. Not signed in
+   (or any failure) => the original mailto behavior, unchanged. */
+let _msalApp=null,_msalInit=null;
+function getMsalApp(){
+ if(!window.msal||!window.msal.PublicClientApplication) return null;
+ if(!_msalApp){
+  _msalApp=new window.msal.PublicClientApplication({
+   auth:{clientId:MSAL_CONFIG.clientId,authority:'https://login.microsoftonline.com/'+MSAL_CONFIG.tenantId,redirectUri:window.location.origin},
+   cache:{cacheLocation:'localStorage'}
+  });
+  _msalInit=_msalApp.initialize();
+ }
+ return _msalApp;
+}
+async function msalReady(){ const app=getMsalApp(); if(!app) return null; await _msalInit; return app; }
+function msSignedIn(){ try{ const app=getMsalApp(); return !!(app&&(app.getActiveAccount()||app.getAllAccounts()[0])); }catch(e){ return false; } }
+async function getGraphToken(){
+ const app=await msalReady();
+ if(!app) throw new Error('Microsoft sign-in library has not loaded yet — check your connection and reload.');
+ let account=app.getActiveAccount()||app.getAllAccounts()[0];
+ if(!account){ const r=await app.loginPopup({scopes:GRAPH_SCOPES}); account=r.account; }
+ app.setActiveAccount(account);
+ try{ const r=await app.acquireTokenSilent({scopes:GRAPH_SCOPES,account}); return r.accessToken; }
+ catch(e){ const r=await app.acquireTokenPopup({scopes:GRAPH_SCOPES,account}); return r.accessToken; }
+}
+async function graphFetch(token,path,opts){
+ opts=opts||{};
+ const res=await fetch('https://graph.microsoft.com/v1.0'+path,{method:opts.method||'GET',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:opts.body});
+ if(!res.ok){ let t=''; try{t=await res.text();}catch(e){} throw new Error('Graph '+res.status+(t?(' — '+t.slice(0,200)):'')); }
+ return res.status===204?null:res.json();
+}
+function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function letterToHtml(s){ return '<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#201f1e;">'+escHtml(s).replace(/\n/g,'<br>')+'</div>'; }
+async function findLatestMsgFrom(token,email){
+ if(!email) return null;
+ const f=encodeURIComponent("from/emailAddress/address eq '"+email.replace(/'/g,"''")+"'");
+ try{
+  const r=await graphFetch(token,"/me/messages?$filter="+f+"&$orderby=receivedDateTime%20desc&$top=1&$select=id,receivedDateTime");
+  if(r&&r.value&&r.value.length) return r.value[0].id;
+ }catch(e){
+  // Some mailboxes reject $filter+$orderby together; retry without $orderby and pick newest client-side.
+  try{
+   const r=await graphFetch(token,"/me/messages?$filter="+f+"&$top=25&$select=id,receivedDateTime");
+   if(r&&r.value&&r.value.length){ r.value.sort((a,b)=>(b.receivedDateTime||'').localeCompare(a.receivedDateTime||'')); return r.value[0].id; }
+  }catch(e2){ console.warn('Outlook thread lookup failed',e2); }
+ }
+ return null;
+}
+async function createOutlookDraft(p){
+ const token=await getGraphToken();
+ const d=followUpDraft(p);
+ const html=letterToHtml(d.body);
+ const email=(p.email||'').trim();
+ const srcId=await findLatestMsgFrom(token,email);
+ if(srcId){
+  const reply=await graphFetch(token,'/me/messages/'+srcId+'/createReply',{method:'POST'});
+  const quoted=(reply&&reply.body&&reply.body.content)||'';
+  return await graphFetch(token,'/me/messages/'+reply.id,{method:'PATCH',body:JSON.stringify({body:{contentType:'HTML',content:html+quoted}})});
+ }
+ const msg={subject:d.subject,body:{contentType:'HTML',content:html},toRecipients:email?[{emailAddress:{address:email}}]:[]};
+ return await graphFetch(token,'/me/messages',{method:'POST',body:JSON.stringify(msg)});
+}
+const openFollowUpEmail=async(p)=>{
+ if(msSignedIn()){
+  const win=window.open('','_blank');   // open synchronously inside the click so it isn't popup-blocked
+  try{
+   const draft=await createOutlookDraft(p);
+   const link=draft&&draft.webLink;
+   if(link){ if(win){win.location=link;} else {window.open(link,'_blank','noopener');} }
+   else { if(win)win.close(); alert('Draft saved to your Outlook Drafts folder — open Outlook to review and send.'); }
+   return;
+  }catch(e){
+   if(win)win.close();
+   console.error('Outlook draft failed, using email fallback:',e);
+   alert('Could not create the Outlook draft:\n'+(e.message||e)+'\n\nOpening a normal email draft instead.');
+  }
+ }
+ // Fallback: original mailto behavior (also when not signed in to Microsoft).
  const d=followUpDraft(p);
  const to=p.email||'';
  const url='mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(d.subject)+'&body='+encodeURIComponent(d.body);
@@ -5772,6 +5857,8 @@ function App() {
  const [selectedId, setSelectedId] = useState(null);
  const [selectedGC, setSelectedGC] = useState(null);
  const [showNewProject, setShowNewProject] = useState(false);
+ const [msAccount, setMsAccount] = useState(null);   // [GRAPH 2026-06-19] signed-in Microsoft account (for Outlook drafts)
+ const [msBusy, setMsBusy] = useState(false);
  useEffect(()=>{
   (async()=>{
    try {
@@ -5844,6 +5931,10 @@ function App() {
    .subscribe(status=>{setOnline(status==='SUBSCRIBED');});
   return()=>sb.removeChannel(channel);
  },[loaded]);
+ // [GRAPH 2026-06-19] Restore an existing Microsoft session on load (silent — no popup).
+ useEffect(()=>{(async()=>{try{const app=await msalReady();if(app){const a=app.getActiveAccount()||app.getAllAccounts()[0];if(a){app.setActiveAccount(a);setMsAccount(a);}}}catch(e){console.warn('MSAL init',e);}})();},[]);
+ const signInMicrosoft=async()=>{ setMsBusy(true); try{ await getGraphToken(); const app=await msalReady(); setMsAccount((app&&(app.getActiveAccount()||app.getAllAccounts()[0]))||null); }catch(e){ console.error(e); alert('Microsoft sign-in failed:\n'+(e.message||e)); } setMsBusy(false); };
+ const signOutMicrosoft=async()=>{ try{ const app=await msalReady(); if(app){ await app.clearCache(); app.setActiveAccount(null); } }catch(e){ console.warn(e); } setMsAccount(null); };
  const gcStats=useMemo(()=>computeGCStats(proposals),[proposals]);
  const selectedProposal=useMemo(()=>proposals.find(p=>p.id===selectedId)||null,[proposals,selectedId]);
  const selectedLineItems=useMemo(()=>lineItems.filter(l=>l.proposalId===selectedId),[lineItems,selectedId]);
@@ -6145,6 +6236,10 @@ function App() {
       <button onClick={async()=>{const{data:fp}=await sb.from('proposals').select('*').order('submitted',{ascending:false});if(fp)setProposals(fp.map(p=>({...p,bidAmount:Number(p.bidAmount)||0,estMaterial:Number(p.estMaterial)||0,estLabor:Number(p.estLabor)||0})));}} className={`flex items-center gap-1 text-[10px] font-medium cursor-pointer hover:opacity-70 ${online?'text-emerald-700':'text-stone-400'}`} title="Click to refresh data from database">
        <Ico n={online?'wifi':'wifiOff'} size={12}/><span className="hidden sm:inline">{online?'Live sync':'Offline'}</span>
       </button>
+      {msAccount
+       ? <button onClick={signOutMicrosoft} title={'Outlook connected as '+((msAccount.username)||'')+' — click to disconnect'} className="flex items-center gap-1 text-[10px] font-medium text-sky-700 hover:opacity-70"><span>✉</span><span className="hidden sm:inline">Outlook ✓</span></button>
+       : <button onClick={signInMicrosoft} disabled={msBusy} title="Connect your Outlook so follow-ups open as ready-to-send drafts" className="flex items-center gap-1 text-[10px] font-medium text-stone-600 hover:opacity-70 disabled:opacity-40"><span>✉</span><span className="hidden sm:inline">{msBusy?'Connecting…':'Sign in with Microsoft'}</span></button>
+      }
       <YearFilter proposals={proposals} value={settings.yearFilter} onChange={v=>setSettings({...settings,yearFilter:v})}/>
       {/* [UX 2026-06-11 — Ben] New Project removed from the global top bar — it lives in Settings → Actions. */}
      </div>
