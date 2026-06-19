@@ -5624,14 +5624,19 @@ function m15BuildPayloads({lines, job, propId, estId, isUpdate}){
   // addresses), the same as a direct build. job._estHeader carries an existing project's header forward
   // so a re-import never blanks it; CSV/form values on job take precedence.
   const eh=job._estHeader||{};
+  // [IMPORTER 2026-06-19 — Paul] Peter #2: separated address blocks now flow from the import form (job.*),
+  // falling back to the existing estimate header (eh) on re-import. Architect address is a single DB column,
+  // so join its parts (street / city, state / zip) into one line.
+  const archAddr=([job.architectStreet,[job.architectCity,job.architectState].filter(Boolean).join(', '),job.architectZip].filter(Boolean).join(' ').trim())
+                 || job.architectAddress || eh.architectAddress || '';
   const estimateRow={ id:estId, proposalId:propId, proposalNumber:propId, projectName:job.projectName,
     gcName:job.gc||eh.gcName||'', gcContactName:job.contact||eh.gcContactName||'', gcContactEmail:job.email||eh.gcContactEmail||'', gcContactPhone:job.phone||eh.gcContactPhone||'',
-    architectName:job.architectName||eh.architectName||'', architectAddress:job.architectAddress||eh.architectAddress||'',
+    architectName:job.architectName||eh.architectName||'', architectAddress:archAddr,
     architectPhone:job.architectPhone||eh.architectPhone||'', architectEmail:job.architectEmail||eh.architectEmail||'',
     plansDated:job.plansDated||eh.plansDated||null, addendum:job.addendum||eh.addendum||'',
-    projectAddressLine1:eh.projectAddressLine1||'', projectAddressLine2:eh.projectAddressLine2||'',
-    projectCity:eh.projectCity||job.location||'', projectState:eh.projectState||'', projectZip:eh.projectZip||'',
-    gcAddressLine1:eh.gcAddressLine1||'', gcAddressLine2:eh.gcAddressLine2||'', gcCity:eh.gcCity||'', gcState:eh.gcState||'', gcZip:eh.gcZip||'',
+    projectAddressLine1:job.projectStreet||eh.projectAddressLine1||'', projectAddressLine2:eh.projectAddressLine2||'',
+    projectCity:job.location||eh.projectCity||'', projectState:job.projectState||eh.projectState||'', projectZip:job.projectZip||eh.projectZip||'',
+    gcAddressLine1:job.gcStreet||eh.gcAddressLine1||'', gcAddressLine2:eh.gcAddressLine2||'', gcCity:job.gcCity||eh.gcCity||'', gcState:job.gcState||eh.gcState||'', gcZip:job.gcZip||eh.gcZip||'',
     taxRate:tax, markupRate:markup, baseBidTotal:Math.round(base),
     preparedByName:'Peter Laitres', preparedByEmail:'peter@amsfloors.com', preparedByPhone:'9417401555' };
   return { proposalRow, estimateRow, itemRows, totals:{base:Math.round(base),estMat:Math.round(estMat),estLab:Math.round(estLab)}, isUpdate:!!isUpdate };
@@ -5642,7 +5647,10 @@ const M15_STATUS_OPTS=['Lead','Bidding','Submitted'];
 const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone }) => {
   // [IMPORTER 2026-06-17] header fields (architect / plans-date / addendum) ride on the job so the
   // import writes a header-complete estimate, the same as a direct build.
-  const hdrBlank={architectName:'',architectAddress:'',architectPhone:'',architectEmail:'',plansDated:'',addendum:''};
+  // [IMPORTER 2026-06-19 — Paul] Peter #2/#3: capture FULL, separated address blocks for Project / GC /
+  // Architect right at import (was: Project=one "Location" box, GC=no address, Architect=one combined line).
+  const hdrBlank={architectName:'',architectStreet:'',architectCity:'',architectState:'',architectZip:'',architectPhone:'',architectEmail:'',plansDated:'',addendum:'',
+    projectStreet:'',projectState:'',projectZip:'',gcStreet:'',gcCity:'',gcState:'',gcZip:''};
   const blankJob = lock
     ? {tax:0.07,markup:0.20,projectNumber:String(lock.id),projectName:lock.project||'',gc:lock.gc||'',contact:lock.contact||'',email:lock.email||'',phone:lock.phone||'',location:lock.location||'',status:'Bidding',fileName:'',...hdrBlank}
     : {tax:0.07,markup:0.20,projectNumber:'',projectName:'',gc:'',contact:'',email:'',phone:'',location:'',status:'Bidding',fileName:'',...hdrBlank};
@@ -5661,8 +5669,11 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
   React.useEffect(()=>{ if(!lock||!sb) return; let live=true;
     sb.from('estimates').select('architectName,architectAddress,architectPhone,architectEmail,plansDated,addendum,gcName,gcContactName,gcContactEmail,gcContactPhone,projectAddressLine1,projectAddressLine2,projectCity,projectState,projectZip,gcAddressLine1,gcAddressLine2,gcCity,gcState,gcZip').eq('proposalId',String(lock.id)).maybeSingle()
       .then(({data})=>{ if(!live||!data) return; setJob(j=>({...j,
-        architectName:j.architectName||data.architectName||'', architectAddress:j.architectAddress||data.architectAddress||'',
+        architectName:j.architectName||data.architectName||'',
+        architectStreet:j.architectStreet||data.architectAddress||'',  // DB stores architect address as one line -> seed the street box
         architectPhone:j.architectPhone||data.architectPhone||'', architectEmail:j.architectEmail||data.architectEmail||'',
+        projectStreet:j.projectStreet||data.projectAddressLine1||'', projectState:j.projectState||data.projectState||'', projectZip:j.projectZip||data.projectZip||'',
+        gcStreet:j.gcStreet||data.gcAddressLine1||'', gcCity:j.gcCity||data.gcCity||'', gcState:j.gcState||data.gcState||'', gcZip:j.gcZip||data.gcZip||'',
         plansDated:j.plansDated||data.plansDated||'', addendum:j.addendum||data.addendum||'', _estHeader:data })); })
       .catch(()=>{});
     return ()=>{live=false;}; },[lock,sb]);
@@ -5713,7 +5724,7 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
       setJob(j=>({...j, fileName:file.name,
         gc:j.gc||hf['GC']||'', contact:j.contact||hf['Contact']||'', email:j.email||hf['Email']||'',
         phone:j.phone||hf['Phone']||'', location:j.location||hf['Location']||'', projectName:j.projectName||hf['Project']||'',
-        architectName:hf['Architect']||j.architectName||'', architectAddress:hf['Architect Address']||j.architectAddress||'',
+        architectName:hf['Architect']||j.architectName||'', architectStreet:hf['Architect Address']||j.architectStreet||'',
         architectPhone:hf['Architect Phone']||j.architectPhone||'', architectEmail:hf['Architect Email']||j.architectEmail||'',
         plansDated:hf['Plans Dated']||j.plansDated||'', addendum:hf['Addendum']||j.addendum||'' }));
       setLines(newLines);
@@ -5868,22 +5879,56 @@ const TakeoffIntake = ({ sb, estimateItems, proposals, onImported, lock, onDone 
           </div>
           <button onClick={addLine} className="mt-2 text-sm text-orange-800 hover:text-orange-900 font-medium">+ add a line the takeoff didn’t measure (clips, grout, mortar, adhesive, base…)</button>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 bg-white border border-stone-200 p-3 rounded-sm">
-            <label className="text-xs text-stone-600">Project number <span className="text-rose-600">*</span><input className={inp+(lock?' bg-stone-100 text-stone-500':'')} value={job.projectNumber} disabled={!!lock} onChange={e=>{setCollision(null);setJob(j=>({...j,projectNumber:e.target.value}));}} placeholder="Peter assigns (numeric)"/>{lock&&<span className="text-[10px] text-stone-400">Locked to this project</span>}</label>
-            <label className="text-xs text-stone-600">Project name <span className="text-rose-600">*</span><input className={inp+(lock?' bg-stone-100 text-stone-500':'')} value={job.projectName} disabled={!!lock} onChange={e=>setJob(j=>({...j,projectName:e.target.value}))}/></label>
-            <label className="text-xs text-stone-600">GC<input className={inp} value={job.gc} onChange={e=>setJob(j=>({...j,gc:e.target.value}))}/></label>
-            {!lock&&<label className="text-xs text-stone-600">Status<select className={inp} value={job.status} onChange={e=>setJob(j=>({...j,status:e.target.value}))}>{M15_STATUS_OPTS.map(s=><option key={s}>{s}</option>)}</select></label>}
+          {/* [IMPORTER 2026-06-19 — Paul] Peter #2/#3: Project / GC / Architect each grouped together with
+              full, separated address fields (street · city · state · zip), captured once at import time. */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+            {/* PROJECT */}
+            <div className="bg-white border border-stone-200 p-3 rounded-sm">
+              <div className="text-[11px] font-semibold uppercase tracking-widest text-stone-500 mb-2">Project</div>
+              <label className="text-xs text-stone-600 block mb-1.5">Project number <span className="text-rose-600">*</span><input className={inp+(lock?' bg-stone-100 text-stone-500':'')} value={job.projectNumber} disabled={!!lock} onChange={e=>{setCollision(null);setJob(j=>({...j,projectNumber:e.target.value}));}} placeholder="Peter assigns (numeric)"/>{lock&&<span className="text-[10px] text-stone-400">Locked to this project</span>}</label>
+              <label className="text-xs text-stone-600 block mb-1.5">Project name <span className="text-rose-600">*</span><input className={inp+(lock?' bg-stone-100 text-stone-500':'')} value={job.projectName} disabled={!!lock} onChange={e=>setJob(j=>({...j,projectName:e.target.value}))}/></label>
+              <label className="text-xs text-stone-600 block mb-1.5">Street<input className={inp} value={job.projectStreet||''} onChange={e=>setJob(j=>({...j,projectStreet:e.target.value}))} placeholder="123 Main St"/></label>
+              <div className="grid grid-cols-3 gap-1.5">
+                <label className="text-xs text-stone-600">City<input className={inp} value={job.location||''} onChange={e=>setJob(j=>({...j,location:e.target.value}))}/></label>
+                <label className="text-xs text-stone-600">State<input className={inp} value={job.projectState||''} onChange={e=>setJob(j=>({...j,projectState:e.target.value}))} placeholder="FL"/></label>
+                <label className="text-xs text-stone-600">Zip<input className={inp} value={job.projectZip||''} onChange={e=>setJob(j=>({...j,projectZip:e.target.value}))}/></label>
+              </div>
+              {!lock&&<label className="text-xs text-stone-600 block mt-1.5">Status<select className={inp} value={job.status} onChange={e=>setJob(j=>({...j,status:e.target.value}))}>{M15_STATUS_OPTS.map(s=><option key={s}>{s}</option>)}</select></label>}
+            </div>
+            {/* GC / CLIENT */}
+            <div className="bg-white border border-stone-200 p-3 rounded-sm">
+              <div className="text-[11px] font-semibold uppercase tracking-widest text-stone-500 mb-2">GC / Client</div>
+              <label className="text-xs text-stone-600 block mb-1.5">Company<input className={inp} value={job.gc} onChange={e=>setJob(j=>({...j,gc:e.target.value}))}/></label>
+              <label className="text-xs text-stone-600 block mb-1.5">Contact<input className={inp} value={job.contact} onChange={e=>setJob(j=>({...j,contact:e.target.value}))}/></label>
+              <label className="text-xs text-stone-600 block mb-1.5">Email<input className={inp} value={job.email} onChange={e=>setJob(j=>({...j,email:e.target.value}))}/></label>
+              <label className="text-xs text-stone-600 block mb-1.5">Phone<input className={inp} value={job.phone||''} onChange={e=>setJob(j=>({...j,phone:e.target.value}))}/></label>
+              <label className="text-xs text-stone-600 block mb-1.5">Street<input className={inp} value={job.gcStreet||''} onChange={e=>setJob(j=>({...j,gcStreet:e.target.value}))}/></label>
+              <div className="grid grid-cols-3 gap-1.5">
+                <label className="text-xs text-stone-600">City<input className={inp} value={job.gcCity||''} onChange={e=>setJob(j=>({...j,gcCity:e.target.value}))}/></label>
+                <label className="text-xs text-stone-600">State<input className={inp} value={job.gcState||''} onChange={e=>setJob(j=>({...j,gcState:e.target.value}))} placeholder="FL"/></label>
+                <label className="text-xs text-stone-600">Zip<input className={inp} value={job.gcZip||''} onChange={e=>setJob(j=>({...j,gcZip:e.target.value}))}/></label>
+              </div>
+            </div>
+            {/* ARCHITECT */}
+            <div className="bg-white border border-stone-200 p-3 rounded-sm">
+              <div className="text-[11px] font-semibold uppercase tracking-widest text-stone-500 mb-2">Architect</div>
+              <label className="text-xs text-stone-600 block mb-1.5">Name<input className={inp} value={job.architectName||''} onChange={e=>setJob(j=>({...j,architectName:e.target.value}))} placeholder="e.g. Lawson Group"/></label>
+              <label className="text-xs text-stone-600 block mb-1.5">Email<input className={inp} value={job.architectEmail||''} onChange={e=>setJob(j=>({...j,architectEmail:e.target.value}))}/></label>
+              <label className="text-xs text-stone-600 block mb-1.5">Phone<input className={inp} value={job.architectPhone||''} onChange={e=>setJob(j=>({...j,architectPhone:e.target.value}))}/></label>
+              <label className="text-xs text-stone-600 block mb-1.5">Street<input className={inp} value={job.architectStreet||''} onChange={e=>setJob(j=>({...j,architectStreet:e.target.value}))}/></label>
+              <div className="grid grid-cols-3 gap-1.5">
+                <label className="text-xs text-stone-600">City<input className={inp} value={job.architectCity||''} onChange={e=>setJob(j=>({...j,architectCity:e.target.value}))}/></label>
+                <label className="text-xs text-stone-600">State<input className={inp} value={job.architectState||''} onChange={e=>setJob(j=>({...j,architectState:e.target.value}))} placeholder="FL"/></label>
+                <label className="text-xs text-stone-600">Zip<input className={inp} value={job.architectZip||''} onChange={e=>setJob(j=>({...j,architectZip:e.target.value}))}/></label>
+              </div>
+            </div>
+          </div>
+          {/* estimate settings — tax / markup / plans-dated / addendum */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 bg-white border border-stone-200 p-3 rounded-sm">
             <label className="text-xs text-stone-600">Tax rate<input className={inp + ' font-mono'} type="number" step="0.001" value={job.tax} onChange={e=>setJob(j=>({...j,tax:e.target.value}))}/></label>
             <label className="text-xs text-stone-600">Markup rate<input className={inp + ' font-mono'} type="number" step="0.01" value={job.markup} onChange={e=>setJob(j=>({...j,markup:e.target.value}))}/></label>
-            <label className="text-xs text-stone-600">Contact<input className={inp} value={job.contact} onChange={e=>setJob(j=>({...j,contact:e.target.value}))}/></label>
-            <label className="text-xs text-stone-600">Email<input className={inp} value={job.email} onChange={e=>setJob(j=>({...j,email:e.target.value}))}/></label>
-            <label className="text-xs text-stone-600">Phone<input className={inp} value={job.phone||''} onChange={e=>setJob(j=>({...j,phone:e.target.value}))}/></label>
-            <label className="text-xs text-stone-600">Location<input className={inp} value={job.location||''} onChange={e=>setJob(j=>({...j,location:e.target.value}))}/></label>
-            <label className="text-xs text-stone-600">Architect<input className={inp} value={job.architectName||''} onChange={e=>setJob(j=>({...j,architectName:e.target.value}))} placeholder="e.g. Lawson Group"/></label>
-            <label className="text-xs text-stone-600">Architect phone<input className={inp} value={job.architectPhone||''} onChange={e=>setJob(j=>({...j,architectPhone:e.target.value}))}/></label>
             <label className="text-xs text-stone-600">Plans dated<input type="date" className={inp} value={(job.plansDated||'').slice(0,10)} onChange={e=>setJob(j=>({...j,plansDated:e.target.value}))}/></label>
             <label className="text-xs text-stone-600">Addendum<input className={inp} value={job.addendum||''} onChange={e=>setJob(j=>({...j,addendum:e.target.value}))} placeholder="e.g. Permit Set"/></label>
-            <label className="text-xs text-stone-600 col-span-2 md:col-span-4">Architect address<input className={inp} value={job.architectAddress||''} onChange={e=>setJob(j=>({...j,architectAddress:e.target.value}))} placeholder="street, city, state zip"/></label>
           </div>
 
           <div className="flex items-center justify-between mt-3 pb-8">
