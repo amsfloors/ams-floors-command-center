@@ -3040,36 +3040,116 @@ async function findLatestMsgFrom(token,email){
  }
  return null;
 }
-async function createOutlookDraft(p){
- const token=await getGraphToken();
- const d=followUpDraft(p);
- const html=letterToHtml(d.body);
- const email=(p.email||'').trim();
- const srcId=await findLatestMsgFrom(token,email);
- if(srcId){
-  const reply=await graphFetch(token,'/me/messages/'+srcId+'/createReply',{method:'POST'});
-  const quoted=(reply&&reply.body&&reply.body.content)||'';
-  return await graphFetch(token,'/me/messages/'+reply.id,{method:'PATCH',body:JSON.stringify({body:{contentType:'HTML',content:html+quoted}})});
- }
- const msg={subject:d.subject,body:{contentType:'HTML',content:html},toRecipients:email?[{emailAddress:{address:email}}]:[]};
- return await graphFetch(token,'/me/messages',{method:'POST',body:JSON.stringify(msg)});
+/* ===== Thread-aware follow-ups (added 2026-06-19) =====
+   #1 sync the queue to real Outlook activity (fetchRecentSentMap)
+   #2 show the whole conversation thread (findLatestMsgWith + fetchThread)
+   #3 compose a reply that addresses the actual last email's asks (extractQuestions + composeReplyBody)
+   The React thread-preview modal calls these; nothing is ever sent automatically. */
+const SIG='\n\nBest,\nPaul Kidman\nAMS Floors\n941-238-6614 | www.amsfloors.com';
+function currentUserEmail(){ try{ const app=getMsalApp(); const a=app&&(app.getActiveAccount()||app.getAllAccounts()[0]); return (a&&a.username)||''; }catch(e){ return ''; } }
+// Most recent message in EITHER direction with this contact, so we still thread when they never replied / the address bounced.
+async function findLatestMsgWith(token,email){
+ if(!email) return null;
+ const sel='&$top=25&$select=id,conversationId,subject,from,toRecipients,receivedDateTime,isDraft';
+ try{
+  const r=await graphFetch(token,'/me/messages?$search='+encodeURIComponent('"participants:'+email+'"')+sel);
+  if(r&&r.value&&r.value.length){ const v=r.value.filter(m=>!m.isDraft); v.sort((a,b)=>(b.receivedDateTime||'').localeCompare(a.receivedDateTime||'')); if(v.length) return v[0]; }
+ }catch(e){ console.warn('participants search failed, falling back to from-filter',e); }
+ const id=await findLatestMsgFrom(token,email);
+ if(id){ try{ return await graphFetch(token,'/me/messages/'+id+'?$select=id,conversationId,subject,from,toRecipients,receivedDateTime'); }catch(e){ return {id:id}; } }
+ return null;
 }
-const openFollowUpEmail=async(p)=>{
- if(msSignedIn()){
-  const win=window.open('','_blank');   // open synchronously inside the click so it isn't popup-blocked
-  try{
-   const draft=await createOutlookDraft(p);
-   const link=draft&&draft.webLink;
-   if(link){ if(win){win.location=link;} else {window.open(link,'_blank','noopener');} }
-   else { if(win)win.close(); alert('Draft saved to your Outlook Drafts folder — open Outlook to review and send.'); }
-   return;
-  }catch(e){
-   if(win)win.close();
-   console.error('Outlook draft failed, using email fallback:',e);
-   alert('Could not create the Outlook draft:\n'+(e.message||e)+'\n\nOpening a normal email draft instead.');
-  }
+async function fetchThread(token,convId){
+ if(!convId) return [];
+ const q='/me/messages?$filter='+encodeURIComponent("conversationId eq '"+convId+"'")+'&$top=50&$select=id,conversationId,subject,from,toRecipients,receivedDateTime,bodyPreview,body,isDraft';
+ const r=await graphFetch(token,q);
+ let v=(r&&r.value)||[];
+ v=v.filter(m=>!m.isDraft);
+ v.sort((a,b)=>(a.receivedDateTime||'').localeCompare(b.receivedDateTime||''));
+ return v;
+}
+function htmlToText(s){
+ if(!s) return '';
+ let t=String(s);
+ t=t.replace(/<style[\s\S]*?<\/style>/gi,'').replace(/<script[\s\S]*?<\/script>/gi,'');
+ t=t.replace(/<\s*(br|\/p|\/div|\/li|\/tr|\/h[1-6])\s*>/gi,'\n').replace(/<\s*li[^>]*>/gi,'\n- ');
+ t=t.replace(/<[^>]+>/g,' ');
+ t=t.replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&').replace(/&lt;/gi,'<').replace(/&gt;/gi,'>').replace(/&#39;|&rsquo;|&lsquo;/gi,"'").replace(/&quot;|&ldquo;|&rdquo;/gi,'"');
+ t=t.replace(/[ \t]+/g,' ').replace(/\n[ \t]+/g,'\n').replace(/\n{3,}/g,'\n\n');
+ return t.trim();
+}
+// Keep only the NEW part of a reply (drop the quoted history below "From:/On … wrote:/-----Original-----").
+function splitOffQuote(text){
+ if(!text) return '';
+ const lines=text.split('\n'); const out=[];
+ const stop=/^\s*(from:\s|sent:\s|to:\s|subject:\s|on .+wrote:|-{3,}\s*original|_{5,})/i;
+ for(const ln of lines){ if(stop.test(ln)) break; out.push(ln); }
+ const r=out.join('\n').trim();
+ return r||text.trim();
+}
+const Q_RE=/(can|could|would|will)\s+you|please\s+(send|provide|forward|share|confirm|advise|let|resend)|need\s+(the|a|an|your|to|updated)|send\s+(over|me|us)|re-?send|forward\s+(the|me|us|your|over)|let\s+me\s+know|what\s+(is|are|about|'s)|do\s+you\s+have|are\s+you\s+able|breakdown|submittal|sample|spec\b|scope|lead\s*time|\bcoi\b|insurance|schedule|\bquote\b|updated\s+(pricing|proposal|number)/i;
+function extractQuestions(body){
+ const txt=splitOffQuote(htmlToText(body));
+ if(!txt) return [];
+ const raw=txt.replace(/([?!.])\s+/g,'$1\n').split('\n');
+ const seen={}, out=[];
+ for(let s of raw){ s=s.trim().replace(/^[-•>\s]+/,''); if(s.length<6||s.length>240) continue;
+  if(!(/\?\s*$/.test(s)||Q_RE.test(s))) continue;
+  const key=s.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,40); if(seen[key]) continue; seen[key]=1;
+  out.push(s); if(out.length>=6) break;
  }
- // Fallback: original mailto behavior (also when not signed in to Microsoft).
+ return out;
+}
+function senderFirstName(m){
+ const nm=(m&&m.from&&m.from.emailAddress&&m.from.emailAddress.name)||'';
+ if(nm&&!/@/.test(nm)){ const f=nm.trim().split(/[ ,]+/)[0]; if(f&&/^[A-Za-z][A-Za-z'\-]*$/.test(f)) return f; }
+ return '';
+}
+// #3 — build a reply that enumerates the contact's actual asks (Paul fills the "→" answers). Falls back to the smart template when no asks are detected.
+function composeReplyBody(p,target,questions){
+ if(!questions||!questions.length) return followUpDraft(p).body;
+ const first=senderFirstName(target)||((p.contact||'').trim().split(' ')[0])||'there';
+ const proj=p.project||'your project';
+ let body='Hi '+first+',\n\nThanks for getting back to me on '+proj+' — happy to help. Taking your points in order:\n\n';
+ questions.forEach((q,i)=>{ body+=(i+1)+'. "'+q+'"\n   → \n\n'; });
+ body+='If anything else would help, just let me know and I will turn it around right away. Appreciate you keeping AMS in the mix.'+SIG;
+ return body;
+}
+// Everything the modal needs: the thread, the message to answer, detected asks, and a first-draft.
+async function buildThreadContext(p){
+ const token=await getGraphToken();
+ const email=(p.email||'').trim();
+ const me=(currentUserEmail()||'').toLowerCase();
+ const latest=await findLatestMsgWith(token,email);
+ let thread=[],target=null;
+ if(latest){
+  if(latest.conversationId){ try{ thread=await fetchThread(token,latest.conversationId); }catch(e){ thread=[]; } }
+  if(!thread.length) thread=[latest];
+  const inbound=thread.filter(m=>(((m.from&&m.from.emailAddress&&m.from.emailAddress.address)||'').toLowerCase())!==me);
+  target=inbound.length?inbound[inbound.length-1]:null;   // only reply INTO a message THEY sent — never reply-to-self
+ }
+ const mode=target?'reply':'fresh';
+ const questions=target?extractQuestions((target.body&&target.body.content)||target.bodyPreview||''):[];
+ const draftText=mode==='reply'?composeReplyBody(p,target,questions):followUpDraft(p).body;
+ const baseSubj=(target&&target.subject)?target.subject:((thread.length&&thread[thread.length-1].subject)||(p.project||''));
+ const subject=mode==='reply'?('Re: '+String(baseSubj).replace(/^(re:\s*)+/i,'')):followUpDraft(p).subject;
+ return {email,thread,target,questions,draftText,subject,mode,srcId:target&&target.id};
+}
+// email(lowercased) -> most recent date Paul SENT them something. Used to hide bids already emailed (#1).
+async function fetchRecentSentMap(token){
+ const r=await graphFetch(token,'/me/mailFolders/sentitems/messages?$top=200&$orderby=sentDateTime%20desc&$select=toRecipients,ccRecipients,sentDateTime');
+ const map={};
+ ((r&&r.value)||[]).forEach(m=>{ const dt=m.sentDateTime||''; (m.toRecipients||[]).concat(m.ccRecipients||[]).forEach(x=>{ const a=((x.emailAddress&&x.emailAddress.address)||'').trim().toLowerCase(); if(a&&(!map[a]||dt>map[a])) map[a]=dt; }); });
+ return map;
+}
+// Bridge so the module-level email buttons can open the React thread-preview modal.
+let _threadPreviewHandler=null;
+function setThreadPreviewHandler(fn){ _threadPreviewHandler=fn; }
+function requestThreadPreview(p){ if(_threadPreviewHandler){ _threadPreviewHandler(p); return true; } return false; }
+const openFollowUpEmail=async(p)=>{
+ // Signed in + modal mounted → open the in-app thread + smart-draft preview (#2/#3).
+ if(msSignedIn()&&requestThreadPreview(p)) return;
+ // Fallback: not signed in (or modal unavailable) → plain mailto with the template letter.
  const d=followUpDraft(p);
  const to=p.email||'';
  const url='mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(d.subject)+'&body='+encodeURIComponent(d.body);
@@ -3131,23 +3211,25 @@ const expValue=(p)=>Math.round((p.bidAmount||0)*(p._gcWR!=null?p._gcWR:0.30));
 // [📥 TODAY 2026-06-17 — Paul] Action cockpit. Reads `proposals` only (no new table).
 // Three lists: replies needing a response (reconciler sets nextAction "💬 Reply received…"),
 // lost bids whose winner is named (the #1570-FJ re-pitch play), and near-due leads/opps.
-const TodayView=({proposals,settings,gcStats,onSelectProposal,onSaveProposal,onCloneToWinner})=>{
+const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveProposal,onCloneToWinner})=>{
  const today=todayStr();
  const horizon=(()=>{const d=new Date();d.setDate(d.getDate()+14);return d.toISOString().slice(0,10);})();
  const wrOf=(gc)=>{const g=(gcStats||[]).find(x=>x.gc===gc);return g&&g.winRate!=null?g.winRate:null;};
  const ev=(p)=>{const w=wrOf(p.gc);return Math.round((p.bidAmount||0)*(w!=null?Math.max(w,0.1):0.30));};
+ // [GRAPH 2026-06-19] Already-handled in Outlook: emailed this contact more recently than our last logged touch → drop from the action lists.
+ const handled=(p)=>{const e=(recentSent&&p.email)?recentSent[p.email.trim().toLowerCase()]:null;return !!(e&&e.slice(0,10)>(p.lastTouched||''));};
 
  const replies=useMemo(()=>proposals
-   .filter(p=>/reply received/i.test(p.nextAction||''))
-   .sort((a,b)=>ev(b)-ev(a)),[proposals,gcStats]);
+   .filter(p=>/reply received/i.test(p.nextAction||'')&&!handled(p))
+   .sort((a,b)=>ev(b)-ev(a)),[proposals,gcStats,recentSent]);
  const rePitch=useMemo(()=>proposals
    .filter(p=>LOST_STATUSES.includes(p.status))
    .map(p=>{const w=analyzeReply(p).winner;return w?{...p,_winner:w}:null;})
    .filter(Boolean)
    .sort((a,b)=>(b.bidAmount||0)-(a.bidAmount||0)),[proposals]);
  const newOpps=useMemo(()=>proposals
-   .filter(p=>OPEN_STATUSES.includes(p.status)&&p.nextActionDate&&p.nextActionDate>=today&&p.nextActionDate<=horizon)
-   .sort((a,b)=>(a.nextActionDate||'9999-99-99').localeCompare(b.nextActionDate||'9999-99-99')),[proposals]);
+   .filter(p=>OPEN_STATUSES.includes(p.status)&&p.nextActionDate&&p.nextActionDate>=today&&p.nextActionDate<=horizon&&!handled(p))
+   .sort((a,b)=>(a.nextActionDate||'9999-99-99').localeCompare(b.nextActionDate||'9999-99-99')),[proposals,recentSent]);
 
  // one-write helpers (single upsert each — no double-write races)
  const logSent=(p)=>onSaveProposal({...p,notes:`[${today}] ✉ Sent reply\n`+(p.notes||''),lastTouched:today,nextAction:null});
@@ -3246,7 +3328,7 @@ const TodayView=({proposals,settings,gcStats,onSelectProposal,onSaveProposal,onC
   </div>
  );
 };
-const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onMarkContacted,onSaveProposal})=>{
+const FollowUpsView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSelectGC,onMarkContacted,onSaveProposal})=>{
  const [filter,setFilter]=useState('overdue');
  const [logOpen,setLogOpen]=useState(null);
  const [scriptOpen,setScriptOpen]=useState(null);
@@ -3273,13 +3355,29 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
   pool=pool.map(p=>{
    const od=overdueDays(p,settings)||0;
    const naOD=p.nextActionDate&&p.nextActionDate<=today?Math.round((new Date(today)-new Date(p.nextActionDate))/86400000)+1:0;
-   return{...p,_od:od,_naOD:naOD,_score:followUpScore(p,settings,gcWR.get(p.gc))+(naOD*5000),_gcWR:gcWR.get(p.gc)};
+   const eISO=(recentSent&&p.email)?recentSent[p.email.trim().toLowerCase()]:null;
+   return{...p,_od:od,_naOD:naOD,_emailedISO:eISO,_handled:!!(eISO&&eISO.slice(0,10)>(p.lastTouched||'')),_score:followUpScore(p,settings,gcWR.get(p.gc))+(naOD*5000),_gcWR:gcWR.get(p.gc)};
   });
-  if(filter==='overdue') pool=pool.filter(p=>p._od>0||p._naOD>0);
+  // [GRAPH 2026-06-19] Hide from Overdue any bid Paul has already emailed in Outlook more recently than our last logged touch.
+  if(filter==='overdue') pool=pool.filter(p=>(p._od>0||p._naOD>0)&&!p._handled);
   else if(filter==='large') pool=pool.filter(p=>p.bidAmount>=100000);
   else if(filter==='highWR') pool=pool.filter(p=>p._gcWR!==null&&p._gcWR>=0.5);
   return pool.sort((a,b)=>b._score-a._score);
- },[proposals,settings,filter,gcWR,today]);
+ },[proposals,settings,filter,gcWR,today,recentSent]);
+ // Count of overdue rows hidden because they were already emailed (shown as a reassurance in the header).
+ const hiddenHandled=useMemo(()=>{
+  if(filter!=='overdue'||!recentSent) return 0;
+  let n=0;
+  proposals.forEach(p=>{
+   if(!(OPEN_STATUSES.includes(p.status)||p.nextAction||p.nextActionDate)) return;
+   if(settings.yearFilter!=='All'&&!(p.submitted&&String(p.submitted).startsWith(String(settings.yearFilter)))) return;
+   const od=overdueDays(p,settings)||0; const naOD=(p.nextActionDate&&p.nextActionDate<=today)?1:0;
+   if(!(od>0||naOD>0)) return;
+   const e=p.email?recentSent[p.email.trim().toLowerCase()]:null;
+   if(e&&e.slice(0,10)>(p.lastTouched||'')) n++;
+  });
+  return n;
+ },[proposals,settings,filter,recentSent,today]);
  const openLog=(id,e)=>{e.stopPropagation();const p=proposals.find(x=>x.id===id);setLogOpen(id);setLogNote('');setLogNextAction(p?.nextAction||'');setLogNextDate(p?.nextActionDate||'');setTimeout(()=>logRef.current?.focus(),50);};
  const submitLog=(id)=>{
   const p=proposals.find(x=>x.id===id);
@@ -3291,7 +3389,7 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
   <div className="space-y-4">
    <div className="bg-gradient-to-br from-rose-50 to-amber-50 border border-rose-200 px-5 py-4">
     <div className="flex items-start gap-3"><Ico n="phone" size={18} className="text-rose-700 mt-1"/>
-     <div><h2 className="font-serif text-2xl text-stone-900">Today's Call Queue</h2><p className="text-sm text-stone-700 mt-1">{queue.length} {filter==='overdue'?'overdue follow-ups':filter==='done'?'recently contacted (newest first)':'bids'} · <strong>{money(queue.reduce((s,p)=>s+(p.bidAmount||0),0),true)}</strong> on the line. Sorted by priority: <span className="font-mono text-xs">bid × overdue × win-rate</span>.</p></div>
+     <div><h2 className="font-serif text-2xl text-stone-900">Today's Call Queue</h2><p className="text-sm text-stone-700 mt-1">{queue.length} {filter==='overdue'?'overdue follow-ups':filter==='done'?'recently contacted (newest first)':'bids'} · <strong>{money(queue.reduce((s,p)=>s+(p.bidAmount||0),0),true)}</strong> on the line.{hiddenHandled>0&&<span className="text-emerald-700 font-medium"> {hiddenHandled} already emailed — hidden.</span>} Sorted by priority: <span className="font-mono text-xs">bid × overdue × win-rate</span>.</p></div>
     </div>
    </div>
    {/* [UX 2026-06-11 — Ben] Filter row pins below the sticky nav while the queue scrolls. */}
@@ -3316,6 +3414,7 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
          {p.contact&&<span className="inline-flex items-center gap-1"><Ico n="user" size={13} className="text-stone-400"/>{p.contact}</span>}
          {p.phone&&<span className="inline-flex items-center gap-1 font-mono text-xs"><Ico n="phone" size={13} className="text-stone-400"/>{p.phone}</span>}
          <StatusPill status={p.status} size="xs"/>
+         {p._emailedISO&&<span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-sm bg-emerald-100 text-emerald-800 whitespace-nowrap" title={'You emailed this contact on '+p._emailedISO.slice(0,10)+' (synced from your Outlook Sent folder)'}>✓ Emailed {p._emailedISO.slice(0,10)}</span>}
          {p._od>0&&<span className="inline-flex items-center gap-1 text-rose-700 font-semibold text-xs"><Ico n="clock" size={13}/>{p._od}d overdue</span>}
          {p._gcWR!==null&&<span className="text-xs text-stone-500">GC WR <span className={p._gcWR>=0.5?'text-emerald-700 font-semibold':'text-stone-700'}>{pct(p._gcWR)}</span></span>}
          {p.bidAmount>0&&<span className="text-xs text-stone-500" title="Expected value = bid × GC win-rate">EV <span className="font-semibold text-stone-700">{money(expValue(p),true)}</span></span>}
@@ -3324,7 +3423,7 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
         {p.nextAction&&<div className="flex items-center gap-1.5 mt-1.5"><Ico n="arrowRight" size={11} className={p._naOD>0?'text-rose-600':'text-sky-600'}/><span className={`text-xs font-medium ${p._naOD>0?'text-rose-700':'text-sky-700'}`}>{p.nextAction}</span>{p.nextActionDate&&<span className={`text-[10px] font-mono ${p._naOD>0?'text-rose-600':'text-stone-400'}`}>· {p._naOD>0?`${p._naOD}d overdue`:p.nextActionDate===today?'Today':`${Math.round((new Date(p.nextActionDate)-new Date(today))/86400000)}d`}</span>}</div>}
         {p.notes&&<div className="text-xs text-stone-500 mt-1 line-clamp-1 italic">{p.notes.split('\n')[0]}</div>}
        </button>
-       <button onClick={e=>{e.stopPropagation(); if(isDNC(p.gc)) return; const _d=followUpDraft(p); openFollowUpEmail(p); onMarkContacted(p.id,'✉ Emailed follow-up · "'+_d.subject+'" → '+(p.email||'(no address)'));}} disabled={isDNC(p.gc)} className={`px-3 border-l border-stone-200 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0 ${isDNC(p.gc)?'text-stone-300 cursor-not-allowed':'hover:bg-sky-50 hover:text-sky-800 text-stone-600'}`} title={isDNC(p.gc)?'David handles this GC — auto-contact off':'Open the follow-up in Outlook & log it (Sent-folder sync confirms delivery)'}>✉<span className="hidden md:inline font-medium">Email</span></button>
+       <button onClick={e=>{e.stopPropagation(); if(isDNC(p.gc)) return; openFollowUpEmail(p); if(!msSignedIn()){const _d=followUpDraft(p); onMarkContacted(p.id,'✉ Emailed follow-up · "'+_d.subject+'" → '+(p.email||'(no address)'));}}} disabled={isDNC(p.gc)} className={`px-3 border-l border-stone-200 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0 ${isDNC(p.gc)?'text-stone-300 cursor-not-allowed':'hover:bg-sky-50 hover:text-sky-800 text-stone-600'}`} title={isDNC(p.gc)?'David handles this GC — auto-contact off':'Open the follow-up in Outlook & log it (Sent-folder sync confirms delivery)'}>✉<span className="hidden md:inline font-medium">Email</span></button>
        <button onClick={e=>{e.stopPropagation();setScriptOpen(scriptOpen===p.id?null:p.id);}} className={`px-3 border-l border-stone-200 transition-colors text-xs flex items-center gap-1.5 flex-shrink-0 ${scriptOpen===p.id?'bg-amber-50 text-amber-800':'hover:bg-amber-50 hover:text-amber-800 text-stone-600'}`} title="Show a phone call script"><Ico n="phone" size={15}/><span className="hidden md:inline font-medium">Script</span></button>
        <button onClick={e=>openLog(p.id,e)} className={`px-4 border-l border-stone-200 transition-colors text-sm flex items-center gap-1.5 flex-shrink-0 ${logOpen===p.id?'bg-emerald-50 text-emerald-800':'hover:bg-emerald-50 hover:text-emerald-800 text-stone-600'}`}>
         <Ico n="check2" size={15}/><span className="hidden md:inline text-xs font-medium">Log Call</span>
@@ -3353,6 +3452,62 @@ const FollowUpsView=({proposals,settings,gcStats,onSelectProposal,onSelectGC,onM
       )}
      </div>
     ))}
+   </div>
+  </div>
+ );
+};
+// [GRAPH 2026-06-19] Thread + smart-draft preview. Shows the whole Outlook conversation, the asks we
+// detected in their last email, and an editable reply — then creates a draft in Outlook (never sends).
+const ThreadPreviewModal=({state,onClose,onConfirm,currentEmail})=>{
+ const {p,loading,error,ctx}=state;
+ const [text,setText]=useState('');
+ const [sending,setSending]=useState(false);
+ useEffect(()=>{ setText(ctx?ctx.draftText:''); },[ctx]);
+ const me=(currentEmail||'').toLowerCase();
+ const fmt=(s)=>{ try{ return new Date(s).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }catch(e){ return s||''; } };
+ const go=async()=>{ setSending(true); try{ await onConfirm(p,ctx,text); } finally { setSending(false); } };
+ return (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+   <div className="bg-white w-full max-w-3xl rounded-sm shadow-xl flex flex-col" style={{maxHeight:'90vh'}} onClick={e=>e.stopPropagation()}>
+    <div className="px-5 py-3 border-b border-stone-200 flex items-start justify-between">
+     <div><h2 className="font-serif text-lg text-stone-900">Follow-up · {p.project||'(untitled)'}</h2>
+      <div className="text-xs text-stone-500 mt-0.5">{p.gc||'—'}{p.contact?' · '+p.contact:''}{p.email?' · '+p.email:''}</div></div>
+     <button onClick={onClose} className="text-stone-400 hover:text-stone-700 mt-1"><Ico n="x" size={18}/></button>
+    </div>
+    <div className="overflow-y-auto px-5 py-4 space-y-4">
+     {loading&&<div className="text-sm text-stone-500 py-8 text-center">Reading the conversation in your Outlook…</div>}
+     {error&&<div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-sm px-3 py-2">Couldn't read the thread: {error}. You can still edit and create the draft below.</div>}
+     {!loading&&ctx&&<React.Fragment>
+      {ctx.thread&&ctx.thread.length>0
+        ? <div>
+           <div className="text-[11px] uppercase tracking-widest text-stone-500 font-semibold mb-1.5">Conversation · {ctx.thread.length} message{ctx.thread.length===1?'':'s'}</div>
+           <div className="space-y-1.5 overflow-y-auto pr-1" style={{maxHeight:'13rem'}}>
+            {ctx.thread.map((m,i)=>{ const addr=((m.from&&m.from.emailAddress&&m.from.emailAddress.address)||'').toLowerCase(); const mine=addr===me; const nm=(m.from&&m.from.emailAddress&&m.from.emailAddress.name)||addr||'(unknown)'; const isTarget=ctx.target&&m.id===ctx.target.id;
+             return <div key={i} className={`text-xs rounded-sm border px-2.5 py-1.5 ${mine?'bg-sky-50 border-sky-100':isTarget?'bg-amber-50 border-amber-200':'bg-stone-50 border-stone-200'}`}>
+              <div className="flex justify-between gap-2"><span className="font-medium text-stone-700 truncate">{mine?'You':nm}{isTarget?' · replying to this':''}</span><span className="text-stone-400 flex-shrink-0">{fmt(m.receivedDateTime)}</span></div>
+              <div className="text-stone-600 mt-0.5" style={{display:'-webkit-box',WebkitLineClamp:3,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{m.bodyPreview||''}</div>
+             </div>; })}
+           </div>
+           {ctx.mode==='fresh'&&<div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-2.5 py-1.5 mt-1.5">No reply from them yet — this sends a fresh email to {ctx.email||'the contact'} rather than a reply into the thread.</div>}
+          </div>
+        : <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-3 py-2">No earlier email found with {ctx.email||'this contact'} — the address may have bounced. This will start a fresh email.</div>}
+      {ctx.questions&&ctx.questions.length>0&&<div>
+        <div className="text-[11px] uppercase tracking-widest text-stone-500 font-semibold mb-1.5">Their points to address · {ctx.questions.length}</div>
+        <ul className="list-disc pl-5 space-y-0.5 text-sm text-stone-700">{ctx.questions.map((q,i)=><li key={i}>{q}</li>)}</ul>
+       </div>}
+      <div>
+       <div className="text-[11px] uppercase tracking-widest text-stone-500 font-semibold mb-1.5">Draft reply <span className="text-stone-400 normal-case tracking-normal">— edit freely; fill in the “→” answers</span></div>
+       <textarea value={text} onChange={e=>setText(e.target.value)} rows={12} className="w-full text-sm border border-stone-300 rounded-sm px-3 py-2 focus:outline-none focus:border-stone-600" style={{fontFamily:'Calibri,Arial,sans-serif'}}/>
+      </div>
+     </React.Fragment>}
+    </div>
+    <div className="px-5 py-3 border-t border-stone-200 flex items-center justify-between gap-3">
+     <span className="text-[11px] text-stone-400">Creates a draft in your Outlook — nothing sends automatically.</span>
+     <div className="flex gap-2 flex-shrink-0">
+      <button onClick={onClose} className="text-sm px-3 py-1.5 rounded-sm border border-stone-300 text-stone-700 hover:bg-stone-50">Cancel</button>
+      <button onClick={go} disabled={loading||sending||!ctx} className="text-sm px-4 py-1.5 rounded-sm bg-stone-900 text-white hover:bg-stone-700 disabled:opacity-40">{sending?'Opening…':'✉ Open draft in Outlook'}</button>
+     </div>
+    </div>
    </div>
   </div>
  );
@@ -4692,7 +4847,7 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
       <div className="p-4 space-y-3">
        <div className="flex items-center gap-2 flex-wrap">
         <span className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mr-1">Next action →</span>
-        <button onClick={()=>{ if(isDNC(proposal.gc)) return; const _d=followUpDraft(proposal); openFollowUpEmail(proposal); onAddNote(proposal.id,'✉ Emailed follow-up · "'+_d.subject+'" → '+(proposal.email||'(no address)')); }} disabled={isDNC(proposal.gc)} className={`text-xs px-3 py-1.5 rounded-sm border flex items-center gap-1 ${isDNC(proposal.gc)?'text-stone-300 border-stone-200 cursor-not-allowed':'border-sky-300 text-sky-800 hover:bg-sky-50'}`} title={isDNC(proposal.gc)?'David handles this GC — no auto-contact':'Open the follow-up in Outlook & log it'}>✉ Email</button>
+        <button onClick={()=>{ if(isDNC(proposal.gc)) return; openFollowUpEmail(proposal); if(!msSignedIn()){const _d=followUpDraft(proposal); onAddNote(proposal.id,'✉ Emailed follow-up · "'+_d.subject+'" → '+(proposal.email||'(no address)'));} }} disabled={isDNC(proposal.gc)} className={`text-xs px-3 py-1.5 rounded-sm border flex items-center gap-1 ${isDNC(proposal.gc)?'text-stone-300 border-stone-200 cursor-not-allowed':'border-sky-300 text-sky-800 hover:bg-sky-50'}`} title={isDNC(proposal.gc)?'David handles this GC — no auto-contact':'Open the follow-up in Outlook & log it'}>✉ Email</button>
         <button onClick={()=>setShowScript(s=>!s)} className={`text-xs px-3 py-1.5 rounded-sm border flex items-center gap-1 ${showScript?'bg-amber-50 border-amber-300 text-amber-800':'border-stone-300 text-stone-700 hover:bg-stone-50'}`}>📞 Call script</button>
         {proposal.phone&&<a href={'tel:'+proposal.phone} className="text-xs px-3 py-1.5 rounded-sm border border-stone-300 text-stone-700 hover:bg-stone-50">📱 {proposal.phone}</a>}
        </div>
@@ -5859,6 +6014,8 @@ function App() {
  const [showNewProject, setShowNewProject] = useState(false);
  const [msAccount, setMsAccount] = useState(null);   // [GRAPH 2026-06-19] signed-in Microsoft account (for Outlook drafts)
  const [msBusy, setMsBusy] = useState(false);
+ const [recentSent, setRecentSent] = useState(null);    // [GRAPH 2026-06-19] email→last-sent ISO from Outlook Sent (queue freshness)
+ const [threadPreview, setThreadPreview] = useState(null); // [GRAPH 2026-06-19] {p,loading,error,ctx} for the thread+draft modal
  useEffect(()=>{
   (async()=>{
    try {
@@ -5934,7 +6091,39 @@ function App() {
  // [GRAPH 2026-06-19] Restore an existing Microsoft session on load (silent — no popup).
  useEffect(()=>{(async()=>{try{const app=await msalReady();if(app){const a=app.getActiveAccount()||app.getAllAccounts()[0];if(a){app.setActiveAccount(a);setMsAccount(a);}}}catch(e){console.warn('MSAL init',e);}})();},[]);
  const signInMicrosoft=async()=>{ setMsBusy(true); try{ await getGraphToken(); const app=await msalReady(); setMsAccount((app&&(app.getActiveAccount()||app.getAllAccounts()[0]))||null); }catch(e){ console.error(e); alert('Microsoft sign-in failed:\n'+(e.message||e)); } setMsBusy(false); };
- const signOutMicrosoft=async()=>{ try{ const app=await msalReady(); if(app){ await app.clearCache(); app.setActiveAccount(null); } }catch(e){ console.warn(e); } setMsAccount(null); };
+ const signOutMicrosoft=async()=>{ try{ const app=await msalReady(); if(app){ await app.clearCache(); app.setActiveAccount(null); } }catch(e){ console.warn(e); } setMsAccount(null); setRecentSent(null); };
+ // [GRAPH 2026-06-19] Open the in-app thread+draft preview, then create the Outlook draft on confirm.
+ const startFollowUp=async(p)=>{
+  setThreadPreview({p,loading:true,error:null,ctx:null});
+  try{ const ctx=await buildThreadContext(p); setThreadPreview({p,loading:false,error:null,ctx}); }
+  catch(e){ console.error('thread context failed',e); setThreadPreview({p,loading:false,error:(e&&e.message)||String(e),ctx:null}); }
+ };
+ const confirmFollowUp=async(p,ctx,finalText)=>{
+  const win=window.open('','_blank');   // open synchronously so the eventual webLink isn't popup-blocked
+  try{
+   const token=await getGraphToken();
+   const html=letterToHtml(finalText);
+   const subj=(ctx&&ctx.subject)||followUpDraft(p).subject;
+   let draft;
+   if(ctx&&ctx.mode==='reply'&&ctx.srcId){
+    const reply=await graphFetch(token,'/me/messages/'+ctx.srcId+'/createReply',{method:'POST'});
+    const quoted=(reply&&reply.body&&reply.body.content)||'';
+    draft=await graphFetch(token,'/me/messages/'+reply.id,{method:'PATCH',body:JSON.stringify({body:{contentType:'HTML',content:html+quoted}})});
+   } else {
+    const msg={subject:subj,body:{contentType:'HTML',content:html},toRecipients:(ctx&&ctx.email)?[{emailAddress:{address:ctx.email}}]:[]};
+    draft=await graphFetch(token,'/me/messages',{method:'POST',body:JSON.stringify(msg)});
+   }
+   const link=draft&&draft.webLink;
+   if(link){ if(win)win.location=link; else window.open(link,'_blank','noopener'); }
+   else { if(win)win.close(); alert('Draft saved to your Outlook Drafts — open Outlook to review and send.'); }
+   markContacted(p.id,'✉ Emailed follow-up · "'+subj+'" → '+(p.email||'(no address)'));
+   setThreadPreview(null);
+  }catch(e){ if(win)win.close(); console.error('create draft failed',e); alert('Could not create the Outlook draft:\n'+((e&&e.message)||e)); }
+ };
+ // Let the module-level email buttons open the React modal.
+ useEffect(()=>{ setThreadPreviewHandler((p)=>startFollowUp(p)); return ()=>setThreadPreviewHandler(null); },[]);
+ // Pull recent Outlook Sent mail so the queue can hide bids already emailed (#1).
+ useEffect(()=>{ if(!msAccount){ setRecentSent(null); return; } let off=false; (async()=>{ try{ const token=await getGraphToken(); const map=await fetchRecentSentMap(token); if(!off) setRecentSent(map); }catch(e){ console.warn('sent-items sync failed',e); } })(); return ()=>{off=true;}; },[msAccount]);
  const gcStats=useMemo(()=>computeGCStats(proposals),[proposals]);
  const selectedProposal=useMemo(()=>proposals.find(p=>p.id===selectedId)||null,[proposals,selectedId]);
  const selectedLineItems=useMemo(()=>lineItems.filter(l=>l.proposalId===selectedId),[lineItems,selectedId]);
@@ -6249,13 +6438,13 @@ function App() {
    <main className="px-5 py-5" style={{maxWidth:'1600px',margin:'0 auto'}}>
     {view==='dashboard'&&<DashboardView proposals={proposals} settings={settings} gcStats={gcStats} estimateItems={estimateItems} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
     {view==='pipeline'&&<PipelineView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
-    {view==='followups'&&<FollowUpsView proposals={proposals} settings={settings} gcStats={gcStats} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted} onSaveProposal={saveProposal}/>}
+    {view==='followups'&&<FollowUpsView proposals={proposals} settings={settings} gcStats={gcStats} recentSent={recentSent} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted} onSaveProposal={saveProposal}/>}
     {view==='gcs'&&!selectedGC&&<GCIntelView gcStats={gcStats} proposals={proposals} onSelectGC={setSelectedGC} settings={settings}/>}
     {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
     {view==='active'&&<ActiveJobsView proposals={proposals} estimateItems={estimateItems} estimates={estimates} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
     {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal} sb={sb} estimateItems={estimateItems} onImported={reloadData}/>}
     {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSaveProposal={saveProposal}/>}
-    {view==='today'&&<TodayView proposals={proposals} settings={settings} gcStats={gcStats} onSelectProposal={setSelectedId} onSaveProposal={saveProposal} onCloneToWinner={cloneToWinner}/>}
+    {view==='today'&&<TodayView proposals={proposals} settings={settings} gcStats={gcStats} recentSent={recentSent} onSelectProposal={setSelectedId} onSaveProposal={saveProposal} onCloneToWinner={cloneToWinner}/>}
    </main>
    {selectedProposal&&<ProjectDrawer
     proposal={selectedProposal}
@@ -6285,6 +6474,7 @@ function App() {
     gcStats={gcStats}
    />}
    {showNewProject&&<NewProjectModal onClose={()=>setShowNewProject(false)} onSave={addNewProject} allGCs={Array.from(new Set(proposals.map(p=>p.gc).filter(Boolean))).sort()} proposals={proposals}/>}
+   {threadPreview&&<ThreadPreviewModal state={threadPreview} onClose={()=>setThreadPreview(null)} onConfirm={confirmFollowUp} currentEmail={currentUserEmail()}/>}
   </div>
  );
 }
