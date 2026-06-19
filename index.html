@@ -2927,12 +2927,57 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
 };
 const DNC_GCS=['bald hill','bbl','benderson','gray','tandem','bandes']; // David's personal relationships - shown but never auto-contacted (Bandes added 2026-06-17 — David's personal connection)
 const isDNC=(gc)=>{ const g=(gc||'').toLowerCase(); return DNC_GCS.some(k=>g.includes(k)); };
+// [OUTLOOK INTEL L2 2026-06-19 — Paul] Read the latest reply (from nextAction + notes, written by the
+// sync reconciler) and pick a context-appropriate draft instead of one generic letter. Also pulls a
+// named winner out of the text for the "who got it?" ask. Email goes to p.email, which the reconciler
+// updates when a contact gives a new address — so replies route to the latest known address.
+const WINNER_RE=/(?:awarded to|went (?:to|with)|lost to|winner[:\s-]+|bought by|going with)\s+([A-Z][A-Za-z0-9&'\- ]{1,40})/;
+const analyzeReply=(p)=>{
+ const na=(p.nextAction||''); const notes=(p.notes||'');
+ const t=(na+' '+notes).toLowerCase();
+ const wm=(notes+' '+na).match(WINNER_RE);
+ let winner=wm?wm[1].trim():null;
+ // Trim run-on text the broad capture can grab (e.g. "...Construction. New email …" or "...ABC but they may rebid").
+ if(winner){ winner=winner.split(/\s+(?:new\s+email|e-?mail|phone|tel\b|please\b|but\b|\()/i)[0].trim().replace(/[.,;:\-\s]+$/,''); }
+ let state='followup';
+ if(/re-?pitch clone/.test(t)) state='pitch';
+ else if(/remove me|take me off|do not contact|don'?t contact|unsubscribe|stop emailing|no longer (?:with|at|here)|wrong person/.test(t)) state='removal';
+ else if(/not awarded|awarded to (?:another|someone)|another (?:gc|contractor)|went (?:with|to)|lost to|did not (?:get|win)|unsuccessful|we lost/.test(t)) state='lost';
+ else if(/too high|over budget|sharpen|price is high|come down|beat (?:the|their)|more competitive|number.*high/.test(t)) state='price';
+ else if(/on hold|hold till|holding|delayed|pushed|postpon|on pause/.test(t)) state='hold';
+ else if(/\?|question|clarif|can you (?:send|provide|confirm|get)|please (?:send|provide|forward)|need (?:the|a|your|updated)|resend|send (?:over|me)|scope|spec|submittal|sample|breakdown/.test(t)) state='question';
+ return {state:state,winner:winner};
+};
 const followUpDraft=(p)=>{
  const first=((p.contact||'').trim().split(' ')[0])||'there';
  const proj=p.project||'your project';
- const subject='Following up - '+proj+(p.id?' (#'+p.id+')':'');
- const body='Hi '+first+',\n\nChecking in on '+proj+'. We submitted our flooring pricing and I want to make sure AMS is still in the running and see where things stand.\n\nA few quick things that help us:\n- Is the project still moving, and any updated timeline?\n- Anything shifted on scope we should re-price?\n- If our number needs to be sharper to compete, I am glad to take a look.\n\nWe would value the work and we are ready to go when you are. Appreciate any update you can share.\n\nBest,\nPaul Kidman\nAMS Floors\n941-238-6614 | www.amsfloors.com';
- return {subject:subject,body:body};
+ const tag=(p.id?' (#'+String(p.id).replace(/-RP\d*$/,'')+')':'');
+ const sig='\n\nBest,\nPaul Kidman\nAMS Floors\n941-238-6614 | www.amsfloors.com';
+ const a=analyzeReply(p); const state=a.state; const winner=a.winner;
+ let subject,body;
+ if(state==='pitch'){
+  subject='AMS Floors - flooring proposal for '+proj+tag;
+  body='Hi '+first+',\n\nI understand '+(p.gc||'your team')+' was awarded '+proj+' - congratulations. AMS Floors bid the flooring scope on this project and we already have full pricing and takeoff ready to go.\n\nWe would welcome the chance to handle the flooring for you. I can send our proposal over today - is this the right address for it, and who should I be working with on the schedule?\n\nWe work with most of the GCs in the area and would value the opportunity to support your team on this one.'+sig;
+ } else if(state==='removal'){
+  subject='Re: '+proj+tag;
+  body='Hi '+first+',\n\nThank you for letting me know - I have updated our records so you will not get further follow-ups on this from me. I appreciate you taking the time to reply.\n\nIf you do not mind one quick question: did '+proj+' get awarded yet, and to whom? We would love the chance to support the winning contractor on the flooring side.\n\nEither way, thank you again.'+sig;
+ } else if(state==='lost'){
+  subject='Re: '+proj+tag;
+  body='Hi '+first+',\n\nThanks for the update, and congratulations on moving '+proj+' forward.'+(winner?' Sounds like it went to '+winner+' - well deserved.':'')+' Sorry we did not land this one.\n\nIf you are able to share who was awarded the project, I would appreciate it - we work with most of the GCs in the area and may be able to support them on the flooring scope. And please keep AMS in mind for the next one.'+sig;
+ } else if(state==='price'){
+  subject='Re: '+proj+tag;
+  body='Hi '+first+',\n\nThanks for the honest feedback on our number. I would like the chance to take another look - if you can point me to where we need to be, or which line items are driving it, I will sharpen our pricing and get a revised proposal back to you quickly.\n\nWe want this project and we are ready to work with you to get there.'+sig;
+ } else if(state==='hold'){
+  subject='Re: '+proj+tag;
+  body='Hi '+first+',\n\nThanks for the update - understood that '+proj+' is on hold for now. I will keep our pricing on file so we are ready to move the moment it picks back up.\n\nIf you have a rough sense of timing, let me know and I will check back at the right time. Appreciate it.'+sig;
+ } else if(state==='question'){
+  subject='Re: '+proj+tag;
+  body='Hi '+first+',\n\nThanks for getting back to me on '+proj+'. Happy to help and I will get you what you need.\n\n[Answer their question / attach the requested item here.]\n\nIf you can confirm anything else you need from us, I will turn it around right away. Appreciate you keeping AMS in the mix.'+sig;
+ } else {
+  subject='Following up - '+proj+tag;
+  body='Hi '+first+',\n\nChecking in on '+proj+'. We submitted our flooring pricing and I want to make sure AMS is still in the running and see where things stand.\n\nA few quick things that help us:\n- Is the project still moving, and any updated timeline?\n- Anything shifted on scope we should re-price?\n- If our number needs to be sharper to compete, I am glad to take a look.\n\nWe would value the work and we are ready to go when you are. Appreciate any update you can share.'+sig;
+ }
+ return {subject:subject,body:body,state:state,winner:winner};
 };
 const callScript=(p)=>{
  const first=((p.contact||'').trim().split(' ')[0])||'there';
@@ -3001,19 +3046,18 @@ const expValue=(p)=>Math.round((p.bidAmount||0)*(p._gcWR!=null?p._gcWR:0.30));
 // [📥 TODAY 2026-06-17 — Paul] Action cockpit. Reads `proposals` only (no new table).
 // Three lists: replies needing a response (reconciler sets nextAction "💬 Reply received…"),
 // lost bids whose winner is named (the #1570-FJ re-pitch play), and near-due leads/opps.
-const TodayView=({proposals,settings,gcStats,onSelectProposal,onSaveProposal})=>{
+const TodayView=({proposals,settings,gcStats,onSelectProposal,onSaveProposal,onCloneToWinner})=>{
  const today=todayStr();
  const horizon=(()=>{const d=new Date();d.setDate(d.getDate()+14);return d.toISOString().slice(0,10);})();
  const wrOf=(gc)=>{const g=(gcStats||[]).find(x=>x.gc===gc);return g&&g.winRate!=null?g.winRate:null;};
  const ev=(p)=>{const w=wrOf(p.gc);return Math.round((p.bidAmount||0)*(w!=null?Math.max(w,0.1):0.30));};
- const WINNER_RE=/(?:awarded to|went to|lost to|went with|winner[:\s-]+)\s*([A-Z][A-Za-z0-9&.\-' ]{2,40})/;
 
  const replies=useMemo(()=>proposals
    .filter(p=>/reply received/i.test(p.nextAction||''))
    .sort((a,b)=>ev(b)-ev(a)),[proposals,gcStats]);
  const rePitch=useMemo(()=>proposals
    .filter(p=>LOST_STATUSES.includes(p.status))
-   .map(p=>{const m=((p.notes||'')+' '+(p.nextAction||'')).match(WINNER_RE);return m?{...p,_winner:m[1].trim().replace(/[.,;]$/,'')}:null;})
+   .map(p=>{const w=analyzeReply(p).winner;return w?{...p,_winner:w}:null;})
    .filter(Boolean)
    .sort((a,b)=>(b.bidAmount||0)-(a.bidAmount||0)),[proposals]);
  const newOpps=useMemo(()=>proposals
@@ -3086,8 +3130,9 @@ const TodayView=({proposals,settings,gcStats,onSelectProposal,onSaveProposal})=>
        <div className="text-xs text-stone-500 mt-0.5">Lost as {p.gc||'—'} · {money(p.bidAmount,true)}</div>
        <div className="text-sm text-stone-700 mt-1.5">Winner: <span className="font-medium text-violet-800">{p._winner}</span> — clone &amp; re-pitch to them? <span className="text-stone-400">(your call — the #1570-FJ play)</span></div>
       </button>
-      <div className="flex items-center gap-1.5 mt-2.5">
-       <Btn onClick={()=>onSelectProposal(p.id)} cls="bg-stone-900 text-white hover:bg-stone-700">Open bid</Btn>
+      <div className="flex items-center gap-1.5 mt-2.5 flex-wrap">
+       <Btn onClick={()=>{if(window.confirm('Clone this bid to '+p._winner+' as a new Bidding project (#'+String(p.id).replace(/-RP\d*$/,'')+'-RP)?\n\nIt copies the project, scope and pricing under '+p._winner+'. You then add their contact and send the pitch.')) onCloneToWinner&&onCloneToWinner(p,p._winner);}} cls="bg-violet-700 text-white hover:bg-violet-600">♻️ Clone to {p._winner}</Btn>
+       <Btn onClick={()=>onSelectProposal(p.id)} cls="bg-stone-100 text-stone-700 hover:bg-stone-200">Open bid</Btn>
       </div>
      </div>
     ))}
@@ -5891,6 +5936,28 @@ function App() {
   const {error}=await sb.from('proposals').insert(toDbProposal(r));
   if(error){ setProposals(ps=>ps.filter(p=>p.id!==r.id)); alert('Could not save the new project — '+(error.message||error.code||'rejected by database')+'\n\nIt has been removed from the list (it was never saved to the database).'); }
  };
+ // [OUTLOOK INTEL L2 2026-06-19 — Paul] The #1570-FJ re-pitch play: we lost a bid but know who won.
+ // Clone it under the winning GC (same project/scope/pricing fields), reset the contact, set a next
+ // action to find the PM and send, then open it so Paul can add the contact and pitch. Reversible —
+ // it's just a new Bidding record (delete it like any project). Mirrors addNewProject's insert+rollback.
+ const cloneToWinner=async(p,winner)=>{
+  const w=(winner||'').trim();
+  if(!w){ alert('No winner name was found in this bid to clone to.'); return; }
+  const today=todayStr();
+  const base=String(p.id).replace(/-RP\d*$/,'');
+  let nid=base+'-RP'; let n=2;
+  while(proposals.some(x=>String(x.id)===nid)){ nid=base+'-RP'+n; n++; }
+  const now=new Date().toISOString();
+  const clone={...p,id:nid,gc:w,contact:'',email:'',phone:'',status:'Bidding',
+   lostReason:null,lostToPrice:null,wonByPrice:null,submitted:null,lastTouched:today,
+   nextAction:'Find PM at '+w+' & send our flooring proposal',nextActionDate:today,
+   notes:'['+today+'] ♻️ Re-pitch clone of #'+p.id+' (lost as '+(p.gc||'?')+', awarded to '+w+'). Same scope/pricing — find the right contact at '+w+' and send.\n'+(p.notes||''),
+   createdAt:now,updatedAt:now};
+  setProposals(ps=>[clone,...ps]);
+  const {error}=await sb.from('proposals').insert(toDbProposal(clone));
+  if(error){ setProposals(ps=>ps.filter(x=>x.id!==nid)); alert('Could not create the re-pitch clone — '+(error.message||error.code||'rejected by database')); return; }
+  setSelectedId(nid);
+ };
  const markContacted=async(id,note)=>{
   const stamp=todayStr();
   const entry=note?`[${stamp}] ${note}`:`[${stamp}] Called / contacted`;
@@ -6093,7 +6160,7 @@ function App() {
     {view==='active'&&<ActiveJobsView proposals={proposals} estimateItems={estimateItems} estimates={estimates} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
     {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal} sb={sb} estimateItems={estimateItems} onImported={reloadData}/>}
     {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSaveProposal={saveProposal}/>}
-    {view==='today'&&<TodayView proposals={proposals} settings={settings} gcStats={gcStats} onSelectProposal={setSelectedId} onSaveProposal={saveProposal}/>}
+    {view==='today'&&<TodayView proposals={proposals} settings={settings} gcStats={gcStats} onSelectProposal={setSelectedId} onSaveProposal={saveProposal} onCloneToWinner={cloneToWinner}/>}
    </main>
    {selectedProposal&&<ProjectDrawer
     proposal={selectedProposal}
