@@ -3148,6 +3148,48 @@ function composeReplyBody(p,target,questions){
  body+='If anything else would help, just let me know and I will turn it around right away. Appreciate you keeping AMS in the mix.'+SIG;
  return body;
 }
+// [CC AUTO-UPDATE 2026-06-19 #2 — Paul] Read the contact's latest inbound email and PROPOSE record updates
+// (new email/phone/name, status change, on-hold snooze). Returns a list the modal shows with checkboxes —
+// NOTHING is written until Paul ticks it and confirms. We never silently change his data.
+const PHONE_RE=/(?:\+?1[ .\-]?)?\(?\d{3}\)?[ .\-]?\d{3}[ .\-]?\d{4}/g;
+const onlyDigits=s=>String(s||'').replace(/\D/g,'');
+const AMS_PHONE_DIGITS='9412386614';
+const fmtPhone=d=>d.length===10?d.replace(/(\d{3})(\d{3})(\d{4})/,'$1-$2-$3'):d;
+function detectCcUpdates(p,lastIn){
+ const out=[];
+ if(!lastIn) return out;
+ const ea=(lastIn.from&&lastIn.from.emailAddress)||{};
+ const fromAddr=String(ea.address||'').trim();
+ const fromName=String(ea.name||'').trim();
+ const replyText=splitOffQuote(htmlToText((lastIn.body&&lastIn.body.content)||lastIn.bodyPreview||''));
+ // An automated notification (no-reply / bid-platform daemon) isn't the contact — propose nothing from it.
+ if(/no-?reply|do-?not-?reply|notifications?@|mailer-daemon|postmaster/i.test(fromAddr)) return out;
+ // 1) Contact EMAIL — they wrote from an address we don't have on file
+ if(fromAddr && /@/.test(fromAddr) && fromAddr.toLowerCase()!==String(p.email||'').trim().toLowerCase()){
+  out.push({field:'email',label:'Contact email',from:p.email||'(none)',to:fromAddr,on:true});
+ }
+ // 2) Contact NAME — fill if blank (safe, default on); if it differs, offer but default OFF (display names are noisy)
+ if(fromName && !/@/.test(fromName) && /[A-Za-z]/.test(fromName)){
+  const cur=String(p.contact||'').trim();
+  if(!cur) out.push({field:'contact',label:'Contact name',from:'(none)',to:fromName,on:true});
+  else if(cur.toLowerCase()!==fromName.toLowerCase()) out.push({field:'contact',label:'Contact name',from:cur,to:fromName,on:false});
+ }
+ // 3) PHONE in their signature (ignore Paul's own number)
+ const phones=(replyText.match(PHONE_RE)||[]).map(onlyDigits).filter(d=>d.length===10 && d!==AMS_PHONE_DIGITS);
+ if(phones.length){
+  const np=phones[0];
+  if(onlyDigits(p.phone)!==np) out.push({field:'phone',label:'Contact phone',from:p.phone||'(none)',to:fmtPhone(np),on:!String(p.phone||'').trim()});
+ }
+ // 4) STATUS / on-hold signal from what they actually wrote
+ const a=analyzeReply(replyText);
+ if(a.state==='lost' && !LOST_STATUSES.includes(p.status)){
+  out.push({field:'status',label:'Project status',from:p.status||'(none)',to:'Lost',on:true});
+ } else if(a.state==='hold'){
+  const snooze=new Date(Date.now()+45*86400000).toISOString().slice(0,10);
+  if(String(p.nextActionDate||'')<snooze) out.push({field:'nextActionDate',label:'On hold — next follow-up',from:p.nextActionDate||'(none)',to:snooze,on:true});
+ }
+ return out;
+}
 // Everything the modal needs: the thread, the message to answer, detected asks, and a first-draft.
 async function buildThreadContext(p){
  const token=await getGraphToken();
@@ -3188,7 +3230,8 @@ async function buildThreadContext(p){
  } else {
   const d=followUpDraft(p,null,true); draftText=d.body; subject=d.subject;
  }
- return {email,thread,target,questions,draftText,subject,mode,daysSinceOut,lastOutDate:dt(lastOut),srcId:target&&target.id};
+ const ccUpdates=detectCcUpdates(p,lastIn);   // record changes to PROPOSE (never auto-applied) [#2]
+ return {email,thread,target,questions,draftText,subject,mode,daysSinceOut,lastOutDate:dt(lastOut),ccUpdates,srcId:target&&target.id};
 }
 // email(lowercased) -> most recent date Paul SENT them something. Used to hide bids already emailed (#1).
 async function fetchRecentSentMap(token){
@@ -3517,10 +3560,11 @@ const ThreadPreviewModal=({state,onClose,onConfirm,currentEmail})=>{
  const {p,loading,error,ctx}=state;
  const [text,setText]=useState('');
  const [sending,setSending]=useState(false);
- useEffect(()=>{ setText(ctx?ctx.draftText:''); },[ctx]);
+ const [sel,setSel]=useState({});   // which proposed CC updates are ticked [#2]
+ useEffect(()=>{ setText(ctx?ctx.draftText:''); setSel((ctx&&ctx.ccUpdates)?Object.fromEntries(ctx.ccUpdates.map((u,i)=>[i,!!u.on])):{}); },[ctx]);
  const me=(currentEmail||'').toLowerCase();
  const fmt=(s)=>{ try{ return new Date(s).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }catch(e){ return s||''; } };
- const go=async()=>{ setSending(true); try{ await onConfirm(p,ctx,text); } finally { setSending(false); } };
+ const go=async()=>{ setSending(true); try{ const upd=((ctx&&ctx.ccUpdates)||[]).filter((u,i)=>sel[i]); await onConfirm(p,ctx,text,upd); } finally { setSending(false); } };
  return (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
    <div className="bg-white w-full max-w-3xl rounded-sm shadow-xl flex flex-col" style={{maxHeight:'90vh'}} onClick={e=>e.stopPropagation()}>
@@ -3551,6 +3595,18 @@ const ThreadPreviewModal=({state,onClose,onConfirm,currentEmail})=>{
       {ctx.questions&&ctx.questions.length>0&&<div>
         <div className="text-[11px] uppercase tracking-widest text-stone-500 font-semibold mb-1.5">Their points to address · {ctx.questions.length}</div>
         <ul className="list-disc pl-5 space-y-0.5 text-sm text-stone-700">{ctx.questions.map((q,i)=><li key={i}>{q}</li>)}</ul>
+       </div>}
+      {ctx.ccUpdates&&ctx.ccUpdates.length>0&&<div className="bg-violet-50 border border-violet-200 rounded-sm px-3 py-2">
+        <div className="text-[11px] uppercase tracking-widest text-violet-700 font-semibold mb-1.5">Update this bid from their email? · tick what to save</div>
+        <div className="space-y-1">
+         {ctx.ccUpdates.map((u,i)=>(
+          <label key={i} className="flex items-start gap-2 text-sm text-stone-700 cursor-pointer">
+           <input type="checkbox" checked={!!sel[i]} onChange={e=>setSel(s=>({...s,[i]:e.target.checked}))} className="mt-0.5"/>
+           <span><span className="font-medium">{u.label}:</span> <span className="text-stone-400 line-through">{u.from}</span> → <span className="text-violet-800 font-medium">{u.to}</span></span>
+          </label>
+         ))}
+        </div>
+        <div className="text-[10px] text-violet-600 mt-1">Saved to the Command Center only when you click the button below — untick anything you don't want.</div>
        </div>}
       <div>
        <div className="text-[11px] uppercase tracking-widest text-stone-500 font-semibold mb-1.5">Draft reply <span className="text-stone-400 normal-case tracking-normal">— edit freely; fill in the “→” answers</span></div>
@@ -6245,7 +6301,7 @@ function App() {
   try{ const ctx=await buildThreadContext(p); setThreadPreview({p,loading:false,error:null,ctx}); }
   catch(e){ console.error('thread context failed',e); setThreadPreview({p,loading:false,error:(e&&e.message)||String(e),ctx:null}); }
  };
- const confirmFollowUp=async(p,ctx,finalText)=>{
+ const confirmFollowUp=async(p,ctx,finalText,updates)=>{
   const win=window.open('','_blank');   // open synchronously so the eventual webLink isn't popup-blocked
   try{
    const token=await getGraphToken();
@@ -6263,7 +6319,11 @@ function App() {
    const link=draft&&draft.webLink;
    if(link){ if(win)win.location=link; else window.open(link,'_blank','noopener'); }
    else { if(win)win.close(); alert('Draft saved to your Outlook Drafts — open Outlook to review and send.'); }
-   markContacted(p.id,'✉ Emailed follow-up · "'+subj+'" → '+(p.email||'(no address)'));
+   // Log the send AND apply any CC updates Paul ticked — in ONE write (no save races) [#2]
+   const noteLines=['✉ Emailed follow-up · "'+subj+'" → '+(p.email||'(no address)')];
+   const changes={};
+   (updates||[]).forEach(u=>{ changes[u.field]=u.to; noteLines.push('🔄 '+u.label+' updated: '+u.from+' → '+u.to+' (from their email)'); });
+   applyFollowUpResult(p.id,noteLines,changes);
    setThreadPreview(null);
   }catch(e){ if(win)win.close(); console.error('create draft failed',e); alert('Could not create the Outlook draft:\n'+((e&&e.message)||e)); }
  };
@@ -6384,6 +6444,16 @@ function App() {
   const {error}=await sb.from('proposals').insert(toDbProposal(clone));
   if(error){ setProposals(ps=>ps.filter(x=>x.id!==nid)); alert('Could not create the re-pitch clone — '+(error.message||error.code||'rejected by database')); return; }
   setSelectedId(nid);
+ };
+ // [#2] One atomic write: prepend dated log line(s) AND merge any confirmed field changes (status/email/phone/etc).
+ const applyFollowUpResult=(id,noteLines,changes)=>{
+  const stamp=todayStr();
+  setProposals(ps=>ps.map(p=>{ if(p.id!==id) return p;
+   const entry=(noteLines||[]).filter(Boolean).map(n=>`[${stamp}] ${n}`).join('\n');
+   const merged={...p,...(changes||{}),lastTouched:stamp,notes:entry?(p.notes?`${entry}\n${p.notes}`:entry):p.notes,updatedAt:new Date().toISOString()};
+   sb.from('proposals').upsert(toDbProposal(merged));
+   return merged;
+  }));
  };
  const markContacted=async(id,note)=>{
   const stamp=todayStr();
