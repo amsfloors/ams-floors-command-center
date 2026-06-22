@@ -3409,7 +3409,11 @@ const isTodayRePitch=(p)=>LOST_STATUSES.includes(p.status)&&!!analyzeReply((p.ne
 const isTodayNewOpp=(p,recentSent,today,horizon)=>OPEN_STATUSES.includes(p.status)&&p.nextActionDate&&p.nextActionDate>=today&&p.nextActionDate<=horizon&&!todayHandled(p,recentSent);
 const todayActionCount=(proposals,recentSent)=>{const today=todayStr();const horizon=todayHorizonStr();return (proposals||[]).filter(p=>isTodayReply(p,recentSent)||isTodayRePitch(p)||isTodayNewOpp(p,recentSent,today,horizon)).length;};
 // [COCKPIT 2026-06-22 — Ben] New decision predicates for morning briefing sections.
-const isWinToBook=(p)=>OPEN_STATUSES.includes(p.status)&&/\bawarded\b|\bwe (won|got)\b|likely awarded|notice to proceed/i.test((p.nextAction||'')+' '+(p.notes||''))&&!/not awarded|\blost\b|went with|going with/i.test((p.nextAction||'')+' '+(p.notes||''));
+// [WIN/LOSS FIX 2026-06-22 — Paul] "awarded to ANOTHER contractor" is a LOSS, not a win. The old guard
+// only blocked "not awarded/lost/went with/going with", so any sentence with the word "awarded" landed in
+// "Wins to book" — including losses. Now we also defer to analyzeReply (the canonical reply-reader, which
+// already tags "awarded to <someone else>" as lost), so a loss can never surface as a bookable win.
+const isWinToBook=(p)=>{if(!OPEN_STATUSES.includes(p.status))return false;const txt=(p.nextAction||'')+' '+(p.notes||'');return /\bawarded\b|\bwe (won|got)\b|likely awarded|notice to proceed/i.test(txt)&&!/not awarded|\blost\b|went with|going with/i.test(txt)&&analyzeReply(txt).state!=='lost';};
 const isLossToClear=(p)=>OPEN_STATUSES.includes(p.status)&&/\blost\b|not awarded|went with|going with|awarded to|project (closed|cancell)|no longer/i.test((p.nextAction||'')+' '+(p.notes||''));
 const isBigQuiet=(p,today)=>OPEN_STATUSES.includes(p.status)&&(p.bidAmount||0)>=250000&&(!p.nextActionDate||p.nextActionDate<today);
 // [PHASE 1 2026-06-22 — Ben] ONE canonical "needs follow-up / overdue" test, shared by the Today
