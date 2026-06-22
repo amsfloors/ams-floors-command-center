@@ -3319,6 +3319,10 @@ const isTodayReply=(p,recentSent)=>/reply received/i.test(p.nextAction||'')&&!to
 const isTodayRePitch=(p)=>LOST_STATUSES.includes(p.status)&&!!analyzeReply((p.nextAction||'')+' '+(p.notes||'')).winner;
 const isTodayNewOpp=(p,recentSent,today,horizon)=>OPEN_STATUSES.includes(p.status)&&p.nextActionDate&&p.nextActionDate>=today&&p.nextActionDate<=horizon&&!todayHandled(p,recentSent);
 const todayActionCount=(proposals,recentSent)=>{const today=todayStr();const horizon=todayHorizonStr();return (proposals||[]).filter(p=>isTodayReply(p,recentSent)||isTodayRePitch(p)||isTodayNewOpp(p,recentSent,today,horizon)).length;};
+// [COCKPIT 2026-06-22 — Ben] New decision predicates for morning briefing sections.
+const isWinToBook=(p)=>OPEN_STATUSES.includes(p.status)&&/\bawarded\b|\bwe (won|got)\b|likely awarded|notice to proceed/i.test((p.nextAction||'')+' '+(p.notes||''))&&!/not awarded|\blost\b|went with|going with/i.test((p.nextAction||'')+' '+(p.notes||''));
+const isLossToClear=(p)=>OPEN_STATUSES.includes(p.status)&&/\blost\b|not awarded|went with|going with|awarded to|project (closed|cancell)|no longer/i.test((p.nextAction||'')+' '+(p.notes||''));
+const isBigQuiet=(p,today)=>OPEN_STATUSES.includes(p.status)&&(p.bidAmount||0)>=250000&&(!p.nextActionDate||p.nextActionDate<today);
 const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveProposal,onCloneToWinner})=>{
  const today=todayStr();
  const horizon=(()=>{const d=new Date();d.setDate(d.getDate()+14);return d.toISOString().slice(0,10);})();
@@ -3337,6 +3341,24 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
  const newOpps=useMemo(()=>proposals
    .filter(p=>isTodayNewOpp(p,recentSent,today,horizon))
    .sort((a,b)=>(a.nextActionDate||'9999-99-99').localeCompare(b.nextActionDate||'9999-99-99')),[proposals,recentSent]);
+ // [COCKPIT 2026-06-22 — Ben] New decision lists, priority-ordered so a bid appears in only one section.
+ const winsToBook=useMemo(()=>proposals
+   .filter(p=>isWinToBook(p))
+   .sort((a,b)=>(b.bidAmount||0)-(a.bidAmount||0)),[proposals]);
+ const winIds=useMemo(()=>new Set(winsToBook.map(p=>p.id)),[winsToBook]);
+ const lossesToClear=useMemo(()=>proposals
+   .filter(p=>!winIds.has(p.id)&&isLossToClear(p))
+   .sort((a,b)=>(b.bidAmount||0)-(a.bidAmount||0)),[proposals,winIds]);
+ const lossIds=useMemo(()=>new Set(lossesToClear.map(p=>p.id)),[lossesToClear]);
+ const replyIds=useMemo(()=>new Set(replies.map(p=>p.id)),[replies]);
+ const bigQuiet=useMemo(()=>proposals
+   .filter(p=>!winIds.has(p.id)&&!lossIds.has(p.id)&&!replyIds.has(p.id)&&isBigQuiet(p,today))
+   .sort((a,b)=>(b.bidAmount||0)-(a.bidAmount||0)),[proposals,winIds,lossIds,replyIds,today]);
+ // [COCKPIT 2026-06-22 — Ben] Where I stand stat cards.
+ const openPipeline=useMemo(()=>{const ps=proposals.filter(p=>OPEN_STATUSES.includes(p.status));return{count:ps.length,value:ps.reduce((s,p)=>s+(p.bidAmount||0),0)};},[proposals]);
+ const liveWinnable=useMemo(()=>{const ps=proposals.filter(p=>p.status==='Bidding'||(isTodayReply(p,recentSent)&&analyzeReply((p.nextAction||'')+' '+(p.notes||'')).state!=='lost'));return ps.reduce((s,p)=>s+(p.bidAmount||0),0);},[proposals,recentSent]);
+ const overdueList=useMemo(()=>proposals.filter(p=>OPEN_STATUSES.includes(p.status)&&p.nextActionDate&&p.nextActionDate<today),[proposals,today]);
+ const leadsToPrice=useMemo(()=>proposals.filter(p=>p.status==='Lead').length,[proposals]);
 
  // one-write helpers (single upsert each — no double-write races)
  const logSent=(p)=>onSaveProposal({...p,notes:`[${today}] ✉ Sent reply\n`+(p.notes||''),lastTouched:today,nextAction:null});
@@ -3354,6 +3376,12 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
  const markHold=(p)=>{const d=new Date();d.setDate(d.getDate()+45);const revisit=d.toISOString().slice(0,10);
    onSaveProposal({...p,nextActionDate:revisit,nextAction:`⏸ On hold — revisit ${revisit}`,lastTouched:today,
      notes:`[${today}] ⏸ Marked on-hold · revisit ${revisit} (Today)\n`+(p.notes||'')});};
+ const markWon=(p)=>{
+   onSaveProposal({...p,status:'Awarded',lastTouched:today,
+     notes:`[${today}] ✅ Booked as Awarded (Today)\n`+(p.notes||'')});};
+ const markContacted=(p)=>{const d=new Date();d.setDate(d.getDate()+14);const fu=d.toISOString().slice(0,10);
+   onSaveProposal({...p,lastTouched:today,nextActionDate:fu,nextAction:`📞 Contacted ${today} — follow up ${fu}`,
+     notes:`[${today}] 📞 Marked contacted, follow-up scheduled (Today)\n`+(p.notes||'')});};
 
  const Btn=({onClick,disabled,title,cls,children})=>(
    <button onClick={onClick} disabled={disabled} title={title}
@@ -3377,7 +3405,25 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
   <div>
    <div className="mb-5">
     <h1 className="font-serif text-2xl text-stone-900">📥 Today</h1>
-    <p className="text-sm text-stone-500 mt-0.5">{formatDate(today)} · {replies.length} repl{replies.length===1?'y':'ies'} to action · {rePitch.length} re-pitch · {newOpps.length} new opportunit{newOpps.length===1?'y':'ies'}</p>
+    <p className="text-sm text-stone-500 mt-0.5">{formatDate(today)} · {replies.length} repl{replies.length===1?'y':'ies'} to action · {rePitch.length} re-pitch · {newOpps.length} new opportunit{newOpps.length===1?'y':'ies'} · {winsToBook.length} win{winsToBook.length===1?'':'s'} to book · {lossesToClear.length} loss{lossesToClear.length===1?'':'es'} to clear</p>
+   </div>
+
+   {/* [COCKPIT 2026-06-22 — Ben] Where I stand stat strip */}
+   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-6">
+    {[
+     {label:'Open pipeline',value:money(openPipeline.value,true),sub:openPipeline.count+' bid'+(openPipeline.count===1?'':'s'),tint:'bg-sky-50 border-sky-200 text-sky-900'},
+     {label:'Live & winnable',value:money(liveWinnable,true),sub:'Bidding + live replies',tint:'bg-emerald-50 border-emerald-200 text-emerald-900'},
+     {label:'Overdue',value:overdueList.length+' bid'+(overdueList.length===1?'':'s'),sub:money(overdueList.reduce((s,p)=>s+(p.bidAmount||0),0),true),tint:overdueList.length>0?'bg-rose-50 border-rose-200 text-rose-900':'bg-stone-50 border-stone-200 text-stone-600'},
+     {label:'Replies to answer',value:replies.length,sub:replies.length===1?'reply':'replies',tint:replies.length>0?'bg-amber-50 border-amber-200 text-amber-900':'bg-stone-50 border-stone-200 text-stone-600'},
+     {label:'Wins to book',value:winsToBook.length,sub:money(winsToBook.reduce((s,p)=>s+(p.bidAmount||0),0),true),tint:winsToBook.length>0?'bg-emerald-50 border-emerald-300 text-emerald-900':'bg-stone-50 border-stone-200 text-stone-600'},
+     {label:'Leads to price',value:leadsToPrice,sub:'status: Lead',tint:'bg-stone-50 border-stone-200 text-stone-700'},
+    ].map(c=>(
+     <div key={c.label} className={`rounded border px-3 py-2.5 ${c.tint}`}>
+      <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70 mb-0.5">{c.label}</div>
+      <div className="text-xl font-bold leading-none">{c.value}</div>
+      <div className="text-[11px] opacity-60 mt-0.5">{c.sub}</div>
+     </div>
+    ))}
    </div>
 
    <Section icon="💬" title="Replies to action" count={replies.length} tint="bg-sky-100 text-sky-800">
@@ -3395,10 +3441,74 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
       <div className="flex items-center gap-1.5 mt-2.5 flex-wrap">
        <Btn onClick={()=>!dnc&&openFollowUpEmail(p)} disabled={dnc} title={dnc?'David · no auto-contact':'Open a draft in Outlook'} cls="bg-stone-900 text-white hover:bg-stone-700">✉ Open in Outlook</Btn>
        <Btn onClick={()=>logSent(p)} cls="bg-emerald-600 text-white hover:bg-emerald-500">✓ Log sent</Btn>
+       <Btn onClick={()=>markWon(p)} title="Book this bid as Awarded" cls="bg-emerald-100 text-emerald-800 hover:bg-emerald-200">✅ Book as Awarded</Btn>
        <Btn onClick={()=>markLost(p)} title="Set status to Lost (captures the winner if the reply named one)" cls="bg-stone-100 text-stone-700 hover:bg-stone-200">❌ Lost</Btn>
        <Btn onClick={()=>markHold(p)} title="Mark on hold and snooze the next action 45 days" cls="bg-amber-100 text-amber-800 hover:bg-amber-200">⏸ Hold</Btn>
        <Btn onClick={()=>dismiss(p)} cls="bg-white border border-stone-200 text-stone-500 hover:bg-stone-50">Dismiss</Btn>
        {dnc&&<span className="text-[10px] text-amber-700 self-center">David · no auto-contact</span>}
+      </div>
+     </div>
+    );})}
+   </Section>
+
+   <Section icon="✅" title="Wins to book" count={winsToBook.length} tint="bg-emerald-100 text-emerald-800">
+    {winsToBook.map(p=>{const snippet=((p.nextAction||p.notes||'').slice(0,80));return(
+     <div key={p.id} className="bg-white border border-stone-200 rounded-sm p-3">
+      <button onClick={()=>onSelectProposal(p.id)} className="text-left w-full group">
+       <div className="flex items-center gap-2 flex-wrap">
+        <span className="font-medium text-stone-900 group-hover:underline truncate">{p.project||'(untitled)'}</span>
+        <span className="text-xs text-stone-400 font-mono">#{p.id}</span>
+        <StatusPill status={p.status} size="xs"/>
+       </div>
+       <div className="text-xs text-stone-500 mt-0.5">{p.gc||'—'} · {money(p.bidAmount,true)}</div>
+       {snippet&&<div className="text-sm text-stone-700 mt-1 truncate">{snippet}</div>}
+      </button>
+      <div className="flex items-center gap-1.5 mt-2.5 flex-wrap">
+       <Btn onClick={()=>markWon(p)} title="Set status to Awarded" cls="bg-emerald-600 text-white hover:bg-emerald-500">✅ Book as Awarded</Btn>
+       <Btn onClick={()=>onSelectProposal(p.id)} cls="bg-stone-100 text-stone-700 hover:bg-stone-200">Open bid</Btn>
+      </div>
+     </div>
+    );})}
+   </Section>
+
+   <Section icon="❌" title="Losses to clear" count={lossesToClear.length} tint="bg-rose-100 text-rose-700">
+    {lossesToClear.map(p=>{const snippet=((p.nextAction||p.notes||'').slice(0,80));return(
+     <div key={p.id} className="bg-white border border-stone-200 rounded-sm p-3">
+      <button onClick={()=>onSelectProposal(p.id)} className="text-left w-full group">
+       <div className="flex items-center gap-2 flex-wrap">
+        <span className="font-medium text-stone-900 group-hover:underline truncate">{p.project||'(untitled)'}</span>
+        <span className="text-xs text-stone-400 font-mono">#{p.id}</span>
+        <StatusPill status={p.status} size="xs"/>
+       </div>
+       <div className="text-xs text-stone-500 mt-0.5">{p.gc||'—'} · {money(p.bidAmount,true)}</div>
+       {snippet&&<div className="text-sm text-stone-700 mt-1 truncate">{snippet}</div>}
+      </button>
+      <div className="flex items-center gap-1.5 mt-2.5 flex-wrap">
+       <Btn onClick={()=>markLost(p)} title="Confirm lost and move to lost pipeline" cls="bg-rose-600 text-white hover:bg-rose-500">❌ Confirm Lost</Btn>
+       <Btn onClick={()=>markHold(p)} title="Not sure yet — snooze 45 days" cls="bg-amber-100 text-amber-800 hover:bg-amber-200">⏸ Hold</Btn>
+       <Btn onClick={()=>onSelectProposal(p.id)} cls="bg-stone-100 text-stone-700 hover:bg-stone-200">Open bid</Btn>
+      </div>
+     </div>
+    );})}
+   </Section>
+
+   <Section icon="🔇" title="Big bids going quiet" count={bigQuiet.length} tint="bg-amber-100 text-amber-800">
+    {bigQuiet.map(p=>{const snippet=((p.nextAction||p.notes||'').slice(0,80));return(
+     <div key={p.id} className="bg-white border border-stone-200 rounded-sm p-3">
+      <button onClick={()=>onSelectProposal(p.id)} className="text-left w-full group">
+       <div className="flex items-center gap-2 flex-wrap">
+        <span className="font-medium text-stone-900 group-hover:underline truncate">{p.project||'(untitled)'}</span>
+        <span className="text-xs text-stone-400 font-mono">#{p.id}</span>
+        <StatusPill status={p.status} size="xs"/>
+       </div>
+       <div className="text-xs text-stone-500 mt-0.5">{p.gc||'—'} · {money(p.bidAmount,true)}{p.nextActionDate?` · last action ${p.nextActionDate}`:' · no action date'}</div>
+       {snippet&&<div className="text-sm text-stone-700 mt-1 truncate">{snippet}</div>}
+      </button>
+      <div className="flex items-center gap-1.5 mt-2.5 flex-wrap">
+       <Btn onClick={()=>markContacted(p)} title="Log a contact and schedule a 14-day follow-up" cls="bg-sky-600 text-white hover:bg-sky-500">📞 Mark contacted</Btn>
+       <Btn onClick={()=>markHold(p)} title="Snooze 45 days" cls="bg-amber-100 text-amber-800 hover:bg-amber-200">⏸ Hold</Btn>
+       <Btn onClick={()=>markLost(p)} cls="bg-stone-100 text-stone-700 hover:bg-stone-200">❌ Lost</Btn>
+       <Btn onClick={()=>onSelectProposal(p.id)} cls="bg-white border border-stone-200 text-stone-500 hover:bg-stone-50">Open bid</Btn>
       </div>
      </div>
     );})}
