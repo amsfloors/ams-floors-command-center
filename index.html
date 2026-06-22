@@ -2843,6 +2843,55 @@ const NextActionCell=({proposal,onSave})=>{
   </button>
  );
 };
+// [NEXT ACTION 2026-06-22 — Paul] An always-actionable Next Action block for the detail panel: edit the
+// text, set/reschedule/clear the date, push it out, or mark it done — all WITHOUT entering full Edit mode.
+// Saves straight through onSave (the same path as everywhere else), so it persists immediately.
+const NextActionPanel=({proposal,onSave})=>{
+ const [open,setOpen]=useState(false);
+ const [txt,setTxt]=useState('');
+ const [dt,setDt]=useState('');
+ const today=todayStr();
+ const na=proposal.nextAction||'';
+ const nd=proposal.nextActionDate||'';
+ const daysUntil=nd?Math.round((new Date(nd)-new Date(today))/86400000):null;
+ const isOD=nd&&nd<today;
+ const startEdit=()=>{setTxt(na);setDt(nd);setOpen(true);};
+ const save=()=>{onSave({...proposal,nextAction:txt.trim(),nextActionDate:dt||null,lastTouched:today});setOpen(false);};
+ const done=()=>{onSave({...proposal,nextAction:'',nextActionDate:null,lastTouched:today});setOpen(false);};
+ const bump=(days)=>{const base=(nd&&nd>=today)?new Date(nd):new Date();base.setDate(base.getDate()+days);const iso=base.toISOString().slice(0,10);onSave({...proposal,nextAction:na||'Follow up',nextActionDate:iso,lastTouched:today});};
+ return (
+  <div className="col-span-2 border border-sky-200 bg-sky-50/60 rounded-sm p-3">
+   <div className="flex items-center justify-between mb-1.5">
+    <div className="text-[10px] uppercase tracking-widest text-sky-800 font-semibold">Next action</div>
+    {na&&!open&&<button onClick={done} className="text-[11px] px-2 py-0.5 rounded-sm bg-emerald-600 text-white hover:bg-emerald-700">✓ Mark done</button>}
+   </div>
+   {open?(
+    <div className="space-y-2">
+     <input autoFocus value={txt} onChange={e=>setTxt(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')save();if(e.key==='Escape')setOpen(false);}} placeholder="e.g. Call re: revised scope" className="w-full text-sm px-2 py-1.5 border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/>
+     <div className="flex items-center gap-2 flex-wrap">
+      <input type="date" value={dt} onChange={e=>setDt(e.target.value)} className="text-sm px-2 py-1.5 border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/>
+      <button onClick={save} className="text-sm bg-stone-900 text-white px-3 py-1.5 rounded-sm hover:bg-stone-700">Save</button>
+      <button onClick={()=>setOpen(false)} className="text-sm text-stone-500 hover:text-stone-800 px-2">Cancel</button>
+     </div>
+    </div>
+   ):(
+    <div>
+     {na?<div className={`text-sm font-medium ${isOD?'text-rose-700':'text-stone-800'}`}>{na}{nd&&<span className={`ml-2 text-xs font-mono font-normal ${isOD?'text-rose-600':'text-stone-500'}`}>{formatDate(nd)} · {isOD?`${Math.abs(daysUntil)}d overdue`:daysUntil===0?'today':`in ${daysUntil}d`}</span>}</div>
+       :<div className="text-sm text-stone-400 italic">No next action set.</div>}
+     <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+      <button onClick={startEdit} className="text-xs px-2.5 py-1 rounded-sm border border-stone-300 bg-white text-stone-700 hover:bg-stone-50 inline-flex items-center gap-1"><Ico n="edit3" size={11}/>{na?'Edit / reschedule':'Set next action'}</button>
+      {na&&<>
+       <span className="text-[10px] text-stone-400 ml-1">push:</span>
+       <button onClick={()=>bump(3)} className="text-xs px-2 py-1 rounded-sm border border-stone-200 bg-white text-stone-600 hover:bg-stone-50">+3d</button>
+       <button onClick={()=>bump(7)} className="text-xs px-2 py-1 rounded-sm border border-stone-200 bg-white text-stone-600 hover:bg-stone-50">+1wk</button>
+       <button onClick={()=>bump(14)} className="text-xs px-2 py-1 rounded-sm border border-stone-200 bg-white text-stone-600 hover:bg-stone-50">+2wk</button>
+      </>}
+     </div>
+    </div>
+   )}
+  </div>
+ );
+};
 const LostReasonStrip=({proposal,onSave})=>{
  if(!LOST_STATUSES_SET.has(proposal.status)||proposal.lostReason) return null;
  return(
@@ -3174,8 +3223,8 @@ function detectCcUpdates(p,lastIn){
  const fromAddr=String(ea.address||'').trim();
  const fromName=String(ea.name||'').trim();
  const replyText=splitOffQuote(htmlToText((lastIn.body&&lastIn.body.content)||lastIn.bodyPreview||''));
- // An automated notification (no-reply / bid-platform daemon) isn't the contact — propose nothing from it.
- if(/no-?reply|do-?not-?reply|notifications?@|mailer-daemon|postmaster/i.test(fromAddr)) return out;
+ // An automated notification (no-reply / bid-platform daemon / Exchange NDR) isn't the contact — propose nothing from it.
+ if(/no-?reply|do-?not-?reply|notifications?@|mailer-daemon|postmaster|microsoftexchange[0-9a-f]+@/i.test(fromAddr)) return out;
  // 1) Contact EMAIL — they wrote from an address we don't have on file
  if(fromAddr && /@/.test(fromAddr) && fromAddr.toLowerCase()!==String(p.email||'').trim().toLowerCase()){
   out.push({field:'email',label:'Contact email',from:p.email||'(none)',to:fromAddr,on:true});
@@ -3202,28 +3251,56 @@ function detectCcUpdates(p,lastIn){
  }
  return out;
 }
+// [BOUNCE 2026-06-22 — Paul] A delivery-failure / NDR ("Undeliverable", "Delivery has failed") is NOT a
+// reply from the contact. Detect it so we never thread it as their answer, never draft to the dead address,
+// and never offer the Exchange system address (MicrosoftExchange…@) as the contact's new email.
+function isBounceMsg(m){
+ if(!m) return false;
+ const ea=(m.from&&m.from.emailAddress)||{};
+ const addr=String(ea.address||'').toLowerCase();
+ const name=String(ea.name||'').toLowerCase();
+ const subj=String(m.subject||'').toLowerCase();
+ const body=String((m.body&&m.body.content)||m.bodyPreview||'').toLowerCase();
+ if(/postmaster@|mailer-daemon|microsoftexchange[0-9a-f]+@/.test(addr)) return true;
+ if(name==='microsoft outlook'||name==='postmaster'||/mail delivery (system|subsystem|failed)/.test(name)) return true;
+ if(/undeliverable|delivery (has )?failed|delivery status notification|mail delivery failed|returned mail|message not delivered/.test(subj)) return true;
+ if(/delivery has failed to these recipients|wasn'?t delivered|was not delivered|couldn'?t be delivered|recipient'?s email system|message couldn'?t be delivered to|address couldn'?t be found|unable to deliver|550 5\.[01]\.[01]/.test(body)) return true;
+ return false;
+}
+// Pull the recipient address that bounced out of the NDR body (skip the system sender); fall back to the
+// address we tried, so the modal can always tell Paul which address is dead.
+function extractBouncedAddr(m,fallback){
+ const body=String((m&&m.body&&m.body.content)||(m&&m.bodyPreview)||'');
+ const addrs=(body.match(/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g)||[]).filter(a=>!/microsoftexchange|postmaster|mailer-daemon/i.test(a));
+ return addrs[0]||fallback||'';
+}
 // Everything the modal needs: the thread, the message to answer, detected asks, and a first-draft.
 async function buildThreadContext(p){
  const token=await getGraphToken();
  const email=(p.email||'').trim();
  const me=(currentUserEmail()||'').toLowerCase();
  const latest=await findLatestMsgWith(token,email);
- let thread=[],lastIn=null,lastOut=null;
+ let thread=[],lastIn=null,lastOut=null,lastBounce=null;
  const addrOf=m=>(((m.from&&m.from.emailAddress&&m.from.emailAddress.address)||'').toLowerCase());
+ const dt=m=>(m&&m.receivedDateTime)||'';
  if(latest){
   if(latest.conversationId){ try{ thread=await fetchThread(token,latest.conversationId); }catch(e){ thread=[]; } }
   if(!thread.length) thread=[latest];
-  const inbound=thread.filter(m=>addrOf(m)!==me);   // messages THEY sent
-  const outbound=thread.filter(m=>addrOf(m)===me);  // messages PAUL sent
+  const bounces=thread.filter(isBounceMsg);                       // NDR / "Undeliverable" system messages
+  lastBounce=bounces.length?bounces[bounces.length-1]:null;
+  const inbound=thread.filter(m=>addrOf(m)!==me&&!isBounceMsg(m));  // messages THEY actually sent (never a bounce)
+  const outbound=thread.filter(m=>addrOf(m)===me&&!isBounceMsg(m)); // messages PAUL sent
   lastIn=inbound.length?inbound[inbound.length-1]:null;
   lastOut=outbound.length?outbound[outbound.length-1]:null;
  }
+ // A delivery failure NEWER than any genuine reply means this address is dead — don't draft into it.
+ const bounced=!!lastBounce&&(!lastIn||dt(lastBounce)>=dt(lastIn));
+ const bouncedAddr=bounced?extractBouncedAddr(lastBounce,email):'';
  // Who spoke LAST decides the draft (Paul's Turn-6 asks):
  //  reply   — they wrote last → answer THEIR message (ball in our court)
  //  handled — we already replied after their note → soft, non-duplicate check-in (ball in their court)  [#1]
  //  nudge   — we reached out, they never replied → time-aware "circling back, it's been N days"          [#3]
  //  fresh   — no prior email at all → first-touch
- const dt=m=>(m&&m.receivedDateTime)||'';
  let mode;
  if(!lastIn&&!lastOut) mode='fresh';
  else if(lastIn&&(!lastOut||dt(lastIn)>=dt(lastOut))) mode='reply';
@@ -3242,8 +3319,8 @@ async function buildThreadContext(p){
  } else {
   const d=followUpDraft(p,null,true); draftText=d.body; subject=d.subject;
  }
- const ccUpdates=detectCcUpdates(p,lastIn);   // record changes to PROPOSE (never auto-applied) [#2]
- return {email,thread,target,questions,draftText,subject,mode,daysSinceOut,lastOutDate:dt(lastOut),ccUpdates,srcId:target&&target.id};
+ const ccUpdates=bounced?[]:detectCcUpdates(p,lastIn);   // never propose the NDR system address as the contact [#2]
+ return {email,thread,target,questions,draftText,subject,mode,daysSinceOut,lastOutDate:dt(lastOut),ccUpdates,srcId:target&&target.id,bounced,bouncedAddr};
 }
 // email(lowercased) -> most recent date Paul SENT them something. Used to hide bids already emailed (#1).
 async function fetchRecentSentMap(token){
@@ -3764,12 +3841,16 @@ const ThreadPreviewModal=({state,onClose,onConfirm,currentEmail})=>{
               <div className="text-stone-600 mt-0.5" style={{display:'-webkit-box',WebkitLineClamp:3,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{m.bodyPreview||''}</div>
              </div>; })}
            </div>
-           {ctx.mode==='handled'&&<div className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-sm px-2.5 py-1.5 mt-1.5">You already replied{ctx.lastOutDate?' on '+fmt(ctx.lastOutDate):''} — the ball is in their court. This is a light check-in, <strong>not</strong> a re-send of what you wrote, and it goes out as a fresh email to {ctx.email||'the contact'}.</div>}
-           {ctx.mode==='nudge'&&<div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-2.5 py-1.5 mt-1.5">No reply yet to your last email{ctx.daysSinceOut>=1?' ('+ctx.daysSinceOut+' day'+(ctx.daysSinceOut===1?'':'s')+' ago)':''} — this is a time-aware bump to {ctx.email||'the contact'}, not a first-touch letter.</div>}
-           {ctx.mode==='fresh'&&<div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-2.5 py-1.5 mt-1.5">No reply from them yet — this sends a fresh email to {ctx.email||'the contact'} rather than a reply into the thread.</div>}
+           {!ctx.bounced&&ctx.mode==='handled'&&<div className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-sm px-2.5 py-1.5 mt-1.5">You already replied{ctx.lastOutDate?' on '+fmt(ctx.lastOutDate):''} — the ball is in their court. This is a light check-in, <strong>not</strong> a re-send of what you wrote, and it goes out as a fresh email to {ctx.email||'the contact'}.</div>}
+           {!ctx.bounced&&ctx.mode==='nudge'&&<div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-2.5 py-1.5 mt-1.5">No reply yet to your last email{ctx.daysSinceOut>=1?' ('+ctx.daysSinceOut+' day'+(ctx.daysSinceOut===1?'':'s')+' ago)':''} — this is a time-aware bump to {ctx.email||'the contact'}, not a first-touch letter.</div>}
+           {!ctx.bounced&&ctx.mode==='fresh'&&<div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-2.5 py-1.5 mt-1.5">No reply from them yet — this sends a fresh email to {ctx.email||'the contact'} rather than a reply into the thread.</div>}
           </div>
         : <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-3 py-2">No earlier email found with {ctx.email||'this contact'} — the address may have bounced. This will start a fresh email.</div>}
-      {ctx.questions&&ctx.questions.length>0&&<div>
+      {ctx.bounced&&<div className="text-sm text-rose-800 bg-rose-50 border border-rose-300 rounded-sm px-3 py-2.5">
+        <div className="font-semibold mb-0.5">⚠ This email bounced — it didn't reach them.</div>
+        <div className="text-rose-700">Your message to <span className="font-mono">{ctx.bouncedAddr||ctx.email||'this address'}</span> came back undeliverable, so that address is dead. Replying just bounces again — <strong>call the GC instead</strong> or get a correct address, then update the contact on the bid. The Command Center won't draft to a bounced address.</div>
+       </div>}
+      {!ctx.bounced&&ctx.questions&&ctx.questions.length>0&&<div>
         <div className="text-[11px] uppercase tracking-widest text-stone-500 font-semibold mb-1.5">Their points to address · {ctx.questions.length}</div>
         <ul className="list-disc pl-5 space-y-0.5 text-sm text-stone-700">{ctx.questions.map((q,i)=><li key={i}>{q}</li>)}</ul>
        </div>}
@@ -3785,17 +3866,17 @@ const ThreadPreviewModal=({state,onClose,onConfirm,currentEmail})=>{
         </div>
         <div className="text-[10px] text-violet-600 mt-1">Saved to the Command Center only when you click the button below — untick anything you don't want.</div>
        </div>}
-      <div>
+      {!ctx.bounced&&<div>
        <div className="text-[11px] uppercase tracking-widest text-stone-500 font-semibold mb-1.5">Draft reply <span className="text-stone-400 normal-case tracking-normal">— edit freely; fill in the “→” answers</span></div>
        <textarea value={text} onChange={e=>setText(e.target.value)} rows={12} className="w-full text-sm border border-stone-300 rounded-sm px-3 py-2 focus:outline-none focus:border-stone-600" style={{fontFamily:'Calibri,Arial,sans-serif'}}/>
-      </div>
+      </div>}
      </React.Fragment>}
     </div>
     <div className="px-5 py-3 border-t border-stone-200 flex items-center justify-between gap-3">
-     <span className="text-[11px] text-stone-400">Creates a draft in your Outlook — nothing sends automatically.</span>
+     <span className="text-[11px] text-stone-400">{ctx&&ctx.bounced?'Address bounced — no draft is created. Log a call instead.':'Creates a draft in your Outlook — nothing sends automatically.'}</span>
      <div className="flex gap-2 flex-shrink-0">
-      <button onClick={onClose} className="text-sm px-3 py-1.5 rounded-sm border border-stone-300 text-stone-700 hover:bg-stone-50">Cancel</button>
-      <button onClick={go} disabled={loading||sending||!ctx} className="text-sm px-4 py-1.5 rounded-sm bg-stone-900 text-white hover:bg-stone-700 disabled:opacity-40">{sending?'Opening…':'✉ Open draft in Outlook'}</button>
+      <button onClick={onClose} className="text-sm px-3 py-1.5 rounded-sm border border-stone-300 text-stone-700 hover:bg-stone-50">{ctx&&ctx.bounced?'Close':'Cancel'}</button>
+      <button onClick={go} disabled={loading||sending||!ctx||(ctx&&ctx.bounced)} className="text-sm px-4 py-1.5 rounded-sm bg-stone-900 text-white hover:bg-stone-700 disabled:opacity-40">{sending?'Opening…':(ctx&&ctx.bounced)?'✕ Address bounced':'✉ Open draft in Outlook'}</button>
      </div>
     </div>
    </div>
@@ -4977,6 +5058,8 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
  const [poToSave,setPoToSave]=useState(null);
  const [savedPOs,setSavedPOs]=useState([]);
  const [noteText,setNoteText]=useState('');
+ const [logNA,setLogNA]=useState('');
+ const [logNAdate,setLogNAdate]=useState('');
  const [showScript,setShowScript]=useState(false);
  const [activeTab,setActiveTab]=useState('details');
  const [prOpen,setPrOpen]=useState(false);   // [PRICE REQUEST] modal open
@@ -5061,6 +5144,22 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
   if(navigator.clipboard&&window.ClipboardItem){try{const item=new window.ClipboardItem({'text/html':new Blob([html],{type:'text/html'}),'text/plain':new Blob([plain],{type:'text/plain'})});navigator.clipboard.write([item]).then(done,function(){viaExec();done();});return;}catch(e){}}
   viaExec();done();
  };
+ // [NEXT ACTION 2026-06-22 — Paul] Log a call/note AND advance the next step in ONE save. Calling onAddNote
+ // and onSave separately would let the proposal save clobber the just-added note (it carries stale notes),
+ // so when a next step is provided we merge the note + nextAction into a single write — mirroring addNote's
+ // "[date] text" prepend so the activity timeline still parses it.
+ const addNoteAndStep=()=>{
+  const note=noteText.trim();
+  const hasStep=logNA.trim()||logNAdate;
+  if(!note&&!hasStep) return;
+  if(note&&!hasStep){ onAddNote(proposal.id,note); }
+  else {
+   const stamp=todayStr();
+   const mergedNotes=note?(proposal.notes?('['+stamp+'] '+note+'\n'+proposal.notes):('['+stamp+'] '+note)):proposal.notes;
+   onSave({...proposal,notes:mergedNotes,lastTouched:stamp,nextAction:(logNA.trim()||proposal.nextAction||(logNAdate?'Follow up':'')),nextActionDate:(logNAdate||proposal.nextActionDate||null)});
+  }
+  setNoteText('');setLogNA('');setLogNAdate('');
+ };
  return (
   <>
    <div className="fixed inset-0 bg-stone-900/30 z-40" onClick={onClose}/>
@@ -5121,8 +5220,10 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
         <FldSel label="PM (if awarded)" value={draft.pm||''} edit={edit} options={['David','Peter','Paul','Other']} onChange={v=>setDraft({...draft,pm:v})} render={v=>v?<span className="inline-flex items-center gap-1.5"><span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold flex items-center justify-center">{v[0]}</span>{v}</span>:<span className="text-stone-400 text-xs">Not assigned</span>}/>
        </div>
        <Fld label="SharePoint / Folder" value={draft.sharepoint||''} edit={edit} onChange={v=>setDraft({...draft,sharepoint:v})} render={v=>v?<a href={v} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline inline-flex items-center gap-1">Open <Ico n="extLink" size={11}/></a>:'—'}/>
-       <Fld label="Next Action" value={draft.nextAction||''} edit={edit} onChange={v=>setDraft({...draft,nextAction:v})} render={v=>v||<span className="text-stone-400 italic text-xs">None set</span>}/>
-       <Fld label="Next Action Date" value={draft.nextActionDate||''} edit={edit} type="date" onChange={v=>setDraft({...draft,nextActionDate:v||null})} render={v=>v?<span className={`font-mono text-sm ${v<todayStr()?'text-rose-700 font-semibold':''}`}>{formatDate(v)}</span>:'—'}/>
+       {edit?<>
+        <Fld label="Next Action" value={draft.nextAction||''} edit={edit} onChange={v=>setDraft({...draft,nextAction:v})} render={v=>v||<span className="text-stone-400 italic text-xs">None set</span>}/>
+        <Fld label="Next Action Date" value={draft.nextActionDate||''} edit={edit} type="date" onChange={v=>setDraft({...draft,nextActionDate:v||null})} render={v=>v?<span className={`font-mono text-sm ${v<todayStr()?'text-rose-700 font-semibold':''}`}>{formatDate(v)}</span>:'—'}/>
+       </>:<NextActionPanel proposal={proposal} onSave={onSave}/>}
        {LOST_STATUSES_SET.has(draft.status)&&<div className="col-span-2"><div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold mb-1">Lost Reason</div>
         {edit?<select value={draft.lostReason||''} onChange={e=>setDraft({...draft,lostReason:e.target.value||null})} className="w-full px-2 py-1 text-sm border border-stone-300 bg-white rounded-sm focus:outline-none focus:border-stone-600"><option value="">— Select —</option>{LOST_REASONS.map(r=><option key={r} value={r}>{r}</option>)}</select>:<div className="text-sm text-stone-900">{draft.lostReason||<span className="text-amber-700 font-medium text-xs">Not recorded — use quick buttons below</span>}</div>}
        </div>}
@@ -5142,9 +5243,17 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
         {proposal.phone&&<a href={'tel:'+proposal.phone} className="text-xs px-3 py-1.5 rounded-sm border border-stone-300 text-stone-700 hover:bg-stone-50">📱 {proposal.phone}</a>}
        </div>
        {showScript&&<pre className="text-xs text-stone-700 whitespace-pre-wrap bg-amber-50 border border-amber-200 rounded-sm p-3" style={{fontFamily:'inherit',margin:0}}>{callScript(proposal)}</pre>}
-       <div className="flex gap-2">
-        <input value={noteText} onChange={e=>setNoteText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&noteText.trim()){onAddNote(proposal.id,noteText.trim());setNoteText('');}}} placeholder="Add a note — Enter to save with timestamp…" className="flex-1 px-3 py-1.5 text-sm border border-stone-200 bg-stone-50 focus:bg-white focus:outline-none focus:border-stone-400 rounded-sm"/>
-        <button onClick={()=>{if(noteText.trim()){onAddNote(proposal.id,noteText.trim());setNoteText('');}}} className="text-sm bg-stone-900 text-white px-3 rounded-sm hover:bg-stone-800">Add</button>
+       <div className="space-y-2">
+        <div className="flex gap-2">
+         <input value={noteText} onChange={e=>setNoteText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')addNoteAndStep();}} placeholder="Log what happened — e.g. Spoke to GC, sent revised pricing…" className="flex-1 px-3 py-1.5 text-sm border border-stone-200 bg-stone-50 focus:bg-white focus:outline-none focus:border-stone-400 rounded-sm"/>
+         <button onClick={addNoteAndStep} className="text-sm bg-stone-900 text-white px-3 rounded-sm hover:bg-stone-800">Add</button>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+         <span className="text-[10px] uppercase tracking-widest text-emerald-700 font-semibold whitespace-nowrap">Then next →</span>
+         <input value={logNA} onChange={e=>setLogNA(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')addNoteAndStep();}} placeholder="Next step (optional)" className="flex-1 min-w-[140px] px-2.5 py-1.5 text-sm border border-emerald-200 bg-white focus:outline-none focus:border-emerald-500 rounded-sm"/>
+         <input type="date" value={logNAdate} onChange={e=>setLogNAdate(e.target.value)} className="text-sm px-2.5 py-1.5 border border-emerald-200 bg-white focus:outline-none focus:border-emerald-500 rounded-sm"/>
+        </div>
+        <div className="text-[10px] text-stone-400">Just spoke to them? Jot what happened, set the next step + date, hit Add — the note and the next action save together.</div>
        </div>
        <ContactTimeline notes={proposal.notes}/>
       </div>
