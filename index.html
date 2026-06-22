@@ -3309,6 +3309,16 @@ const expValue=(p)=>Math.round((p.bidAmount||0)*(p._gcWR!=null?p._gcWR:0.30));
 // [📥 TODAY 2026-06-17 — Paul] Action cockpit. Reads `proposals` only (no new table).
 // Three lists: replies needing a response (reconciler sets nextAction "💬 Reply received…"),
 // lost bids whose winner is named (the #1570-FJ re-pitch play), and near-due leads/opps.
+// [TODAY BADGE 2026-06-19 — Paul] Single source of truth for "what's actionable in Today",
+// shared by the nav badge AND the three Today lists below, so the badge can never again drift
+// from the cards actually shown (the "badge says 22 / page shows 4" bug). "Handled" = we emailed
+// this contact in Outlook more recently than our last logged touch, so it's off our plate.
+const todayHandled=(p,recentSent)=>{const e=(recentSent&&p.email)?recentSent[p.email.trim().toLowerCase()]:null;return !!(e&&e.slice(0,10)>(p.lastTouched||''));};
+const todayHorizonStr=()=>{const d=new Date();d.setDate(d.getDate()+14);return d.toISOString().slice(0,10);};
+const isTodayReply=(p,recentSent)=>/reply received/i.test(p.nextAction||'')&&!todayHandled(p,recentSent);
+const isTodayRePitch=(p)=>LOST_STATUSES.includes(p.status)&&!!analyzeReply((p.nextAction||'')+' '+(p.notes||'')).winner;
+const isTodayNewOpp=(p,recentSent,today,horizon)=>OPEN_STATUSES.includes(p.status)&&p.nextActionDate&&p.nextActionDate>=today&&p.nextActionDate<=horizon&&!todayHandled(p,recentSent);
+const todayActionCount=(proposals,recentSent)=>{const today=todayStr();const horizon=todayHorizonStr();return (proposals||[]).filter(p=>isTodayReply(p,recentSent)||isTodayRePitch(p)||isTodayNewOpp(p,recentSent,today,horizon)).length;};
 const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveProposal,onCloneToWinner})=>{
  const today=todayStr();
  const horizon=(()=>{const d=new Date();d.setDate(d.getDate()+14);return d.toISOString().slice(0,10);})();
@@ -3318,21 +3328,32 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
  const handled=(p)=>{const e=(recentSent&&p.email)?recentSent[p.email.trim().toLowerCase()]:null;return !!(e&&e.slice(0,10)>(p.lastTouched||''));};
 
  const replies=useMemo(()=>proposals
-   .filter(p=>/reply received/i.test(p.nextAction||'')&&!handled(p))
+   .filter(p=>isTodayReply(p,recentSent))
    .sort((a,b)=>ev(b)-ev(a)),[proposals,gcStats,recentSent]);
  const rePitch=useMemo(()=>proposals
-   .filter(p=>LOST_STATUSES.includes(p.status))
-   .map(p=>{const w=analyzeReply((p.nextAction||'')+' '+(p.notes||'')).winner;return w?{...p,_winner:w}:null;})
-   .filter(Boolean)
+   .filter(isTodayRePitch)
+   .map(p=>({...p,_winner:analyzeReply((p.nextAction||'')+' '+(p.notes||'')).winner}))
    .sort((a,b)=>(b.bidAmount||0)-(a.bidAmount||0)),[proposals]);
  const newOpps=useMemo(()=>proposals
-   .filter(p=>OPEN_STATUSES.includes(p.status)&&p.nextActionDate&&p.nextActionDate>=today&&p.nextActionDate<=horizon&&!handled(p))
+   .filter(p=>isTodayNewOpp(p,recentSent,today,horizon))
    .sort((a,b)=>(a.nextActionDate||'9999-99-99').localeCompare(b.nextActionDate||'9999-99-99')),[proposals,recentSent]);
 
  // one-write helpers (single upsert each — no double-write races)
  const logSent=(p)=>onSaveProposal({...p,notes:`[${today}] ✉ Sent reply\n`+(p.notes||''),lastTouched:today,nextAction:null});
  const flag=(p,na,line)=>onSaveProposal({...p,nextAction:na,notes:line?`[${today}] ${line}\n`+(p.notes||''):(p.notes||'')});
  const dismiss=(p)=>onSaveProposal({...p,nextAction:null,notes:`[${today}] ✓ Reviewed — no reply needed\n`+(p.notes||'')});
+ // [TODAY ACTIONS 2026-06-19 — Paul] Lost/Hold now do the REAL update (one click = your confirm),
+ // not just a note. LOST -> set the canonical 'Lost' status (capturing the winning GC if the reply
+ // named one) and clear the open action; the bid moves to the lost pipeline and surfaces as a
+ // re-pitch play. HOLD -> push the next action out 45 days and mark it on-hold, leaving the live
+ // status untouched (mirrors the email-update flow's on-hold handling and avoids the retired legacy
+ // 'Hold' status the editor can't show). Each is a single upsert — no double-write races.
+ const markLost=(p)=>{const w=analyzeReply((p.nextAction||'')+' '+(p.notes||'')).winner;
+   onSaveProposal({...p,status:'Lost',lostReason:w?('Lost to '+w):(p.lostReason||''),nextAction:null,lastTouched:today,
+     notes:`[${today}] ❌ Marked Lost (Today)`+(w?` — lost to ${w}`:'')+`\n`+(p.notes||'')});};
+ const markHold=(p)=>{const d=new Date();d.setDate(d.getDate()+45);const revisit=d.toISOString().slice(0,10);
+   onSaveProposal({...p,nextActionDate:revisit,nextAction:`⏸ On hold — revisit ${revisit}`,lastTouched:today,
+     notes:`[${today}] ⏸ Marked on-hold · revisit ${revisit} (Today)\n`+(p.notes||'')});};
 
  const Btn=({onClick,disabled,title,cls,children})=>(
    <button onClick={onClick} disabled={disabled} title={title}
@@ -3374,8 +3395,8 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
       <div className="flex items-center gap-1.5 mt-2.5 flex-wrap">
        <Btn onClick={()=>!dnc&&openFollowUpEmail(p)} disabled={dnc} title={dnc?'David · no auto-contact':'Open a draft in Outlook'} cls="bg-stone-900 text-white hover:bg-stone-700">✉ Open in Outlook</Btn>
        <Btn onClick={()=>logSent(p)} cls="bg-emerald-600 text-white hover:bg-emerald-500">✓ Log sent</Btn>
-       <Btn onClick={()=>flag(p,'❌ Likely lost — from reply','❌ Flagged likely-lost (Today)')} cls="bg-stone-100 text-stone-700 hover:bg-stone-200">❌ Lost</Btn>
-       <Btn onClick={()=>flag(p,'⏸ On hold — from reply','⏸ Flagged on-hold (Today)')} cls="bg-amber-100 text-amber-800 hover:bg-amber-200">⏸ Hold</Btn>
+       <Btn onClick={()=>markLost(p)} title="Set status to Lost (captures the winner if the reply named one)" cls="bg-stone-100 text-stone-700 hover:bg-stone-200">❌ Lost</Btn>
+       <Btn onClick={()=>markHold(p)} title="Mark on hold and snooze the next action 45 days" cls="bg-amber-100 text-amber-800 hover:bg-amber-200">⏸ Hold</Btn>
        <Btn onClick={()=>dismiss(p)} cls="bg-white border border-stone-200 text-stone-500 hover:bg-stone-50">Dismiss</Btn>
        {dnc&&<span className="text-[10px] text-amber-700 self-center">David · no auto-contact</span>}
       </div>
@@ -6626,7 +6647,7 @@ function App() {
   window.XLSX.writeFile(wb,`AMS_Floors_${new Date().toISOString().slice(0,10)}.xlsx`);
  };
  const overdueCount=proposals.filter(p=>OPEN_STATUSES.includes(p.status)&&(overdueDays(p,settings)||0)>0).length;
- const todayCount=proposals.filter(p=>/reply received/i.test(p.nextAction||'')).length;
+ const todayCount=todayActionCount(proposals,recentSent);
  const navItems=[{id:'dashboard',label:'Dashboard',icon:'barChart'},{id:'today',label:'Today',icon:'inbox',badge:todayCount},{id:'followups',label:'Follow-Ups',icon:'phone',badge:overdueCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Active Jobs',icon:'flame'},{id:'gcs',label:'GC Intel',icon:'building2'},{id:'intelligence',label:'Intelligence',icon:'zap'},{id:'settings',label:'Settings',icon:'settings'}];
  if(!loaded) return (
   <div className="min-h-screen flex items-center justify-center bg-stone-100">
