@@ -2723,19 +2723,21 @@ const Empty=({icon='alertCirc',title,body})=>(
 const TH=({children,className=''})=>(
  <th className={`text-left text-[10px] uppercase tracking-widest font-semibold text-stone-500 px-3 py-2 border-b border-stone-200 ${className}`}>{children}</th>
 );
-const DashboardView=({proposals,settings,gcStats,estimateItems,onSelectProposal,onSelectGC,onNavigate})=>{
+const DashboardView=({proposals,settings,gcStats,estimateItems,recentSent,onSelectProposal,onSelectGC,onNavigate})=>{
  const filtered=useMemo(()=>settings.yearFilter==='All'?proposals:proposals.filter(p=>p.submitted&&p.submitted.startsWith(String(settings.yearFilter))),[proposals,settings.yearFilter]);
  const kpis=useMemo(()=>{
   const open=filtered.filter(p=>OPEN_STATUSES.includes(p.status));
   const won=filtered.filter(p=>WON_STATUSES.includes(p.status));
   const lost=filtered.filter(p=>LOST_STATUSES.includes(p.status));
-  const overdue=open.filter(p=>(overdueDays(p,settings)||0)>0);
+  // [PHASE 1 2026-06-22 — Ben] Overdue uses the shared isOverdueBid test on the FULL bid set (not the
+  // year-filtered pool) so this KPI matches the nav badge and the Today/Follow-Ups overdue count exactly.
+  const overdue=proposals.filter(p=>isOverdueBid(p,settings,recentSent,todayStr()));
   const nextActionDue=open.filter(p=>p.nextActionDate&&p.nextActionDate<=todayStr());
   const settled=won.length+lost.length;
   const wonWithMargin=won.filter(p=>(p.estMaterial||0)+(p.estLabor||0)>0);
   const avgMargin=wonWithMargin.length?wonWithMargin.reduce((s,p)=>{const c=p.contractAmount||p.bidAmount||0;const cost=(p.estMaterial||0)+(p.estLabor||0);return s+(c>0?(c-cost)/c:0);},0)/wonWithMargin.length:null;
   return{openCount:open.length,openValue:open.reduce((s,p)=>s+(p.bidAmount||0),0),awardedValue:won.reduce((s,p)=>s+(p.contractAmount||p.bidAmount||0),0),awardedCount:won.length,winRate:settled>0?won.length/settled:null,overdueCount:overdue.length,overdueValue:overdue.reduce((s,p)=>s+(p.bidAmount||0),0),nextActionDue:nextActionDue.length,avgMargin};
- },[filtered,settings]);
+ },[filtered,proposals,settings,recentSent]);
  const margins=useMemo(()=>{
   const cost=new Map();
   (estimateItems||[]).forEach(it=>{const k=String(it.proposalId);const m=cost.get(k)||{mc:0,mb:0};m.mc+=(Number(it.orderQty)||0)*(Number(it.unitCost)||0)+(Number(it.freight)||0);m.mb+=(Number(it.materialActual)||0);cost.set(k,m);});
@@ -2763,9 +2765,14 @@ const DashboardView=({proposals,settings,gcStats,estimateItems,onSelectProposal,
  },[filtered,gcStats,kpis,margins,settings,onNavigate,onSelectGC]);
  return (
   <div className="space-y-6">
+   {/* [PHASE 1 2026-06-22 — Ben] Purpose header; clarifies these are open-bid figures. */}
+   <div>
+    <h1 className="font-serif text-2xl text-stone-900">Dashboard</h1>
+    <p className="text-sm text-stone-500 mt-0.5">Your numbers at a glance{settings.yearFilter!=='All'?` (filtered to ${settings.yearFilter})`:''} — <strong>open</strong> pipeline value, what you've won, what's overdue, and your win rate. Click any card to jump to the detail.</p>
+   </div>
    {/* KPI row — 4 cards, all clickable */}
    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-    <KPICard label="Open Pipeline" value={money(kpis.openValue,true)} sublabel={`${kpis.openCount} active bids`} accent="bronze" icon="flame" onClick={()=>onNavigate('pipeline')}/>
+    <KPICard label="Open Pipeline" value={money(kpis.openValue,true)} sublabel={`${kpis.openCount} open bids`} accent="bronze" icon="flame" onClick={()=>onNavigate('pipeline')}/>
     <KPICard label="Awarded Value" value={money(kpis.awardedValue,true)} sublabel={`${kpis.awardedCount} projects`} accent="green" icon="check2" onClick={()=>onNavigate('active')}/>
     <KPICard label={kpis.overdueCount>0?`${kpis.overdueCount} Overdue`:'Follow-Ups'} value={kpis.overdueCount>0?money(kpis.overdueValue,true):kpis.nextActionDue>0?`${kpis.nextActionDue} due today`:'All clear'} sublabel={kpis.overdueCount>0?'past SLA — act now':kpis.nextActionDue>0?'next actions today':'no overdue follow-ups'} accent={kpis.overdueCount>0?'rose':kpis.nextActionDue>0?'amber':'green'} icon="phone" onClick={()=>onNavigate('followups')}/>
     <KPICard label="Win Rate" value={kpis.winRate!==null?pct(kpis.winRate):'—'} sublabel={kpis.avgMargin!==null?`avg margin ${pct(kpis.avgMargin,0)}`:'of settled bids'} accent="blue" icon="trendUp" onClick={()=>onNavigate('gcs')}/>
@@ -2877,6 +2884,11 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
  },[proposals,search,statusF,gcF,roleF,sortBy,settings.yearFilter]);
  return (
   <div className="space-y-3">
+   {/* [PHASE 1 2026-06-22 — Ben] Purpose + scope header so it's clear this is the whole bid book. */}
+   <div>
+    <h1 className="font-serif text-2xl text-stone-900">Pipeline</h1>
+    <p className="text-sm text-stone-500 mt-0.5">Your whole bid book — <strong>every bid, every status</strong>. The total on the right is all bids (not just open ones), which is why it's bigger than the Today and Follow-Ups numbers. Search or filter, then click any row to view or edit a bid.</p>
+   </div>
    <div className="bg-white border border-stone-200 px-3 py-2 flex flex-wrap items-center gap-2">
     <div className="relative" style={{minWidth:'200px',flex:1}}>
      <Ico n="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400"/>
@@ -2886,7 +2898,7 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
     <select value={gcF} onChange={e=>setGcF(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none" style={{maxWidth:'180px'}}><option value="all">All GCs</option>{allGCs.map(g=><option key={g} value={g}>{g}</option>)}</select>
     <select value={roleF} onChange={e=>setRoleF(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none"><option value="all">All people</option><option value="Peter">Peter (Est.)</option><option value="Paul">Paul (BD)</option><option value="David">David (PM)</option></select>
     <select value={sortBy} onChange={e=>setSortBy(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none"><option value="submitted_desc">Newest first</option><option value="submitted_asc">Oldest first</option><option value="amount_desc">$ high→low</option><option value="amount_asc">$ low→high</option><option value="gc">GC A→Z</option><option value="status">Status</option></select>
-    <div className="text-xs text-stone-600 ml-auto whitespace-nowrap"><span className="font-mono font-semibold">{filtered.length}</span> rows · <span className="font-mono font-semibold">{money(filtered.reduce((s,p)=>s+(p.bidAmount||0),0),true)}</span></div>
+    <div className="text-xs text-stone-600 ml-auto whitespace-nowrap" title="Count and total value of every bid matching the filters above — your whole bid book, not just open bids."><span className="font-mono font-semibold">{filtered.length}</span> bids · <span className="font-mono font-semibold">{money(filtered.reduce((s,p)=>s+(p.bidAmount||0),0),true)}</span> total</div>
    </div>
    <div className="bg-white border border-stone-200 overflow-auto" style={{maxHeight:'calc(100vh - 230px)'}}>
     <table style={{tableLayout:'fixed',width:'100%'}} className="text-sm">
@@ -3323,8 +3335,17 @@ const todayActionCount=(proposals,recentSent)=>{const today=todayStr();const hor
 const isWinToBook=(p)=>OPEN_STATUSES.includes(p.status)&&/\bawarded\b|\bwe (won|got)\b|likely awarded|notice to proceed/i.test((p.nextAction||'')+' '+(p.notes||''))&&!/not awarded|\blost\b|went with|going with/i.test((p.nextAction||'')+' '+(p.notes||''));
 const isLossToClear=(p)=>OPEN_STATUSES.includes(p.status)&&/\blost\b|not awarded|went with|going with|awarded to|project (closed|cancell)|no longer/i.test((p.nextAction||'')+' '+(p.notes||''));
 const isBigQuiet=(p,today)=>OPEN_STATUSES.includes(p.status)&&(p.bidAmount||0)>=250000&&(!p.nextActionDate||p.nextActionDate<today);
-const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveProposal,onCloneToWinner})=>{
+// [PHASE 1 2026-06-22 — Ben] ONE canonical "needs follow-up / overdue" test, shared by the Today
+// Overdue card, the Follow-Ups queue, the Dashboard KPI and the nav badge — so the overdue number
+// reads the same on every screen. A bid counts as overdue when it's open (or still carries a next
+// action) AND it's either past its SLA (overdueDays) OR its next-action date is due today-or-earlier
+// — UNLESS we've already emailed that contact more recently than our last logged touch (todayHandled).
+const isOverdueBid=(p,settings,recentSent,today)=>(OPEN_STATUSES.includes(p.status)||!!p.nextAction||!!p.nextActionDate)&&(((overdueDays(p,settings)||0)>0)||(!!p.nextActionDate&&p.nextActionDate<=today))&&!todayHandled(p,recentSent);
+const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveProposal,onCloneToWinner,onNavigate,onSelectGC,onMarkContacted,mode})=>{
  const today=todayStr();
+ // [PHASE 1 2026-06-22 — Ben] focus = the single pile the worklist is zeroed in on (set by the
+ // Replies / Wins stat cards). null = show every non-empty pile.
+ const [focus,setFocus]=useState(null);
  const horizon=(()=>{const d=new Date();d.setDate(d.getDate()+14);return d.toISOString().slice(0,10);})();
  const wrOf=(gc)=>{const g=(gcStats||[]).find(x=>x.gc===gc);return g&&g.winRate!=null?g.winRate:null;};
  const ev=(p)=>{const w=wrOf(p.gc);return Math.round((p.bidAmount||0)*(w!=null?Math.max(w,0.1):0.30));};
@@ -3357,7 +3378,7 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
  // [COCKPIT 2026-06-22 — Ben] Where I stand stat cards.
  const openPipeline=useMemo(()=>{const ps=proposals.filter(p=>OPEN_STATUSES.includes(p.status));return{count:ps.length,value:ps.reduce((s,p)=>s+(p.bidAmount||0),0)};},[proposals]);
  const liveWinnable=useMemo(()=>{const ps=proposals.filter(p=>p.status==='Bidding'||(isTodayReply(p,recentSent)&&analyzeReply((p.nextAction||'')+' '+(p.notes||'')).state!=='lost'));return ps.reduce((s,p)=>s+(p.bidAmount||0),0);},[proposals,recentSent]);
- const overdueList=useMemo(()=>proposals.filter(p=>OPEN_STATUSES.includes(p.status)&&p.nextActionDate&&p.nextActionDate<today),[proposals,today]);
+ const overdueList=useMemo(()=>proposals.filter(p=>isOverdueBid(p,settings,recentSent,today)),[proposals,settings,recentSent,today]);
  const leadsToPrice=useMemo(()=>proposals.filter(p=>p.status==='Lead').length,[proposals]);
 
  // one-write helpers (single upsert each — no double-write races)
@@ -3388,45 +3409,69 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
      className={`text-xs px-2.5 py-1 rounded-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${cls}`}>{children}</button>
  );
  const Flags=({p})=>{const fl=bidFlags(p);return fl.length?(<span className="inline-flex gap-1 flex-wrap">{fl.map((f,i)=><span key={i} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${f[2]}`}>{f[0]} {f[1]}</span>)}</span>):null;};
- const Section=({icon,title,count,tint,children})=>(
+ const Section=({id,icon,title,count,tint,children})=>{
+   if(count===0) return null;          // [PHASE 1] hide empty piles instead of "Nothing here right now"
+   if(focus&&focus!==id) return null;  // [PHASE 1] focus mode: show only the pile the user clicked
+   return (
    <section className="mb-6">
     <div className="flex items-center gap-2 mb-2">
      <span className="text-lg">{icon}</span>
      <h2 className="font-serif text-lg text-stone-900">{title}</h2>
      <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${tint}`}>{count}</span>
     </div>
-    {count===0
-      ? <div className="text-sm text-stone-400 italic border border-dashed border-stone-200 rounded-sm px-3 py-4 bg-white">Nothing here right now.</div>
-      : <div className="space-y-2">{children}</div>}
+    <div className="space-y-2">{children}</div>
    </section>
- );
+   );
+ };
 
  return (
   <div>
+   {/* [PHASE 2 2026-06-22 — Ben] Decisions ↔ Call list toggle — the old Follow-Ups tab now lives here. */}
+   <div className="inline-flex items-center gap-1 mb-4 bg-stone-100 border border-stone-200 rounded-sm p-0.5">
+    <button onClick={()=>onNavigate&&onNavigate('today')} className={`text-sm px-3 py-1.5 rounded-sm inline-flex items-center gap-1.5 font-medium ${mode!=='calls'?'bg-white shadow-sm text-stone-900':'text-stone-600 hover:text-stone-900'}`}>📥 Decisions{todayActionCount(proposals,recentSent)>0&&<span className="text-[10px] px-1.5 py-0.5 rounded-full font-bold bg-sky-100 text-sky-700">{todayActionCount(proposals,recentSent)}</span>}</button>
+    <button onClick={()=>onNavigate&&onNavigate('followups')} className={`text-sm px-3 py-1.5 rounded-sm inline-flex items-center gap-1.5 font-medium ${mode==='calls'?'bg-white shadow-sm text-stone-900':'text-stone-600 hover:text-stone-900'}`}>📞 Call list{overdueList.length>0&&<span className="text-[10px] px-1.5 py-0.5 rounded-full font-bold bg-rose-100 text-rose-700">{overdueList.length}</span>}</button>
+   </div>
+   {mode==='calls'&&<FollowUpsView proposals={proposals} settings={settings} gcStats={gcStats} recentSent={recentSent} onSelectProposal={onSelectProposal} onSelectGC={onSelectGC} onMarkContacted={onMarkContacted} onSaveProposal={onSaveProposal}/>}
+   {mode!=='calls'&&(<React.Fragment>
    <div className="mb-5">
     <h1 className="font-serif text-2xl text-stone-900">📥 Today</h1>
-    <p className="text-sm text-stone-500 mt-0.5">{formatDate(today)} · {replies.length} repl{replies.length===1?'y':'ies'} to action · {rePitch.length} re-pitch · {newOpps.length} new opportunit{newOpps.length===1?'y':'ies'} · {winsToBook.length} win{winsToBook.length===1?'':'s'} to book · {lossesToClear.length} loss{lossesToClear.length===1?'':'es'} to clear</p>
+    <p className="text-sm text-stone-600 mt-0.5">Your decision list for today — every bid that needs a reply, a booking, or a yes/no. Each button writes straight to the database, so the whole app updates. Click a card above to focus on one pile.</p>
+    <p className="text-xs text-stone-400 mt-1">{formatDate(today)} · {replies.length} repl{replies.length===1?'y':'ies'} to action · {rePitch.length} re-pitch · {newOpps.length} new opportunit{newOpps.length===1?'y':'ies'} · {winsToBook.length} win{winsToBook.length===1?'':'s'} to book · {lossesToClear.length} loss{lossesToClear.length===1?'':'es'} to clear</p>
    </div>
 
-   {/* [COCKPIT 2026-06-22 — Ben] Where I stand stat strip */}
-   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-6">
+   {/* [PHASE 1 2026-06-22 — Ben] Where I stand — every card is now a button. The three blue/grey
+       overview cards jump to the full bid list (Pipeline) or the call queue; the amber/green action
+       cards zero the worklist below in on that one pile (click again to clear). */}
+   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-4">
     {[
-     {label:'Open pipeline',value:money(openPipeline.value,true),sub:openPipeline.count+' bid'+(openPipeline.count===1?'':'s'),tint:'bg-sky-50 border-sky-200 text-sky-900'},
-     {label:'Live & winnable',value:money(liveWinnable,true),sub:'Bidding + live replies',tint:'bg-emerald-50 border-emerald-200 text-emerald-900'},
-     {label:'Overdue',value:overdueList.length+' bid'+(overdueList.length===1?'':'s'),sub:money(overdueList.reduce((s,p)=>s+(p.bidAmount||0),0),true),tint:overdueList.length>0?'bg-rose-50 border-rose-200 text-rose-900':'bg-stone-50 border-stone-200 text-stone-600'},
-     {label:'Replies to answer',value:replies.length,sub:replies.length===1?'reply':'replies',tint:replies.length>0?'bg-amber-50 border-amber-200 text-amber-900':'bg-stone-50 border-stone-200 text-stone-600'},
-     {label:'Wins to book',value:winsToBook.length,sub:money(winsToBook.reduce((s,p)=>s+(p.bidAmount||0),0),true),tint:winsToBook.length>0?'bg-emerald-50 border-emerald-300 text-emerald-900':'bg-stone-50 border-stone-200 text-stone-600'},
-     {label:'Leads to price',value:leadsToPrice,sub:'status: Lead',tint:'bg-stone-50 border-stone-200 text-stone-700'},
+     {label:'Open pipeline',value:money(openPipeline.value,true),sub:openPipeline.count+' open bid'+(openPipeline.count===1?'':'s'),tint:'bg-sky-50 border-sky-200 text-sky-900',onClick:()=>onNavigate&&onNavigate('pipeline'),hint:'See all bids →'},
+     {label:'Live & winnable',value:money(liveWinnable,true),sub:'bidding + live replies',tint:'bg-emerald-50 border-emerald-200 text-emerald-900',onClick:()=>onNavigate&&onNavigate('pipeline'),hint:'See all bids →'},
+     {label:'Overdue',value:overdueList.length+' bid'+(overdueList.length===1?'':'s'),sub:money(overdueList.reduce((s,p)=>s+(p.bidAmount||0),0),true)+' waiting',tint:overdueList.length>0?'bg-rose-50 border-rose-200 text-rose-900':'bg-stone-50 border-stone-200 text-stone-600',onClick:()=>onNavigate&&onNavigate('followups'),hint:'Open call queue →'},
+     {label:'Replies to answer',value:replies.length,sub:replies.length===1?'reply':'replies',tint:replies.length>0?'bg-amber-50 border-amber-200 text-amber-900':'bg-stone-50 border-stone-200 text-stone-600',onClick:()=>setFocus(focus==='replies'?null:'replies'),active:focus==='replies',hint:focus==='replies'?'Showing — clear':'Focus this'},
+     {label:'Wins to book',value:winsToBook.length,sub:money(winsToBook.reduce((s,p)=>s+(p.bidAmount||0),0),true),tint:winsToBook.length>0?'bg-emerald-50 border-emerald-300 text-emerald-900':'bg-stone-50 border-stone-200 text-stone-600',onClick:()=>setFocus(focus==='wins'?null:'wins'),active:focus==='wins',hint:focus==='wins'?'Showing — clear':'Focus this'},
+     {label:'Leads to price',value:leadsToPrice,sub:'status: Lead',tint:'bg-stone-50 border-stone-200 text-stone-700',onClick:()=>onNavigate&&onNavigate('pipeline'),hint:'See all bids →'},
     ].map(c=>(
-     <div key={c.label} className={`rounded border px-3 py-2.5 ${c.tint}`}>
+     <button key={c.label} onClick={c.onClick} title={c.hint}
+       className={`text-left rounded border px-3 py-2.5 transition-all hover:shadow-sm ${c.tint} ${c.active?'ring-2 ring-stone-900 ring-offset-1':''}`}>
       <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70 mb-0.5">{c.label}</div>
       <div className="text-xl font-bold leading-none">{c.value}</div>
       <div className="text-[11px] opacity-60 mt-0.5">{c.sub}</div>
-     </div>
+      <div className="text-[10px] mt-1.5 font-semibold opacity-50">{c.hint}</div>
+     </button>
     ))}
    </div>
 
-   <Section icon="💬" title="Replies to action" count={replies.length} tint="bg-sky-100 text-sky-800">
+   {focus&&<button onClick={()=>setFocus(null)} className="mb-4 text-sm text-stone-600 hover:text-stone-900 inline-flex items-center gap-1 font-medium">← Show all today&apos;s work</button>}
+
+   {!focus&&(replies.length+winsToBook.length+lossesToClear.length+bigQuiet.length+rePitch.length+newOpps.length)===0&&(
+    <div className="bg-white border border-dashed border-stone-300 rounded-sm px-6 py-10 text-center">
+     <div className="text-3xl mb-2">✅</div>
+     <div className="font-serif text-xl text-stone-800">You&apos;re all caught up</div>
+     <div className="text-sm text-stone-500 mt-1 max-w-md mx-auto">Nothing needs a decision right now — no replies to answer, wins to book, losses to clear or quiet bids to chase. Use the cards above to see the full Pipeline or the call queue.</div>
+    </div>
+   )}
+
+   <Section id="replies" icon="💬" title="Replies to action" count={replies.length} tint="bg-sky-100 text-sky-800">
     {replies.map(p=>{const dnc=isDNC(p.gc);const gist=(p.nextAction||'').replace(/^.*?respond:\s*/i,'').trim();return(
      <div key={p.id} className="bg-white border border-stone-200 rounded-sm p-3">
       <button onClick={()=>onSelectProposal(p.id)} className="text-left w-full group">
@@ -3451,7 +3496,7 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
     );})}
    </Section>
 
-   <Section icon="✅" title="Wins to book" count={winsToBook.length} tint="bg-emerald-100 text-emerald-800">
+   <Section id="wins" icon="✅" title="Wins to book" count={winsToBook.length} tint="bg-emerald-100 text-emerald-800">
     {winsToBook.map(p=>{const snippet=((p.nextAction||p.notes||'').slice(0,80));return(
      <div key={p.id} className="bg-white border border-stone-200 rounded-sm p-3">
       <button onClick={()=>onSelectProposal(p.id)} className="text-left w-full group">
@@ -3471,7 +3516,7 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
     );})}
    </Section>
 
-   <Section icon="❌" title="Losses to clear" count={lossesToClear.length} tint="bg-rose-100 text-rose-700">
+   <Section id="losses" icon="❌" title="Losses to clear" count={lossesToClear.length} tint="bg-rose-100 text-rose-700">
     {lossesToClear.map(p=>{const snippet=((p.nextAction||p.notes||'').slice(0,80));return(
      <div key={p.id} className="bg-white border border-stone-200 rounded-sm p-3">
       <button onClick={()=>onSelectProposal(p.id)} className="text-left w-full group">
@@ -3492,7 +3537,7 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
     );})}
    </Section>
 
-   <Section icon="🔇" title="Big bids going quiet" count={bigQuiet.length} tint="bg-amber-100 text-amber-800">
+   <Section id="bigquiet" icon="🔇" title="Big bids going quiet" count={bigQuiet.length} tint="bg-amber-100 text-amber-800">
     {bigQuiet.map(p=>{const snippet=((p.nextAction||p.notes||'').slice(0,80));return(
      <div key={p.id} className="bg-white border border-stone-200 rounded-sm p-3">
       <button onClick={()=>onSelectProposal(p.id)} className="text-left w-full group">
@@ -3514,7 +3559,7 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
     );})}
    </Section>
 
-   <Section icon="♻️" title="Re-pitch / chase the project" count={rePitch.length} tint="bg-violet-100 text-violet-800">
+   <Section id="repitch" icon="♻️" title="Re-pitch / chase the project" count={rePitch.length} tint="bg-violet-100 text-violet-800">
     {rePitch.map(p=>(
      <div key={p.id} className="bg-white border border-stone-200 rounded-sm p-3">
       <button onClick={()=>onSelectProposal(p.id)} className="text-left w-full group">
@@ -3534,7 +3579,7 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
     ))}
    </Section>
 
-   <Section icon="✨" title="New opportunities" count={newOpps.length} tint="bg-emerald-100 text-emerald-800">
+   <Section id="newopps" icon="✨" title="New opportunities" count={newOpps.length} tint="bg-emerald-100 text-emerald-800">
     {newOpps.map(p=>{const dnc=isDNC(p.gc);const due=p.nextActionDate;const overdue=due&&due<today;return(
      <div key={p.id} className="bg-white border border-stone-200 rounded-sm p-3">
       <button onClick={()=>onSelectProposal(p.id)} className="text-left w-full group">
@@ -3554,6 +3599,7 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
      </div>
     );})}
    </Section>
+   </React.Fragment>)}
   </div>
  );
 };
@@ -3588,7 +3634,7 @@ const FollowUpsView=({proposals,settings,gcStats,recentSent,onSelectProposal,onS
    return{...p,_od:od,_naOD:naOD,_emailedISO:eISO,_handled:!!(eISO&&eISO.slice(0,10)>(p.lastTouched||'')),_score:followUpScore(p,settings,gcWR.get(p.gc))+(naOD*5000),_gcWR:gcWR.get(p.gc)};
   });
   // [GRAPH 2026-06-19] Hide from Overdue any bid Paul has already emailed in Outlook more recently than our last logged touch.
-  if(filter==='overdue') pool=pool.filter(p=>(p._od>0||p._naOD>0)&&!p._handled);
+  if(filter==='overdue') pool=pool.filter(p=>isOverdueBid(p,settings,recentSent,today));
   else if(filter==='large') pool=pool.filter(p=>p.bidAmount>=100000);
   else if(filter==='highWR') pool=pool.filter(p=>p._gcWR!==null&&p._gcWR>=0.5);
   return pool.sort((a,b)=>b._score-a._score);
@@ -3618,7 +3664,7 @@ const FollowUpsView=({proposals,settings,gcStats,recentSent,onSelectProposal,onS
   <div className="space-y-4">
    <div className="bg-gradient-to-br from-rose-50 to-amber-50 border border-rose-200 px-5 py-4">
     <div className="flex items-start gap-3"><Ico n="phone" size={18} className="text-rose-700 mt-1"/>
-     <div><h2 className="font-serif text-2xl text-stone-900">Today's Call Queue</h2><p className="text-sm text-stone-700 mt-1">{queue.length} {filter==='overdue'?'overdue follow-ups':filter==='done'?'recently contacted (newest first)':'bids'} · <strong>{money(queue.reduce((s,p)=>s+(p.bidAmount||0),0),true)}</strong> on the line.{hiddenHandled>0&&<span className="text-emerald-700 font-medium"> {hiddenHandled} already emailed — hidden.</span>} Sorted by priority: <span className="font-mono text-xs">bid × overdue × win-rate</span>.</p></div>
+     <div><h2 className="font-serif text-2xl text-stone-900">Today's Call Queue</h2><p className="text-sm text-stone-700 mt-1">{queue.length} {filter==='overdue'?'overdue follow-ups':filter==='done'?'recently contacted (newest first)':'bids'} · <strong>{money(queue.reduce((s,p)=>s+(p.bidAmount||0),0),true)}</strong> on the line.{hiddenHandled>0&&<span className="text-emerald-700 font-medium"> {hiddenHandled} already emailed — hidden.</span>} Sorted by priority: <span className="font-mono text-xs">bid × overdue × win-rate</span>.</p><p className="text-xs text-stone-500 mt-1.5">This is the slice of your pipeline that needs a touch <strong>now</strong> — a subset of all bids, so this total is smaller than the Pipeline and Dashboard figures on purpose.</p></div>
     </div>
    </div>
    {/* [UX 2026-06-11 — Ben] Filter row pins below the sticky nav while the queue scrolls. */}
@@ -6756,9 +6802,12 @@ function App() {
   window.XLSX.utils.book_append_sheet(wb,ws3,'GC Intel');
   window.XLSX.writeFile(wb,`AMS_Floors_${new Date().toISOString().slice(0,10)}.xlsx`);
  };
- const overdueCount=proposals.filter(p=>OPEN_STATUSES.includes(p.status)&&(overdueDays(p,settings)||0)>0).length;
+ const overdueCount=proposals.filter(p=>isOverdueBid(p,settings,recentSent,todayStr())).length;
  const todayCount=todayActionCount(proposals,recentSent);
- const navItems=[{id:'dashboard',label:'Dashboard',icon:'barChart'},{id:'today',label:'Today',icon:'inbox',badge:todayCount},{id:'followups',label:'Follow-Ups',icon:'phone',badge:overdueCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Active Jobs',icon:'flame'},{id:'gcs',label:'GC Intel',icon:'building2'},{id:'intelligence',label:'Intelligence',icon:'zap'},{id:'settings',label:'Settings',icon:'settings'}];
+ // [PHASE 2 2026-06-22 — Ben] 8 tabs → 6. Follow-Ups now lives inside Today (Call list mode);
+ // Intelligence now lives inside GC Intel (Deep dive sub-tab). Order: Dashboard, Today, Pipeline,
+ // Active Jobs, GC Intel, Settings.
+ const navItems=[{id:'dashboard',label:'Dashboard',icon:'barChart'},{id:'today',label:'Today',icon:'inbox',badge:todayCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Active Jobs',icon:'flame'},{id:'gcs',label:'GC Intel',icon:'building2'},{id:'settings',label:'Settings',icon:'settings'}];
  if(!loaded) return (
   <div className="min-h-screen flex items-center justify-center bg-stone-100">
    <div className="text-center"><Ico n="loader" size={32} className="mx-auto mb-3 text-stone-400 animate-spin"/><p className="text-sm text-stone-600">Loading AMS Floors Command Center…</p>{syncing&&<p className="text-xs text-stone-500 mt-1">Setting up database for first time…</p>}</div>
@@ -6775,7 +6824,8 @@ function App() {
      </div>
      <nav className="flex items-center gap-1 flex-1 flex-wrap">
       {navItems.map(item=>{
-       const active=view===item.id;
+       // [PHASE 2] keep Today lit while in its Call list mode, and GC Intel lit while in Deep dive.
+       const active=view===item.id||(item.id==='today'&&view==='followups')||(item.id==='gcs'&&view==='intelligence');
        return <button key={item.id} onClick={()=>{setView(item.id);setSelectedGC(null);}} className={`text-sm px-3 py-1.5 rounded-sm inline-flex items-center gap-1.5 transition-colors ${active?'bg-stone-900 text-white':'text-stone-700 hover:bg-stone-100'}`}><Ico n={item.icon} size={13}/>{item.label}{item.badge>0&&<span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${active?'bg-rose-300 text-rose-900':'bg-rose-100 text-rose-700'}`}>{item.badge}</span>}</button>;
       })}
      </nav>
@@ -6794,15 +6844,25 @@ function App() {
    </header>
    {}
    <main className="px-5 py-5" style={{maxWidth:'1600px',margin:'0 auto'}}>
-    {view==='dashboard'&&<DashboardView proposals={proposals} settings={settings} gcStats={gcStats} estimateItems={estimateItems} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
+    {view==='dashboard'&&<DashboardView proposals={proposals} settings={settings} gcStats={gcStats} estimateItems={estimateItems} recentSent={recentSent} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
     {view==='pipeline'&&<PipelineView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
-    {view==='followups'&&<FollowUpsView proposals={proposals} settings={settings} gcStats={gcStats} recentSent={recentSent} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted} onSaveProposal={saveProposal}/>}
-    {view==='gcs'&&!selectedGC&&<GCIntelView gcStats={gcStats} proposals={proposals} onSelectGC={setSelectedGC} settings={settings}/>}
+    {/* [PHASE 2] The Follow-Ups route now renders Today in Call list mode (combined slot below). */}
+    {(view==='gcs'||view==='intelligence')&&!selectedGC&&(
+     <div className="space-y-4">
+      {/* [PHASE 2 2026-06-22 — Ben] GC Intel sub-tabs: Scorecards (was GC Intel) + Deep dive (was the separate Intelligence tab). */}
+      <div className="inline-flex items-center gap-1 bg-stone-100 border border-stone-200 rounded-sm p-0.5">
+       <button onClick={()=>{setView('gcs');setSelectedGC(null);}} className={`text-sm px-3 py-1.5 rounded-sm font-medium inline-flex items-center gap-1.5 ${view==='gcs'?'bg-white shadow-sm text-stone-900':'text-stone-600 hover:text-stone-900'}`}><Ico n="building2" size={13}/>GC Scorecards</button>
+       <button onClick={()=>{setView('intelligence');setSelectedGC(null);}} className={`text-sm px-3 py-1.5 rounded-sm font-medium inline-flex items-center gap-1.5 ${view==='intelligence'?'bg-white shadow-sm text-stone-900':'text-stone-600 hover:text-stone-900'}`}><Ico n="zap" size={13}/>Deep dive</button>
+      </div>
+      {view==='gcs'&&<GCIntelView gcStats={gcStats} proposals={proposals} onSelectGC={setSelectedGC} settings={settings}/>}
+      {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSaveProposal={saveProposal}/>}
+     </div>
+    )}
     {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
     {view==='active'&&<ActiveJobsView proposals={proposals} estimateItems={estimateItems} estimates={estimates} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
     {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal} sb={sb} estimateItems={estimateItems} onImported={reloadData}/>}
-    {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSaveProposal={saveProposal}/>}
-    {view==='today'&&<TodayView proposals={proposals} settings={settings} gcStats={gcStats} recentSent={recentSent} onSelectProposal={setSelectedId} onSaveProposal={saveProposal} onCloneToWinner={cloneToWinner}/>}
+    {/* [PHASE 2] The Intelligence route now renders inside GC Intel as the Deep dive sub-tab (above). */}
+    {(view==='today'||view==='followups')&&<TodayView proposals={proposals} settings={settings} gcStats={gcStats} recentSent={recentSent} onSelectProposal={setSelectedId} onSaveProposal={saveProposal} onCloneToWinner={cloneToWinner} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted} mode={view==='followups'?'calls':'decisions'}/>}
    </main>
    {selectedProposal&&<ProjectDrawer
     proposal={selectedProposal}
