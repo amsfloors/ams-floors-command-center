@@ -3005,7 +3005,7 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
     <select value={gcF} onChange={e=>setGcF(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none" style={{maxWidth:'180px'}}><option value="all">All GCs</option>{allGCs.map(g=><option key={g} value={g}>{g}</option>)}</select>
     <select value={roleF} onChange={e=>setRoleF(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none"><option value="all">All people</option><option value="Peter">Peter (Est.)</option><option value="Paul">Paul (BD)</option><option value="David">David (PM)</option></select>
     <select value={sortBy} onChange={e=>setSortBy(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none"><option value="submitted_desc">Newest first</option><option value="submitted_asc">Oldest first</option><option value="amount_desc">$ high→low</option><option value="amount_asc">$ low→high</option><option value="gc">GC A→Z</option><option value="status">Status</option></select>
-    <div className="text-xs text-stone-600 ml-auto whitespace-nowrap" title="Count and total value of every bid matching the filters above — your whole bid book, not just open bids."><span className="font-mono font-semibold">{filtered.length}</span> bids · <span className="font-mono font-semibold">{money(filtered.reduce((s,p)=>s+(p.bidAmount||0),0),true)}</span> total</div>
+    <div className="text-xs text-stone-600 ml-auto whitespace-nowrap" title="Count and total value of every bid matching the filters above — your whole bid book, not just open bids."><span className="font-mono font-semibold">{filtered.length}</span> bids · <span className="font-mono font-semibold">{money(filtered.reduce((s,p)=>s+bidValue(p),0),true)}</span> total</div>
    </div>
    <div className="bg-white border border-stone-200 overflow-auto" style={{maxHeight:'calc(100vh - 230px)'}}>
     <table style={{tableLayout:'fixed',width:'100%'}} className="text-sm">
@@ -4101,6 +4101,18 @@ const GCDetailView=({gc,proposals,gcStats,onBack,onSelectProposal,settings})=>{
 const ActiveJobsView=({proposals,estimateItems,estimates,onSelectProposal,onSelectGC,settings,onSaveProposal})=>{
  const [editingActual,setEditingActual]=useState(null);
  const [editVal,setEditVal]=useState('');
+ // Segmented "Jobs" workspace: Awarded (won, not started) / Active (executing) / Completed (done).
+ const SEG_STATUS={awarded:['Awarded'],active:['Active'],completed:['Completed','Complete']};
+ const segCounts=useMemo(()=>{
+  const inY=proposals.filter(x=>matchesYearFilter(x,settings.yearFilter));
+  const cnt=ss=>new Set(inY.filter(x=>ss.includes(x.status)).map(x=>String(x.projectNumber||x.id))).size;
+  return {awarded:cnt(SEG_STATUS.awarded),active:cnt(SEG_STATUS.active),completed:cnt(SEG_STATUS.completed)};
+ },[proposals,settings.yearFilter]);
+ const [segment,setSegment]=useState(()=>{
+  const inY=proposals.filter(x=>matchesYearFilter(x,settings.yearFilter));
+  const has=ss=>inY.some(x=>ss.includes(x.status));
+  return has(['Awarded'])?'awarded':has(['Active'])?'active':'completed';
+ });
  // BRIDGE (2026-06-11 — Ben): Est. Cost / Est. Margin derive from the migrated bidsheet LINE ITEMS
  // when the proposal-level summary fields were never filled (the migration stored detail at line
  // level; this screen previously read only the empty summary fields).
@@ -4124,9 +4136,9 @@ const ActiveJobsView=({proposals,estimateItems,estimates,onSelectProposal,onSele
  // projectNumber, e.g. 1573 = 6 docs). Group by projectNumber and show project-level totals;
  // each document stays its own row (clickable, actuals editable).
  const groups=useMemo(()=>{
-  // [STATUS FLOW 2026-06-11 — Ben] This tab is for jobs we are EXECUTING — status 'Active' only.
-  // 'Awarded' = won but not started (lives in Pipeline); 'Completed' = done (payment tracking later).
-  let p=proposals.filter(x=>x.status==='Active');
+  // [STATUS FLOW 2026-06-23] Segmented Jobs workspace — the toggle selects which statuses show:
+  // Awarded (won, not started) / Active (executing) / Completed (done).
+  let p=proposals.filter(x=>SEG_STATUS[segment].includes(x.status));
   p=p.filter(x=>matchesYearFilter(x,settings.yearFilter));
   const docs=p.map(x=>{
    const storedEc=(x.estMaterial||0)+(x.estLabor||0)+(x.estOther||0);
@@ -4155,7 +4167,7 @@ const ActiveJobsView=({proposals,estimateItems,estimates,onSelectProposal,onSele
   });
   order.sort((a,b)=>b.contract-a.contract);
   return order;
- },[proposals,settings.yearFilter,derivedByDoc]);
+ },[proposals,settings.yearFilter,derivedByDoc,segment]);
  const jobs=useMemo(()=>groups.flatMap(g=>g.docs),[groups]);
  const startEdit=(jid,field,curVal,e)=>{e.stopPropagation();setEditingActual({id:jid,field});setEditVal(String(curVal||''));};
  const commitEdit=(j)=>{
@@ -4169,10 +4181,17 @@ const ActiveJobsView=({proposals,estimateItems,estimates,onSelectProposal,onSele
    <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 px-5 py-4 flex items-start gap-3">
     <Ico n="barChart" size={18} className="text-emerald-700 mt-1"/>
     <div>
-     <h2 className="font-serif text-2xl text-stone-900">Active Jobs · Margin Watch</h2>
-     <p className="text-sm text-stone-700 mt-1">{groups.length} project{groups.length!==1?'s':''} · {jobs.length} document{jobs.length!==1?'s':''} · <strong>{money(groups.reduce((s,g)=>s+g.contract,0),true)}</strong> net contract value
-      {jobs.filter(j=>j._ec===0).length>0&&<span className="text-rose-700 ml-2">· {jobs.filter(j=>j._ec===0).length} missing cost data</span>}
-      <span className="text-stone-400 ml-3 text-xs italic">Click Actual Mat / Lab cells to enter David's costs</span>
+     <h2 className="font-serif text-2xl text-stone-900">Jobs</h2>
+     <div className="flex flex-wrap items-center gap-2 mt-2">
+      {[['awarded','Awarded'],['active','Active'],['completed','Completed']].map(([key,lbl])=>(
+       <button key={key} onClick={()=>setSegment(key)} className={'px-3.5 py-1.5 rounded-md text-sm font-medium transition-colors '+(segment===key?'bg-emerald-600 text-white shadow-sm':'bg-white/70 text-stone-600 border border-stone-300 hover:bg-white')}>
+        {lbl}<span className={'ml-2 font-mono text-xs '+(segment===key?'text-emerald-100':'text-stone-400')}>{segCounts[key]}</span>
+       </button>
+      ))}
+     </div>
+     <p className="text-sm text-stone-700 mt-2">{groups.length} project{groups.length!==1?'s':''} · {jobs.length} document{jobs.length!==1?'s':''} · <strong>{money(groups.reduce((s,g)=>s+g.contract,0),true)}</strong> {segment==='awarded'?'awarded value':segment==='completed'?'final contract value':'net contract value'}
+      {segment!=='awarded'&&jobs.filter(j=>j._ec===0).length>0&&<span className="text-rose-700 ml-2">· {jobs.filter(j=>j._ec===0).length} missing cost data</span>}
+      {segment!=='awarded'&&<span className="text-stone-400 ml-3 text-xs italic">Click Actual Mat / Lab cells to enter David's costs</span>}
      </p>
     </div>
    </div>
@@ -4190,7 +4209,7 @@ const ActiveJobsView=({proposals,estimateItems,estimates,onSelectProposal,onSele
       <TH className="sticky top-0 bg-stone-50 z-10">Health</TH>
      </tr></thead>
      <tbody>
-      {jobs.length===0&&<tr><td colSpan={10}><Empty icon="check2" title="No awarded projects" body="Projects with Won / Active / Complete status appear here."/></td></tr>}
+      {jobs.length===0&&<tr><td colSpan={10}><Empty icon="check2" title={segment==='awarded'?'No awarded jobs waiting to start':segment==='completed'?'No completed jobs yet':'No active jobs in progress'} body={segment==='awarded'?'Jobs you have won but not yet mobilized appear here.':segment==='completed'?'Finished jobs appear here for final margin review.':'Jobs currently being executed appear here.'}/></td></tr>}
       {groups.map(g=>{
        const multi=g.docs.length>1;
        const projHealth=(()=>{
@@ -5701,7 +5720,7 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
    .map(m=>({...m,proposals:m.proposals.size}));
  },[estimateItems]);
  const funnel=useMemo(()=>{
-  const yr=proposals.filter(p=>matchesYearFilter(p,settings.yearFilter));
+  const yr=dedupeByProject(proposals.filter(p=>matchesYearFilter(p,settings.yearFilter)));
   const stages=[
    {label:'Lead',statuses:['Lead','Qualified'],color:'bg-stone-200 text-stone-700'},
    {label:'Bidding',statuses:['Bidding','Hold'],color:'bg-sky-100 text-sky-800'},
@@ -5712,20 +5731,20 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
   ];
   return stages.map(s=>{
    const ps=yr.filter(p=>s.statuses.includes(p.status));
-   return{...s,count:ps.length,value:ps.reduce((a,p)=>a+(p.bidAmount||0),0)};
+   return{...s,count:ps.length,value:ps.reduce((a,p)=>a+bidValue(p),0)};
   });
  },[proposals,settings.yearFilter]);
  const lostBreakdown=useMemo(()=>{
-  const lost=proposals.filter(p=>LOST_STATUSES.includes(p.status));
+  const lost=dedupeByProject(proposals.filter(p=>LOST_STATUSES.includes(p.status)&&matchesYearFilter(p,settings.yearFilter)));
   const map=new Map();
   lost.forEach(p=>{
    const r=p.lostReason||'Not recorded';
    if(!map.has(r)) map.set(r,{reason:r,count:0,value:0});
    const m=map.get(r);
-   m.count++;m.value+=(p.bidAmount||0);
+   m.count++;m.value+=bidValue(p);
   });
   return [...map.values()].sort((a,b)=>b.count-a.count);
- },[proposals]);
+ },[proposals,settings.yearFilter]);
  const tabs=[
   {id:'gcs',label:'GC Performance'},
   {id:'funnel',label:'Pipeline Funnel'},
@@ -7062,7 +7081,7 @@ function App() {
  // [PHASE 2 2026-06-22 — Ben] 8 tabs → 6. Follow-Ups now lives inside Today (Call list mode);
  // Intelligence now lives inside GC Intel (Deep dive sub-tab). Order: Dashboard, Today, Pipeline,
  // Active Jobs, GC Intel, Settings.
- const navItems=[{id:'dashboard',label:'Dashboard',icon:'barChart'},{id:'today',label:'Today',icon:'inbox',badge:todayCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Active Jobs',icon:'flame'},{id:'gcs',label:'GC Intel',icon:'building2'},{id:'settings',label:'Settings',icon:'settings'}];
+ const navItems=[{id:'dashboard',label:'Dashboard',icon:'barChart'},{id:'today',label:'Today',icon:'inbox',badge:todayCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Jobs',icon:'flame'},{id:'gcs',label:'GC Intel',icon:'building2'},{id:'settings',label:'Settings',icon:'settings'}];
  if(!loaded) return (
   <div className="min-h-screen flex items-center justify-center bg-stone-100">
    <div className="text-center"><Ico n="loader" size={32} className="mx-auto mb-3 text-stone-400 animate-spin"/><p className="text-sm text-stone-600">Loading AMS Floors Command Center…</p>{syncing&&<p className="text-xs text-stone-500 mt-1">Setting up database for first time…</p>}</div>
