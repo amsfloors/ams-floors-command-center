@@ -2664,6 +2664,34 @@ const computeGCStats=proposals=>{
  });
  return Array.from(map.values()).map(s=>{const disp=Object.keys(s._names).sort((a,b)=>(s._names[b]-s._names[a])||(b.length-a.length))[0]||s.gc;const{_names,...rest}=s;return{...rest,gc:disp,contacts:Array.from(s.contacts),winRate:(s.won+s.lost)>0?s.won/(s.won+s.lost):null,avgBid:s.proposals?s.totalVolume/s.proposals:0};});
 };
+// [ONE SET OF BOOKS 2026-06-23 — Paul: "fix the CORE, not the symptoms"] THE single source of truth.
+// Every screen used to re-filter, re-dedupe, re-value and re-bucket the bids on its own — which is exactly
+// why tabs disagreed and why a fix in one place leaked everywhere else. From here on the canonical book is
+// derived ONCE: bidValue() is the one rule for what a job is worth; dedupeByProject collapses re-bids/
+// revisions to a single row; the year filter and the open/won/lost split happen here and nowhere else.
+// Views READ these numbers — they must not recompute them.
+const bidValue=(p)=> (p&&(p.contractAmount||p.bidAmount))||0;
+const computeBidBook=(proposals,settings,recentSent)=>{
+ const today=todayStr();
+ const yf=(settings&&settings.yearFilter)||'All';
+ const all=Array.isArray(proposals)?proposals:[];
+ const inYear=all.filter(p=>matchesYearFilter(p,yf));
+ const open=dedupeByProject(inYear.filter(p=>OPEN_STATUSES.includes(p.status)));
+ const won =dedupeByProject(inYear.filter(p=>WON_STATUSES.includes(p.status)));
+ const lost=dedupeByProject(inYear.filter(p=>LOST_STATUSES.includes(p.status)));
+ const book=[...open,...won,...lost];
+ const sum=(rows)=>rows.reduce((s,p)=>s+bidValue(p),0);
+ const settled=won.length+lost.length;
+ // Overdue is measured on the FULL set (not year-filtered) so it always equals the nav badge / call queue.
+ const overdue=all.filter(p=>isOverdueBid(p,settings,recentSent,today));
+ return Object.freeze({
+  today, yearFilter:yf, all, book, open, won, lost,
+  counts:{records:inYear.length, distinct:book.length, open:open.length, won:won.length, lost:lost.length, dnc:open.filter(p=>isDNC(p.gc)).length},
+  value:{open:sum(open), won:sum(won), lost:sum(lost), overdue:sum(overdue)},
+  winRate: settled>0? won.length/settled : null,
+  overdue, overdueCount:overdue.length
+ });
+};
 const PATHS = {
  phone:'M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.62 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z',
  search:['M11 17A6 6 0 1 0 11 5a6 6 0 0 0 0 12z','M21 21l-4.35-4.35'],
@@ -2758,23 +2786,16 @@ const Empty=({icon='alertCirc',title,body})=>(
 const TH=({children,className=''})=>(
  <th className={`text-left text-[10px] uppercase tracking-widest font-semibold text-stone-500 px-3 py-2 border-b border-stone-200 ${className}`}>{children}</th>
 );
-const DashboardView=({proposals,settings,gcStats,estimateItems,recentSent,onSelectProposal,onSelectGC,onNavigate})=>{
+const DashboardView=({proposals,settings,gcStats,bidBook,estimateItems,recentSent,onSelectProposal,onSelectGC,onNavigate})=>{
  const filtered=useMemo(()=>proposals.filter(p=>matchesYearFilter(p,settings.yearFilter)),[proposals,settings.yearFilter]);
  const kpis=useMemo(()=>{
-  // [DEDUP 2026-06-23 — Ben] Roll up by distinct project so a re-bid of the same job (Rev.1 / -PR-06)
-  // can't double-count dollars or counts in the headline KPIs.
-  const open=dedupeByProject(filtered.filter(p=>OPEN_STATUSES.includes(p.status)));
-  const won=dedupeByProject(filtered.filter(p=>WON_STATUSES.includes(p.status)));
-  const lost=dedupeByProject(filtered.filter(p=>LOST_STATUSES.includes(p.status)));
-  // [PHASE 1 2026-06-22 — Ben] Overdue uses the shared isOverdueBid test on the FULL bid set (not the
-  // year-filtered pool) so this KPI matches the nav badge and the Today/Follow-Ups overdue count exactly.
-  const overdue=proposals.filter(p=>isOverdueBid(p,settings,recentSent,todayStr()));
-  const nextActionDue=open.filter(p=>p.nextActionDate&&p.nextActionDate<=todayStr());
-  const settled=won.length+lost.length;
+  // [ONE SET OF BOOKS 2026-06-23] Read the canonical buckets/values from bidBook — do NOT re-derive here.
+  const {open,won,counts,value,winRate,overdueCount}=bidBook;
+  const nextActionDue=open.filter(p=>p.nextActionDate&&p.nextActionDate<=bidBook.today);
   const wonWithMargin=won.filter(p=>(p.estMaterial||0)+(p.estLabor||0)>0);
-  const avgMargin=wonWithMargin.length?wonWithMargin.reduce((s,p)=>{const c=p.contractAmount||p.bidAmount||0;const cost=(p.estMaterial||0)+(p.estLabor||0);return s+(c>0?(c-cost)/c:0);},0)/wonWithMargin.length:null;
-  return{openCount:open.length,openValue:open.reduce((s,p)=>s+(p.bidAmount||0),0),awardedValue:won.reduce((s,p)=>s+(p.contractAmount||p.bidAmount||0),0),awardedCount:won.length,winRate:settled>0?won.length/settled:null,overdueCount:overdue.length,overdueValue:overdue.reduce((s,p)=>s+(p.bidAmount||0),0),nextActionDue:nextActionDue.length,avgMargin};
- },[filtered,proposals,settings,recentSent]);
+  const avgMargin=wonWithMargin.length?wonWithMargin.reduce((s,p)=>{const c=bidValue(p);const cost=(p.estMaterial||0)+(p.estLabor||0);return s+(c>0?(c-cost)/c:0);},0)/wonWithMargin.length:null;
+  return{openCount:counts.open,openValue:value.open,awardedValue:value.won,awardedCount:counts.won,winRate,overdueCount,overdueValue:value.overdue,nextActionDue:nextActionDue.length,avgMargin};
+ },[bidBook]);
  const margins=useMemo(()=>{
   const cost=new Map();
   (estimateItems||[]).forEach(it=>{const k=String(it.proposalId);const m=cost.get(k)||{mc:0,mb:0};m.mc+=(Number(it.orderQty)||0)*(Number(it.unitCost)||0)+(Number(it.freight)||0);m.mb+=(Number(it.materialActual)||0);cost.set(k,m);});
@@ -3465,7 +3486,7 @@ const isBigQuiet=(p,today)=>OPEN_STATUSES.includes(p.status)&&(p.bidAmount||0)>=
 // [DNC 2026-06-23 — Ben] Personal-relationship GCs (David handles these himself) never belong on the
 // auto-chase list — keep them out of Overdue so the call queue shows only bids the office should pursue.
 const isOverdueBid=(p,settings,recentSent,today)=>(OPEN_STATUSES.includes(p.status)||!!p.nextAction||!!p.nextActionDate)&&(((overdueDays(p,settings)||0)>0)||(!!p.nextActionDate&&p.nextActionDate<=today))&&!todayHandled(p,recentSent)&&!isDNC(p.gc);
-const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveProposal,onCloneToWinner,onNavigate,onSelectGC,onMarkContacted,mode})=>{
+const TodayView=({proposals,settings,gcStats,bidBook,recentSent,onSelectProposal,onSaveProposal,onCloneToWinner,onNavigate,onSelectGC,onMarkContacted,mode})=>{
  const today=todayStr();
  // [PHASE 1 2026-06-22 — Ben] focus = the single pile the worklist is zeroed in on (set by the
  // Replies / Wins stat cards). null = show every non-empty pile.
@@ -3510,18 +3531,16 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
    .filter(p=>!winIds.has(p.id)&&!lossIds.has(p.id)&&!replyIds.has(p.id)&&isBigQuiet(p,today))
    .sort((a,b)=>(b.bidAmount||0)-(a.bidAmount||0)),[proposals,winIds,lossIds,replyIds,today]);
  // [COCKPIT 2026-06-22 — Ben] Where I stand stat cards.
- const openPipeline=useMemo(()=>{const ps=dedupeByProject(proposals.filter(p=>OPEN_STATUSES.includes(p.status)));return{count:ps.length,value:ps.reduce((s,p)=>s+(p.bidAmount||0),0)};},[proposals]);
+ const openPipeline=useMemo(()=>({count:bidBook.counts.open,value:bidBook.value.open}),[bidBook]);
  const liveWinnable=useMemo(()=>{const ps=proposals.filter(p=>p.status==='Bidding'||(isTodayReply(p,recentSent)&&analyzeReply((p.nextAction||'')+' '+(p.notes||'')).state!=='lost'));return ps.reduce((s,p)=>s+(p.bidAmount||0),0);},[proposals,recentSent]);
- const overdueList=useMemo(()=>proposals.filter(p=>isOverdueBid(p,settings,recentSent,today)),[proposals,settings,recentSent,today]);
+ const overdueList=useMemo(()=>bidBook.overdue,[bidBook]);
  const leadsToPrice=useMemo(()=>proposals.filter(p=>p.status==='Lead').length,[proposals]);
  // [WHOLE BOOK 2026-06-23 — Ben] Account for EVERY bid (Paul: "what about the other ~140?"). Dollars are
  // deduped by project so re-bids don't inflate. Open is split into what needs him vs David's manual GCs.
  const book=useMemo(()=>{
-   const o=dedupeByProject(proposals.filter(p=>OPEN_STATUSES.includes(p.status)));
-   const w=dedupeByProject(proposals.filter(p=>WON_STATUSES.includes(p.status)));
-   const l=dedupeByProject(proposals.filter(p=>LOST_STATUSES.includes(p.status)));
-   return{records:proposals.length,distinct:o.length+w.length+l.length,open:o.length,oVal:o.reduce((s,p)=>s+(p.bidAmount||0),0),won:w.length,wVal:w.reduce((s,p)=>s+(p.contractAmount||p.bidAmount||0),0),lost:l.length,dnc:o.filter(p=>isDNC(p.gc)).length};
- },[proposals]);
+   const {counts,value}=bidBook;
+   return{records:counts.records,distinct:counts.distinct,open:counts.open,oVal:value.open,won:counts.won,wVal:value.won,lost:counts.lost,dnc:counts.dnc};
+ },[bidBook]);
 
  // one-write helpers (single upsert each — no double-write races)
  const logSent=(p)=>onSaveProposal({...p,notes:`[${today}] ✉ Sent reply\n`+(p.notes||''),lastTouched:today,nextAction:null});
@@ -6741,6 +6760,20 @@ function App() {
  // Pull recent Outlook Sent mail so the queue can hide bids already emailed (#1).
  useEffect(()=>{ if(!msAccount){ setRecentSent(null); return; } let off=false; (async()=>{ try{ const token=await getGraphToken(); const map=await fetchRecentSentMap(token); if(!off) setRecentSent(map); }catch(e){ console.warn('sent-items sync failed',e); } })(); return ()=>{off=true;}; },[msAccount]);
  const gcStats=useMemo(()=>computeGCStats(proposals),[proposals]);
+ // [ONE SET OF BOOKS 2026-06-23] Derive the canonical book once here; every view reads from this prop.
+ const bidBook=useMemo(()=>computeBidBook(proposals,settings,recentSent),[proposals,settings,recentSent]);
+ // [CONSISTENCY GUARD 2026-06-23 — Paul: "reliable to the last decimal"] If the book's own invariants ever
+ // break (the buckets don't add up, or dedupe somehow grew the list), shout in the console instead of
+ // shipping a wrong number silently. This is the tripwire that stops cross-tab drift from coming back.
+ useEffect(()=>{
+  if(!bidBook) return;
+  const c=bidBook.value, n=bidBook.counts, problems=[];
+  if(n.distinct!==n.open+n.won+n.lost) problems.push(`distinct ${n.distinct} ≠ open+won+lost ${n.open+n.won+n.lost}`);
+  if(n.records<n.distinct) problems.push(`records ${n.records} < distinct ${n.distinct} (dedupe grew the list?)`);
+  ['open','won','lost','overdue'].forEach(k=>{ if(!(c[k]>=0)) problems.push(`value.${k} not a valid dollar amount`); });
+  if(problems.length) console.error('✗ BID BOOK INCONSISTENT —',problems.join(' · '),n);
+  else console.info(`✓ bid book consistent · ${n.open} open / ${n.won} won / ${n.lost} lost · $${Math.round(c.open/1000)}K open (year: ${bidBook.yearFilter})`);
+ },[bidBook]);
  const selectedProposal=useMemo(()=>proposals.find(p=>p.id===selectedId)||null,[proposals,selectedId]);
  const selectedLineItems=useMemo(()=>lineItems.filter(l=>l.proposalId===selectedId),[lineItems,selectedId]);
  const reloadData=async()=>{
@@ -7066,7 +7099,7 @@ function App() {
    </header>
    {}
    <main className="px-5 py-5" style={{maxWidth:'1600px',margin:'0 auto'}}>
-    {view==='dashboard'&&<DashboardView proposals={proposals} settings={settings} gcStats={gcStats} estimateItems={estimateItems} recentSent={recentSent} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
+    {view==='dashboard'&&<DashboardView proposals={proposals} settings={settings} gcStats={gcStats} bidBook={bidBook} estimateItems={estimateItems} recentSent={recentSent} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
     {view==='pipeline'&&<PipelineView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
     {/* [PHASE 2] The Follow-Ups route now renders Today in Call list mode (combined slot below). */}
     {(view==='gcs'||view==='intelligence')&&!selectedGC&&(
@@ -7084,7 +7117,7 @@ function App() {
     {view==='active'&&<ActiveJobsView proposals={proposals} estimateItems={estimateItems} estimates={estimates} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
     {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal} sb={sb} estimateItems={estimateItems} onImported={reloadData}/>}
     {/* [PHASE 2] The Intelligence route now renders inside GC Intel as the Deep dive sub-tab (above). */}
-    {(view==='today'||view==='followups')&&<TodayView proposals={proposals} settings={settings} gcStats={gcStats} recentSent={recentSent} onSelectProposal={setSelectedId} onSaveProposal={saveProposal} onCloneToWinner={cloneToWinner} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted} mode={view==='followups'?'calls':'decisions'}/>}
+    {(view==='today'||view==='followups')&&<TodayView proposals={proposals} settings={settings} gcStats={gcStats} bidBook={bidBook} recentSent={recentSent} onSelectProposal={setSelectedId} onSaveProposal={saveProposal} onCloneToWinner={cloneToWinner} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted} mode={view==='followups'?'calls':'decisions'}/>}
    </main>
    {selectedProposal&&<ProjectDrawer
     proposal={selectedProposal}
