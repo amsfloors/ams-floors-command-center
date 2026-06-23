@@ -2614,12 +2614,25 @@ const followUpScore=(p,s,wr)=>{
  const w=wr!==null&&wr!==undefined?Math.max(wr,0.1):0.3;
  return (p.bidAmount||0)*(1+od/7)*(1+w);
 };
+// [DEDUP 2026-06-23 — Ben] Two cleanups Paul asked for: (1) the SAME GC under different spellings
+// ("Webb Construction Group, Inc." vs "Webb Construction" vs the "Constrcution" typo) was splitting one
+// builder into several scorecards; (2) the SAME job bid more than once (#1753 + "#1753 Rev.1",
+// "#1573-B" + "#1573-B-PR-06") was double-counting dollars. canonicalGC gives every builder ONE identity;
+// baseProjectId + dedupeByProject give every job ONE identity for dollar/count rollups. Validated
+// 2026-06-23 vs the live book: 178 GC spellings -> 151 real builders (18 merges, none bad) and exactly
+// 2 project collapses (both already-won jobs). Individual bids still show everywhere; only ROLLUPS dedupe.
+const GC_SUFFIX=/(?:incorporated|inc|llc|lllp|llp|ltd|corporation|corp|company|group|the)$/;
+const canonicalGC=(gc)=>{ let g=(gc||'').toLowerCase().replace(/constrcution/g,'construction'); g=g.replace(/[^a-z0-9]/g,''); let prev=null; while(prev!==g){prev=g; g=g.replace(GC_SUFFIX,'');} return g; };
+const baseProjectId=(id)=>{ let s=(id==null?'':String(id)).trim(); s=s.replace(/\s*[-_\s]pr-?\d+$/i,''); s=s.replace(/\s*rev\.?\s*\d+$/i,''); return s.trim().toLowerCase(); };
+const dedupeByProject=(rows)=>{ const fam=new Map(); (rows||[]).forEach(p=>{ const k=baseProjectId(p.id)||('row:'+p.id); const v=(p.contractAmount||p.bidAmount||0); const cur=fam.get(k); if(!cur||v>(cur.contractAmount||cur.bidAmount||0)) fam.set(k,p); }); return Array.from(fam.values()); };
 const computeGCStats=proposals=>{
  const map=new Map();
- proposals.forEach(p=>{
+ dedupeByProject(proposals).forEach(p=>{
   if(!p.gc) return;
-  if(!map.has(p.gc)) map.set(p.gc,{gc:p.gc,proposals:0,totalVolume:0,won:0,lost:0,open:0,wonValue:0,lostValue:0,openValue:0,contacts:new Set(),firstSubmit:null,lastSubmit:null,projects:[]});
-  const s=map.get(p.gc);
+  const key=canonicalGC(p.gc); if(!key) return;
+  if(!map.has(key)) map.set(key,{key,gc:p.gc,_names:{},proposals:0,totalVolume:0,won:0,lost:0,open:0,wonValue:0,lostValue:0,openValue:0,contacts:new Set(),firstSubmit:null,lastSubmit:null,projects:[]});
+  const s=map.get(key);
+  s._names[p.gc]=(s._names[p.gc]||0)+1;
   s.proposals++; s.totalVolume+=(p.bidAmount||0); s.projects.push(p);
   if(p.contact) s.contacts.add(p.contact);
   if(p.submitted){if(!s.firstSubmit||p.submitted<s.firstSubmit)s.firstSubmit=p.submitted;if(!s.lastSubmit||p.submitted>s.lastSubmit)s.lastSubmit=p.submitted;}
@@ -2627,7 +2640,7 @@ const computeGCStats=proposals=>{
   else if(LOST_STATUSES.includes(p.status)){s.lost++;s.lostValue+=(p.bidAmount||0);}
   else{s.open++;s.openValue+=(p.bidAmount||0);}
  });
- return Array.from(map.values()).map(s=>({...s,contacts:Array.from(s.contacts),winRate:(s.won+s.lost)>0?s.won/(s.won+s.lost):null,avgBid:s.proposals?s.totalVolume/s.proposals:0}));
+ return Array.from(map.values()).map(s=>{const disp=Object.keys(s._names).sort((a,b)=>(s._names[b]-s._names[a])||(b.length-a.length))[0]||s.gc;const{_names,...rest}=s;return{...rest,gc:disp,contacts:Array.from(s.contacts),winRate:(s.won+s.lost)>0?s.won/(s.won+s.lost):null,avgBid:s.proposals?s.totalVolume/s.proposals:0};});
 };
 const PATHS = {
  phone:'M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.62 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z',
@@ -2726,9 +2739,11 @@ const TH=({children,className=''})=>(
 const DashboardView=({proposals,settings,gcStats,estimateItems,recentSent,onSelectProposal,onSelectGC,onNavigate})=>{
  const filtered=useMemo(()=>settings.yearFilter==='All'?proposals:proposals.filter(p=>p.submitted&&p.submitted.startsWith(String(settings.yearFilter))),[proposals,settings.yearFilter]);
  const kpis=useMemo(()=>{
-  const open=filtered.filter(p=>OPEN_STATUSES.includes(p.status));
-  const won=filtered.filter(p=>WON_STATUSES.includes(p.status));
-  const lost=filtered.filter(p=>LOST_STATUSES.includes(p.status));
+  // [DEDUP 2026-06-23 — Ben] Roll up by distinct project so a re-bid of the same job (Rev.1 / -PR-06)
+  // can't double-count dollars or counts in the headline KPIs.
+  const open=dedupeByProject(filtered.filter(p=>OPEN_STATUSES.includes(p.status)));
+  const won=dedupeByProject(filtered.filter(p=>WON_STATUSES.includes(p.status)));
+  const lost=dedupeByProject(filtered.filter(p=>LOST_STATUSES.includes(p.status)));
   // [PHASE 1 2026-06-22 — Ben] Overdue uses the shared isOverdueBid test on the FULL bid set (not the
   // year-filtered pool) so this KPI matches the nav badge and the Today/Follow-Ups overdue count exactly.
   const overdue=proposals.filter(p=>isOverdueBid(p,settings,recentSent,todayStr()));
@@ -2747,8 +2762,8 @@ const DashboardView=({proposals,settings,gcStats,estimateItems,recentSent,onSele
   return{avg:n?sum/n:null,covered:n,losers};
  },[filtered,estimateItems]);
  const topFollowUps=useMemo(()=>{
-  const gcWR=new Map(gcStats.map(g=>[g.gc,g.winRate]));
-  return filtered.filter(p=>OPEN_STATUSES.includes(p.status)).map(p=>({...p,_od:overdueDays(p,settings)||0,_naOD:p.nextActionDate&&p.nextActionDate<=todayStr()?1:0,_score:followUpScore(p,settings,gcWR.get(p.gc))})).sort((a,b)=>b._score-a._score).slice(0,8);
+  const gcWR=new Map(gcStats.map(g=>[g.key,g.winRate]));
+  return filtered.filter(p=>OPEN_STATUSES.includes(p.status)).map(p=>({...p,_od:overdueDays(p,settings)||0,_naOD:p.nextActionDate&&p.nextActionDate<=todayStr()?1:0,_score:followUpScore(p,settings,gcWR.get(canonicalGC(p.gc)))})).sort((a,b)=>b._score-a._score).slice(0,8);
  },[filtered,settings,gcStats]);
  const insights=useMemo(()=>{
   const out=[];
@@ -3414,21 +3429,27 @@ const todayActionCount=(proposals,recentSent)=>{const today=todayStr();const hor
 // "Wins to book" — including losses. Now we also defer to analyzeReply (the canonical reply-reader, which
 // already tags "awarded to <someone else>" as lost), so a loss can never surface as a bookable win.
 const isWinToBook=(p)=>{if(!OPEN_STATUSES.includes(p.status))return false;const txt=(p.nextAction||'')+' '+(p.notes||'');return /\bawarded\b|\bwe (won|got)\b|likely awarded|notice to proceed/i.test(txt)&&!/not awarded|\blost\b|went with|going with/i.test(txt)&&analyzeReply(txt).state!=='lost';};
-const isLossToClear=(p)=>OPEN_STATUSES.includes(p.status)&&/\blost\b|not awarded|went with|going with|awarded to|project (closed|cancell)|no longer/i.test((p.nextAction||'')+' '+(p.notes||''));
+// [LOSSES PILE FIX 2026-06-23 — Ben] Read ONLY the action line (nextAction), not the free-text notes —
+// mirrors how the Replies pile already works. Old free-text scanning swept in 6 false alarms (e.g. #1570-FJ,
+// #1816, #1535.3) whose history notes happened to contain "lost"/"awarded to" but are actually live, awaiting
+// a GC reply. Genuine losses keep their "...not awarded - confirm Lost" action line and still show here.
+const isLossToClear=(p)=>OPEN_STATUSES.includes(p.status)&&/\blost\b|not awarded|went with|going with|awarded to|project (closed|cancell)|no longer/i.test(p.nextAction||'');
 const isBigQuiet=(p,today)=>OPEN_STATUSES.includes(p.status)&&(p.bidAmount||0)>=250000&&(!p.nextActionDate||p.nextActionDate<today);
 // [PHASE 1 2026-06-22 — Ben] ONE canonical "needs follow-up / overdue" test, shared by the Today
 // Overdue card, the Follow-Ups queue, the Dashboard KPI and the nav badge — so the overdue number
 // reads the same on every screen. A bid counts as overdue when it's open (or still carries a next
 // action) AND it's either past its SLA (overdueDays) OR its next-action date is due today-or-earlier
 // — UNLESS we've already emailed that contact more recently than our last logged touch (todayHandled).
-const isOverdueBid=(p,settings,recentSent,today)=>(OPEN_STATUSES.includes(p.status)||!!p.nextAction||!!p.nextActionDate)&&(((overdueDays(p,settings)||0)>0)||(!!p.nextActionDate&&p.nextActionDate<=today))&&!todayHandled(p,recentSent);
+// [DNC 2026-06-23 — Ben] Personal-relationship GCs (David handles these himself) never belong on the
+// auto-chase list — keep them out of Overdue so the call queue shows only bids the office should pursue.
+const isOverdueBid=(p,settings,recentSent,today)=>(OPEN_STATUSES.includes(p.status)||!!p.nextAction||!!p.nextActionDate)&&(((overdueDays(p,settings)||0)>0)||(!!p.nextActionDate&&p.nextActionDate<=today))&&!todayHandled(p,recentSent)&&!isDNC(p.gc);
 const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveProposal,onCloneToWinner,onNavigate,onSelectGC,onMarkContacted,mode})=>{
  const today=todayStr();
  // [PHASE 1 2026-06-22 — Ben] focus = the single pile the worklist is zeroed in on (set by the
  // Replies / Wins stat cards). null = show every non-empty pile.
  const [focus,setFocus]=useState(null);
  const horizon=(()=>{const d=new Date();d.setDate(d.getDate()+14);return d.toISOString().slice(0,10);})();
- const wrOf=(gc)=>{const g=(gcStats||[]).find(x=>x.gc===gc);return g&&g.winRate!=null?g.winRate:null;};
+ const wrOf=(gc)=>{const ck=canonicalGC(gc);const g=(gcStats||[]).find(x=>x.key===ck);return g&&g.winRate!=null?g.winRate:null;};
  const ev=(p)=>{const w=wrOf(p.gc);return Math.round((p.bidAmount||0)*(w!=null?Math.max(w,0.1):0.30));};
  // [GRAPH 2026-06-19] Already-handled in Outlook: emailed this contact more recently than our last logged touch → drop from the action lists.
  const handled=(p)=>{const e=(recentSent&&p.email)?recentSent[p.email.trim().toLowerCase()]:null;return !!(e&&e.slice(0,10)>(p.lastTouched||''));};
@@ -3457,10 +3478,18 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
    .filter(p=>!winIds.has(p.id)&&!lossIds.has(p.id)&&!replyIds.has(p.id)&&isBigQuiet(p,today))
    .sort((a,b)=>(b.bidAmount||0)-(a.bidAmount||0)),[proposals,winIds,lossIds,replyIds,today]);
  // [COCKPIT 2026-06-22 — Ben] Where I stand stat cards.
- const openPipeline=useMemo(()=>{const ps=proposals.filter(p=>OPEN_STATUSES.includes(p.status));return{count:ps.length,value:ps.reduce((s,p)=>s+(p.bidAmount||0),0)};},[proposals]);
+ const openPipeline=useMemo(()=>{const ps=dedupeByProject(proposals.filter(p=>OPEN_STATUSES.includes(p.status)));return{count:ps.length,value:ps.reduce((s,p)=>s+(p.bidAmount||0),0)};},[proposals]);
  const liveWinnable=useMemo(()=>{const ps=proposals.filter(p=>p.status==='Bidding'||(isTodayReply(p,recentSent)&&analyzeReply((p.nextAction||'')+' '+(p.notes||'')).state!=='lost'));return ps.reduce((s,p)=>s+(p.bidAmount||0),0);},[proposals,recentSent]);
  const overdueList=useMemo(()=>proposals.filter(p=>isOverdueBid(p,settings,recentSent,today)),[proposals,settings,recentSent,today]);
  const leadsToPrice=useMemo(()=>proposals.filter(p=>p.status==='Lead').length,[proposals]);
+ // [WHOLE BOOK 2026-06-23 — Ben] Account for EVERY bid (Paul: "what about the other ~140?"). Dollars are
+ // deduped by project so re-bids don't inflate. Open is split into what needs him vs David's manual GCs.
+ const book=useMemo(()=>{
+   const o=dedupeByProject(proposals.filter(p=>OPEN_STATUSES.includes(p.status)));
+   const w=dedupeByProject(proposals.filter(p=>WON_STATUSES.includes(p.status)));
+   const l=dedupeByProject(proposals.filter(p=>LOST_STATUSES.includes(p.status)));
+   return{records:proposals.length,distinct:o.length+w.length+l.length,open:o.length,oVal:o.reduce((s,p)=>s+(p.bidAmount||0),0),won:w.length,wVal:w.reduce((s,p)=>s+(p.contractAmount||p.bidAmount||0),0),lost:l.length,dnc:o.filter(p=>isDNC(p.gc)).length};
+ },[proposals]);
 
  // one-write helpers (single upsert each — no double-write races)
  const logSent=(p)=>onSaveProposal({...p,notes:`[${today}] ✉ Sent reply\n`+(p.notes||''),lastTouched:today,nextAction:null});
@@ -3520,6 +3549,21 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
     <p className="text-xs text-stone-400 mt-1">{formatDate(today)} · {replies.length} repl{replies.length===1?'y':'ies'} to action · {rePitch.length} re-pitch · {newOpps.length} new opportunit{newOpps.length===1?'y':'ies'} · {winsToBook.length} win{winsToBook.length===1?'':'s'} to book · {lossesToClear.length} loss{lossesToClear.length===1?'':'es'} to clear</p>
    </div>
 
+   {/* [WHOLE BOOK 2026-06-23 — Ben] Paul asked "there are ~400 projects — what about the rest?" This
+       strip accounts for ALL of them in one glance, then says exactly how many of the open bids need him. */}
+   <div className="mb-4 bg-white border border-stone-200 rounded-sm px-4 py-3">
+    <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+     <h2 className="font-serif text-base text-stone-900">The whole book — every bid accounted for</h2>
+     <span className="text-xs text-stone-500">{book.records} bid records · {book.distinct} distinct projects</span>
+    </div>
+    <div className="grid grid-cols-3 gap-2 text-center">
+     <button onClick={()=>onNavigate&&onNavigate('pipeline')} className="rounded-sm bg-sky-50 border border-sky-200 px-2 py-2 hover:shadow-sm transition-all"><div className="text-lg font-bold text-sky-900">{book.open}</div><div className="text-[11px] text-sky-800">Open · {money(book.oVal,true)}</div></button>
+     <button onClick={()=>onNavigate&&onNavigate('active')} className="rounded-sm bg-emerald-50 border border-emerald-200 px-2 py-2 hover:shadow-sm transition-all"><div className="text-lg font-bold text-emerald-900">{book.won}</div><div className="text-[11px] text-emerald-800">Won · {money(book.wVal,true)}</div></button>
+     <button onClick={()=>onNavigate&&onNavigate('pipeline')} className="rounded-sm bg-stone-100 border border-stone-200 px-2 py-2 hover:shadow-sm transition-all"><div className="text-lg font-bold text-stone-700">{book.lost}</div><div className="text-[11px] text-stone-500">Lost / dead</div></button>
+    </div>
+    <p className="text-[11px] text-stone-500 mt-2 leading-relaxed">Of the {book.open} open bids: <b className="text-stone-700">{replies.length}</b> need a reply, <b className="text-stone-700">{winsToBook.length}</b> {winsToBook.length===1?'win is':'wins are'} ready to book, <b className="text-stone-700">{lossesToClear.length}</b> {lossesToClear.length===1?'loss':'losses'} to confirm, <b className="text-stone-700">{overdueList.length}</b> overdue to chase{book.dnc>0?<React.Fragment> · <b className="text-stone-700">{book.dnc}</b> are David&apos;s personal accounts (manual only)</React.Fragment>:''}. The rest are waiting on a GC reply — no action needed yet.</p>
+   </div>
+
    {/* [PHASE 1 2026-06-22 — Ben] Where I stand — every card is now a button. The three blue/grey
        overview cards jump to the full bid list (Pipeline) or the call queue; the amber/green action
        cards zero the worklist below in on that one pile (click again to clear). */}
@@ -3530,7 +3574,7 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
      {label:'Overdue',value:overdueList.length+' bid'+(overdueList.length===1?'':'s'),sub:money(overdueList.reduce((s,p)=>s+(p.bidAmount||0),0),true)+' waiting',tint:overdueList.length>0?'bg-rose-50 border-rose-200 text-rose-900':'bg-stone-50 border-stone-200 text-stone-600',onClick:()=>onNavigate&&onNavigate('followups'),hint:'Open call queue →'},
      {label:'Replies to answer',value:replies.length,sub:replies.length===1?'reply':'replies',tint:replies.length>0?'bg-amber-50 border-amber-200 text-amber-900':'bg-stone-50 border-stone-200 text-stone-600',onClick:()=>setFocus(focus==='replies'?null:'replies'),active:focus==='replies',hint:focus==='replies'?'Showing — clear':'Focus this'},
      {label:'Wins to book',value:winsToBook.length,sub:money(winsToBook.reduce((s,p)=>s+(p.bidAmount||0),0),true),tint:winsToBook.length>0?'bg-emerald-50 border-emerald-300 text-emerald-900':'bg-stone-50 border-stone-200 text-stone-600',onClick:()=>setFocus(focus==='wins'?null:'wins'),active:focus==='wins',hint:focus==='wins'?'Showing — clear':'Focus this'},
-     {label:'Leads to price',value:leadsToPrice,sub:'status: Lead',tint:'bg-stone-50 border-stone-200 text-stone-700',onClick:()=>onNavigate&&onNavigate('pipeline'),hint:'See all bids →'},
+     {label:'Leads to price',value:leadsToPrice,sub:'no quote sent yet',tint:'bg-stone-50 border-stone-200 text-stone-700',onClick:()=>onNavigate&&onNavigate('pipeline'),hint:'Price it or drop it →'},
     ].map(c=>(
      <button key={c.label} onClick={c.onClick} title={c.hint}
        className={`text-left rounded border px-3 py-2.5 transition-all hover:shadow-sm ${c.tint} ${c.active?'ring-2 ring-stone-900 ring-offset-1':''}`}>
@@ -3693,7 +3737,7 @@ const FollowUpsView=({proposals,settings,gcStats,recentSent,onSelectProposal,onS
  const [logNextDate,setLogNextDate]=useState('');
  const logRef=useRef();
  const today=todayStr();
- const gcWR=useMemo(()=>new Map(gcStats.map(g=>[g.gc,g.winRate])),[gcStats]);
+ const gcWR=useMemo(()=>new Map(gcStats.map(g=>[g.key,g.winRate])),[gcStats]);
  const queue=useMemo(()=>{
   // [DONE LOG FIX 2026-06-17 — Paul reported contacted bids never appearing here] The Done log is a
   // record of EVERYTHING you've contacted, newest-first — so it reads from ALL proposals carrying a
@@ -3701,7 +3745,7 @@ const FollowUpsView=({proposals,settings,gcStats,recentSent,onSelectProposal,onS
   // the open/nextAction pool, so a contacted Lead, or an Awarded/Dead/Lost bid with no nextAction, or
   // anything outside the active year filter, silently never showed even though the send was logged.)
   if(filter==='done') return proposals.filter(p=>p.lastTouched)
-   .map(p=>({...p,_gcWR:gcWR.get(p.gc),_od:overdueDays(p,settings)||0,_naOD:0,_score:0}))
+   .map(p=>({...p,_gcWR:gcWR.get(canonicalGC(p.gc)),_od:overdueDays(p,settings)||0,_naOD:0,_score:0}))
    .sort((a,b)=>(b.lastTouched||'').localeCompare(a.lastTouched||''));
   // [FOLLOW-UP 2026-06-10 — Ben] The follow-up system applies to ALL statuses:
   // open statuses surface via SLA staleness; awarded/active/closed/lost rows surface
@@ -3712,7 +3756,7 @@ const FollowUpsView=({proposals,settings,gcStats,recentSent,onSelectProposal,onS
    const od=overdueDays(p,settings)||0;
    const naOD=p.nextActionDate&&p.nextActionDate<=today?Math.round((new Date(today)-new Date(p.nextActionDate))/86400000)+1:0;
    const eISO=(recentSent&&p.email)?recentSent[p.email.trim().toLowerCase()]:null;
-   return{...p,_od:od,_naOD:naOD,_emailedISO:eISO,_handled:!!(eISO&&eISO.slice(0,10)>(p.lastTouched||'')),_score:followUpScore(p,settings,gcWR.get(p.gc))+(naOD*5000),_gcWR:gcWR.get(p.gc)};
+   return{...p,_od:od,_naOD:naOD,_emailedISO:eISO,_handled:!!(eISO&&eISO.slice(0,10)>(p.lastTouched||'')),_score:followUpScore(p,settings,gcWR.get(canonicalGC(p.gc)))+(naOD*5000),_gcWR:gcWR.get(canonicalGC(p.gc))};
   });
   // [GRAPH 2026-06-19] Hide from Overdue any bid Paul has already emailed in Outlook more recently than our last logged touch.
   if(filter==='overdue') pool=pool.filter(p=>isOverdueBid(p,settings,recentSent,today));
@@ -3941,9 +3985,12 @@ const GCIntelView=({gcStats,onSelectGC})=>{
  );
 };
 const GCDetailView=({gc,proposals,gcStats,onBack,onSelectProposal,settings})=>{
- const stats=gcStats.find(g=>g.gc===gc);
- const projects=useMemo(()=>{let p=proposals.filter(x=>x.gc===gc);if(settings.yearFilter!=='All')p=p.filter(x=>x.submitted&&x.submitted.startsWith(String(settings.yearFilter)));return p.sort((a,b)=>(b.submitted||'').localeCompare(a.submitted||''));},[proposals,gc,settings.yearFilter]);
- const contacts=useMemo(()=>{const m=new Map();proposals.filter(p=>p.gc===gc).forEach(p=>{if(!p.contact)return;if(!m.has(p.contact))m.set(p.contact,{name:p.contact,email:p.email,phone:p.phone,count:0,lastSeen:null});const c=m.get(p.contact);c.count++;if(p.email&&!c.email)c.email=p.email;if(p.phone&&!c.phone)c.phone=p.phone;if(p.submitted&&(!c.lastSeen||p.submitted>c.lastSeen))c.lastSeen=p.submitted;});return Array.from(m.values()).sort((a,b)=>(b.lastSeen||'').localeCompare(a.lastSeen||''));},[proposals,gc]);
+ // [DEDUP 2026-06-23 — Ben] Resolve this builder by canonical identity so every spelling variant rolls
+ // into ONE scorecard, and the project list dedupes "Rev.1/-PR" re-bids of the same job.
+ const _ck=canonicalGC(gc);
+ const stats=gcStats.find(g=>g.key===_ck);
+ const projects=useMemo(()=>{let p=dedupeByProject(proposals.filter(x=>canonicalGC(x.gc)===_ck));if(settings.yearFilter!=='All')p=p.filter(x=>x.submitted&&x.submitted.startsWith(String(settings.yearFilter)));return p.sort((a,b)=>(b.submitted||'').localeCompare(a.submitted||''));},[proposals,gc,settings.yearFilter]);
+ const contacts=useMemo(()=>{const m=new Map();proposals.filter(p=>canonicalGC(p.gc)===_ck).forEach(p=>{if(!p.contact)return;if(!m.has(p.contact))m.set(p.contact,{name:p.contact,email:p.email,phone:p.phone,count:0,lastSeen:null});const c=m.get(p.contact);c.count++;if(p.email&&!c.email)c.email=p.email;if(p.phone&&!c.phone)c.phone=p.phone;if(p.submitted&&(!c.lastSeen||p.submitted>c.lastSeen))c.lastSeen=p.submitted;});return Array.from(m.values()).sort((a,b)=>(b.lastSeen||'').localeCompare(a.lastSeen||''));},[proposals,gc]);
  if(!stats) return <div><button onClick={onBack} className="text-sm text-stone-600 hover:text-stone-900 mb-4 inline-flex items-center gap-1"><Ico n="chevLeft" size={14}/>Back</button><Empty title="GC not found"/></div>;
  return (
   <div className="space-y-5">
@@ -4561,7 +4608,7 @@ const EstimateView = ({ proposal, estimate, estimateItems, pendingEdits, setPend
  useEffect(() => { setDraftHeader(estimate); setEditingHeader(false); }, [estimate?.id]);
  const gcIntel = useMemo(() => {
   if (!proposal?.gc || !gcStats?.length) return null;
-  const g = gcStats.find(x => x.gc === proposal.gc);
+  const g = gcStats.find(x => x.key === canonicalGC(proposal.gc));
   if (!g || (g.won + g.lost) < 3) return null;
   return g;
  }, [proposal?.gc, gcStats]);
