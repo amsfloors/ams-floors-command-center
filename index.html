@@ -2625,6 +2625,28 @@ const GC_SUFFIX=/(?:incorporated|inc|llc|lllp|llp|ltd|corporation|corp|company|g
 const canonicalGC=(gc)=>{ let g=(gc||'').toLowerCase().replace(/constrcution/g,'construction'); g=g.replace(/[^a-z0-9]/g,''); let prev=null; while(prev!==g){prev=g; g=g.replace(GC_SUFFIX,'');} return g; };
 const baseProjectId=(id)=>{ let s=(id==null?'':String(id)).trim(); s=s.replace(/\s*[-_\s]pr-?\d+$/i,''); s=s.replace(/\s*rev\.?\s*\d+$/i,''); return s.trim().toLowerCase(); };
 const dedupeByProject=(rows)=>{ const fam=new Map(); (rows||[]).forEach(p=>{ const k=baseProjectId(p.id)||('row:'+p.id); const v=(p.contractAmount||p.bidAmount||0); const cur=fam.get(k); if(!cur||v>(cur.contractAmount||cur.bidAmount||0)) fam.set(k,p); }); return Array.from(fam.values()); };
+// [YEAR FILTER FIX 2026-06-23 — Paul: "25 awarded but only 7 by year"] 66 of 74 won bids carry NO submitted
+// date, and their createdAt/updatedAt are just the June-2026 import date — so filtering on submitted-year
+// silently hid booked work. Rule: a bid WITH a submitted date matches on that year; a bid with NO submitted
+// date is never hidden (we don't know its year, so we don't drop it). Booked work stops vanishing.
+const bidYear=(p)=> (p&&p.submitted)? String(p.submitted).slice(0,4) : null;
+const matchesYearFilter=(p,yf)=>{ if(!yf||yf==='All') return true; const y=bidYear(p); return y? (y===String(yf)) : true; };
+// [DONE LOG FIX 2026-06-23 — Paul: "305 contacts but I didn't send 305 emails"] The reconcile stamped
+// lastTouched on 304 bids it merely REVIEWED. A genuine contact leaves an outreach marker in the notes
+// (sent email / reconciled-from-Sent / prior tracker follow-up / logged call / decisive Lost·Won·Hold).
+// Count only those — a bare review stamp is not outreach. Validated 305 -> 106 on live data.
+const OUTREACH_RX=/sent reply|sent follow-up|reconciled from sent|prior follow-up log|\bcalled\b|\bcontacted\b|left (?:a )?(?:voicemail|message)|emailed|marked lost|booked as awarded|on[- ]hold|re-pitch|spoke with|made contact|✉|📞/i;
+const isRealContact=(p)=> !!(p&&p.lastTouched) && OUTREACH_RX.test(String(p.notes||''));
+// [DUPLICATE FINDER 2026-06-23 — Paul: "Home2 Suites Monroe has a double entry! be surgical"] Surface
+// LIKELY same-job double-entries for one-click human confirm — NEVER auto-merge. A candidate group =
+// same builder + same numeric job-root (e.g. 1734.1 & 1734.3), with change-orders/revisions excluded and
+// only live (non-Lost/Dead) rows counted, AND the project names must be compatible (the shortest is a
+// prefix of the rest) so genuinely different buildings sharing a root (Building A vs B) are NOT flagged.
+const numericRoot=(id)=>{ const m=String(id==null?'':id).match(/^\d+/); return m? m[0] : String(id||'').toLowerCase(); };
+const isChangeOrder=(id)=> /-co-|-pr-|-rp-|rev/i.test(String(id||''));
+const normName=(s)=> String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+const namesCompatible=(rows)=>{ const ns=rows.map(r=>normName(r.project)); if(ns.some(n=>!n)) return false; const short=ns.slice().sort((a,b)=>a.length-b.length)[0]; return ns.every(n=>n.startsWith(short)); };
+const findDuplicateGroups=(rows)=>{ const m=new Map(); (rows||[]).forEach(p=>{ const id=String(p.id==null?'':p.id); if(isChangeOrder(id)) return; if(LOST_STATUSES.includes(p.status)) return; const k=canonicalGC(p.gc)+'#'+numericRoot(id); if(!m.has(k)) m.set(k,[]); m.get(k).push(p); }); const out=[]; m.forEach((g,k)=>{ if(g.length>1 && namesCompatible(g)) out.push({key:k,rows:g}); }); return out.sort((a,b)=> String(a.rows[0].id)<String(b.rows[0].id)?-1:1); };
 const computeGCStats=proposals=>{
  const map=new Map();
  dedupeByProject(proposals).forEach(p=>{
@@ -2737,7 +2759,7 @@ const TH=({children,className=''})=>(
  <th className={`text-left text-[10px] uppercase tracking-widest font-semibold text-stone-500 px-3 py-2 border-b border-stone-200 ${className}`}>{children}</th>
 );
 const DashboardView=({proposals,settings,gcStats,estimateItems,recentSent,onSelectProposal,onSelectGC,onNavigate})=>{
- const filtered=useMemo(()=>settings.yearFilter==='All'?proposals:proposals.filter(p=>p.submitted&&p.submitted.startsWith(String(settings.yearFilter))),[proposals,settings.yearFilter]);
+ const filtered=useMemo(()=>proposals.filter(p=>matchesYearFilter(p,settings.yearFilter)),[proposals,settings.yearFilter]);
  const kpis=useMemo(()=>{
   // [DEDUP 2026-06-23 — Ben] Roll up by distinct project so a re-bid of the same job (Rev.1 / -PR-06)
   // can't double-count dollars or counts in the headline KPIs.
@@ -2927,7 +2949,7 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
  const allGCs=useMemo(()=>Array.from(new Set(proposals.map(p=>p.gc).filter(Boolean))).sort(),[proposals]);
  const filtered=useMemo(()=>{
   let out=proposals;
-  if(settings.yearFilter!=='All') out=out.filter(p=>p.submitted&&p.submitted.startsWith(String(settings.yearFilter)));
+  out=out.filter(p=>matchesYearFilter(p,settings.yearFilter));
   if(statusF==='open') out=out.filter(p=>OPEN_STATUSES.includes(p.status));
   else if(statusF==='awarded') out=out.filter(p=>WON_STATUSES.includes(p.status));
   else if(statusF==='lost') out=out.filter(p=>LOST_STATUSES.includes(p.status));
@@ -3448,6 +3470,16 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
  // [PHASE 1 2026-06-22 — Ben] focus = the single pile the worklist is zeroed in on (set by the
  // Replies / Wins stat cards). null = show every non-empty pile.
  const [focus,setFocus]=useState(null);
+ // [DUPLICATE FINDER 2026-06-23 — Paul: "Home2 Suites Monroe has a double entry! be surgical"] Surface
+ // likely same-job double-entries for one-click human confirm. NEVER auto-merges. defaultKeep prefers the
+ // bigger $ then the more-complete name (so #1734 keeps ".3 / Home2 Suites Monroe" over ".1 / Home2 Suites").
+ // Retiring marks the extras Dead (duplicate of the kept #). Dismissals persist in localStorage.
+ const [dupKeep,setDupKeep]=useState({});
+ const [dupDismissed,setDupDismissed]=useState(()=>{try{return JSON.parse(localStorage.getItem('amsDupDismissed')||'[]');}catch(e){return [];}});
+ const dupGroups=useMemo(()=>findDuplicateGroups(proposals).filter(g=>!dupDismissed.includes(g.key)),[proposals,dupDismissed]);
+ const defaultKeep=(g)=>g.rows.slice().sort((a,b)=>((b.bidAmount||0)-(a.bidAmount||0))||(normName(b.project).length-normName(a.project).length)||(String(b.id)>String(a.id)?1:-1))[0];
+ const dismissDup=(g)=>setDupDismissed(d=>{const nd=[...d,g.key];try{localStorage.setItem('amsDupDismissed',JSON.stringify(nd));}catch(e){}return nd;});
+ const retireDups=(g)=>{const keepId=String(dupKeep[g.key]||defaultKeep(g).id);const n=g.rows.length-1;if(!window.confirm('Keep #'+keepId+' and retire '+n+' duplicate'+(n===1?'':'s')+'? The other'+(n===1?'':'s')+' will be marked Dead (duplicate of #'+keepId+'). This writes to the database.'))return;g.rows.forEach(r=>{if(String(r.id)===keepId)return;onSaveProposal({...r,status:'Dead',lostReason:'Duplicate of #'+keepId,nextAction:null,nextActionDate:null,lastTouched:today,notes:'['+today+'] 🔁 Duplicate of #'+keepId+' — retired as duplicate (Today)\n'+(r.notes||'')});});};
  const horizon=(()=>{const d=new Date();d.setDate(d.getDate()+14);return d.toISOString().slice(0,10);})();
  const wrOf=(gc)=>{const ck=canonicalGC(gc);const g=(gcStats||[]).find(x=>x.key===ck);return g&&g.winRate!=null?g.winRate:null;};
  const ev=(p)=>{const w=wrOf(p.gc);return Math.round((p.bidAmount||0)*(w!=null?Math.max(w,0.1):0.30));};
@@ -3563,6 +3595,35 @@ const TodayView=({proposals,settings,gcStats,recentSent,onSelectProposal,onSaveP
     </div>
     <p className="text-[11px] text-stone-500 mt-2 leading-relaxed">Of the {book.open} open bids: <b className="text-stone-700">{replies.length}</b> need a reply, <b className="text-stone-700">{winsToBook.length}</b> {winsToBook.length===1?'win is':'wins are'} ready to book, <b className="text-stone-700">{lossesToClear.length}</b> {lossesToClear.length===1?'loss':'losses'} to confirm, <b className="text-stone-700">{overdueList.length}</b> overdue to chase{book.dnc>0?<React.Fragment> · <b className="text-stone-700">{book.dnc}</b> are David&apos;s personal accounts (manual only)</React.Fragment>:''}. The rest are waiting on a GC reply — no action needed yet.</p>
    </div>
+
+   {/* [DUPLICATE FINDER 2026-06-23 — Ben] Same builder + same job number entered twice. Pick which to
+       keep; nothing merges until Paul clicks. Hidden when there's nothing to review. */}
+   {dupGroups.length>0&&(
+   <div className="mb-4 bg-white border border-amber-300 rounded-sm px-4 py-3">
+    <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
+     <h2 className="font-serif text-base text-stone-900">🔁 Possible duplicates to review <span className="text-xs font-sans font-medium text-amber-700">({dupGroups.length})</span></h2>
+     <span className="text-xs text-stone-500">Same builder &amp; job number entered twice — pick which to keep. Nothing merges until you click.</span>
+    </div>
+    <div className="space-y-2 mt-2">
+     {dupGroups.map(g=>{const keepId=String(dupKeep[g.key]||defaultKeep(g).id);return(
+      <div key={g.key} className="border border-stone-200 rounded-sm p-2.5">
+       <div className="flex flex-wrap gap-1.5 mb-2">
+        {g.rows.map(r=>{const sel=String(r.id)===keepId;return(
+         <button key={r.id} onClick={()=>setDupKeep(k=>({...k,[g.key]:String(r.id)}))} className={`text-left rounded-sm border px-2.5 py-1.5 transition-all ${sel?'bg-emerald-50 border-emerald-400 ring-1 ring-emerald-400':'bg-white border-stone-300 hover:border-stone-400'}`}>
+          <div className="flex items-center gap-1.5 text-xs"><span className={`text-[9px] font-bold px-1 rounded-sm ${sel?'bg-emerald-200 text-emerald-900':'bg-stone-100 text-stone-500'}`}>{sel?'KEEP':'RETIRE'}</span><span className="font-mono text-stone-400">#{r.id}</span><span className="font-medium text-stone-800 truncate" style={{maxWidth:'200px'}}>{r.project}</span></div>
+          <div className="text-[11px] text-stone-500 mt-0.5">{r.gc} · {r.location||'—'} · {r.status} · {money(r.bidAmount,true)}</div>
+         </button>
+        );})}
+       </div>
+       <div className="flex items-center gap-2">
+        <button onClick={()=>retireDups(g)} className="text-xs px-2.5 py-1 rounded-sm font-medium bg-stone-900 text-white hover:bg-stone-700">Keep #{keepId} · retire the rest</button>
+        <button onClick={()=>dismissDup(g)} className="text-xs px-2.5 py-1 rounded-sm font-medium bg-white border border-stone-300 text-stone-600 hover:bg-stone-100">Not duplicates — hide</button>
+       </div>
+      </div>
+     );})}
+    </div>
+   </div>
+   )}
 
    {/* [PHASE 1 2026-06-22 — Ben] Where I stand — every card is now a button. The three blue/grey
        overview cards jump to the full bid list (Pipeline) or the call queue; the amber/green action
@@ -3744,14 +3805,15 @@ const FollowUpsView=({proposals,settings,gcStats,recentSent,onSelectProposal,onS
   // lastTouched stamp, independent of the open-status pool AND the year filter. (Previously it filtered
   // the open/nextAction pool, so a contacted Lead, or an Awarded/Dead/Lost bid with no nextAction, or
   // anything outside the active year filter, silently never showed even though the send was logged.)
-  if(filter==='done') return proposals.filter(p=>p.lastTouched)
+  // [DONE LOG FIX 2026-06-23] Count only REAL outreach (isRealContact), not the reconcile's review stamps.
+  if(filter==='done') return proposals.filter(isRealContact)
    .map(p=>({...p,_gcWR:gcWR.get(canonicalGC(p.gc)),_od:overdueDays(p,settings)||0,_naOD:0,_score:0}))
    .sort((a,b)=>(b.lastTouched||'').localeCompare(a.lastTouched||''));
   // [FOLLOW-UP 2026-06-10 — Ben] The follow-up system applies to ALL statuses:
   // open statuses surface via SLA staleness; awarded/active/closed/lost rows surface
   // whenever they carry a nextAction (or it's overdue). $0 leads are included.
   let pool=proposals.filter(p=>OPEN_STATUSES.includes(p.status)||p.nextAction||p.nextActionDate);
-  if(settings.yearFilter!=='All') pool=pool.filter(p=>p.submitted&&p.submitted.startsWith(String(settings.yearFilter)));
+  pool=pool.filter(p=>matchesYearFilter(p,settings.yearFilter));
   pool=pool.map(p=>{
    const od=overdueDays(p,settings)||0;
    const naOD=p.nextActionDate&&p.nextActionDate<=today?Math.round((new Date(today)-new Date(p.nextActionDate))/86400000)+1:0;
@@ -3770,7 +3832,7 @@ const FollowUpsView=({proposals,settings,gcStats,recentSent,onSelectProposal,onS
   let n=0;
   proposals.forEach(p=>{
    if(!(OPEN_STATUSES.includes(p.status)||p.nextAction||p.nextActionDate)) return;
-   if(settings.yearFilter!=='All'&&!(p.submitted&&String(p.submitted).startsWith(String(settings.yearFilter)))) return;
+   if(!matchesYearFilter(p,settings.yearFilter)) return;
    const od=overdueDays(p,settings)||0; const naOD=(p.nextActionDate&&p.nextActionDate<=today)?1:0;
    if(!(od>0||naOD>0)) return;
    const e=p.email?recentSent[p.email.trim().toLowerCase()]:null;
@@ -3989,7 +4051,7 @@ const GCDetailView=({gc,proposals,gcStats,onBack,onSelectProposal,settings})=>{
  // into ONE scorecard, and the project list dedupes "Rev.1/-PR" re-bids of the same job.
  const _ck=canonicalGC(gc);
  const stats=gcStats.find(g=>g.key===_ck);
- const projects=useMemo(()=>{let p=dedupeByProject(proposals.filter(x=>canonicalGC(x.gc)===_ck));if(settings.yearFilter!=='All')p=p.filter(x=>x.submitted&&x.submitted.startsWith(String(settings.yearFilter)));return p.sort((a,b)=>(b.submitted||'').localeCompare(a.submitted||''));},[proposals,gc,settings.yearFilter]);
+ const projects=useMemo(()=>{let p=dedupeByProject(proposals.filter(x=>canonicalGC(x.gc)===_ck));p=p.filter(x=>matchesYearFilter(x,settings.yearFilter));return p.sort((a,b)=>(b.submitted||'').localeCompare(a.submitted||''));},[proposals,gc,settings.yearFilter]);
  const contacts=useMemo(()=>{const m=new Map();proposals.filter(p=>canonicalGC(p.gc)===_ck).forEach(p=>{if(!p.contact)return;if(!m.has(p.contact))m.set(p.contact,{name:p.contact,email:p.email,phone:p.phone,count:0,lastSeen:null});const c=m.get(p.contact);c.count++;if(p.email&&!c.email)c.email=p.email;if(p.phone&&!c.phone)c.phone=p.phone;if(p.submitted&&(!c.lastSeen||p.submitted>c.lastSeen))c.lastSeen=p.submitted;});return Array.from(m.values()).sort((a,b)=>(b.lastSeen||'').localeCompare(a.lastSeen||''));},[proposals,gc]);
  if(!stats) return <div><button onClick={onBack} className="text-sm text-stone-600 hover:text-stone-900 mb-4 inline-flex items-center gap-1"><Ico n="chevLeft" size={14}/>Back</button><Empty title="GC not found"/></div>;
  return (
@@ -4046,7 +4108,7 @@ const ActiveJobsView=({proposals,estimateItems,estimates,onSelectProposal,onSele
   // [STATUS FLOW 2026-06-11 — Ben] This tab is for jobs we are EXECUTING — status 'Active' only.
   // 'Awarded' = won but not started (lives in Pipeline); 'Completed' = done (payment tracking later).
   let p=proposals.filter(x=>x.status==='Active');
-  if(settings.yearFilter!=='All') p=p.filter(x=>x.submitted&&x.submitted.startsWith(String(settings.yearFilter)));
+  p=p.filter(x=>matchesYearFilter(x,settings.yearFilter));
   const docs=p.map(x=>{
    const storedEc=(x.estMaterial||0)+(x.estLabor||0)+(x.estOther||0);
    const d=derivedByDoc[String(x.id)];
@@ -5620,7 +5682,7 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
    .map(m=>({...m,proposals:m.proposals.size}));
  },[estimateItems]);
  const funnel=useMemo(()=>{
-  const yr=settings.yearFilter==='All'?proposals:proposals.filter(p=>p.submitted&&p.submitted.startsWith(String(settings.yearFilter)));
+  const yr=proposals.filter(p=>matchesYearFilter(p,settings.yearFilter));
   const stages=[
    {label:'Lead',statuses:['Lead','Qualified'],color:'bg-stone-200 text-stone-700'},
    {label:'Bidding',statuses:['Bidding','Hold'],color:'bg-sky-100 text-sky-800'},
