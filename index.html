@@ -3725,16 +3725,29 @@ const ContactTimeline=({notes})=>{
   </div>
  );
 };
-// [COCKPIT 2026-06-15] Glanceable status flags derived from nextAction+notes (truth-up + tracker import).
+// [CURRENT-TRUTH FLAGS 2026-06-24 — Paul: "I fixed the bad email but it STAYS in the queue!!!"]
+// THE CORE BUG (every flag, not one bid): flags used to be derived by keyword-scanning the WHOLE
+// append-only notes log. Notes only ever get ADDED to, so once "bounced" (or "lost"/"won"/etc.) was
+// written, the flag latched ON forever and nothing could turn it off — correcting the email never
+// cleared it. Now each flag reads CURRENT truth: a bounced address is bad only while it is STILL the
+// address on file (fix it -> flag clears itself); outcome hints show only while the bid is still OPEN
+// (set the status -> they stop nagging); "reply" reads the live action line (handle it -> it clears);
+// "sent" means RECENTLY emailed, not emailed once a year ago.
+const BOUNCE_RX=/bounce|undeliverable|bad email|address not found|came back|delivery (failed|has failed)|could not be delivered|not found at|no longer (at|with)|mailbox (full|unavailable)|recipient.*not found/i;
+const EMAIL_RX=/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
+// The addresses that ACTUALLY bounced = emails written on a bounce/undeliverable line (not the whole log).
+const bouncedAddrs=(p)=>{ const out=[]; [String((p&&p.nextAction)||''),...String((p&&p.notes)||'').split('\n')].forEach(ln=>{ if(BOUNCE_RX.test(ln)){ const m=ln.toLowerCase().match(EMAIL_RX); if(m) m.forEach(e=>out.push(e)); } }); return out; };
+// Email is bad only if a bounce is on record AND (there's no usable address, OR the on-file address IS the bounced one).
+const emailIsBad=(p)=>{ const cur=String((p&&p.email)||'').trim().toLowerCase(); const txt=String((p&&p.nextAction)||'')+' '+String((p&&p.notes)||''); if(!BOUNCE_RX.test(txt)) return false; if(!cur) return true; const bad=bouncedAddrs(p); return bad.length?bad.includes(cur):false; };
+const isBounceAction=(na)=>/bounce|bad email|good address|undeliverable|not found|came back/i.test(String(na||''));
 const bidFlags=(p)=>{
- const t=((p.nextAction||'')+' '+(p.notes||'')).toLowerCase();
- const f=[];
- if(/bounce|undeliverable|bad email|address not found|came back/.test(t)) f.push(['🚩','bad email','bg-rose-100 text-rose-800']);
- if(/reply received|\breplied\b/.test(t)) f.push(['💬','reply','bg-sky-100 text-sky-800']);
- if(/not awarded|awarded to another|another gc|went to mes|\blost\b|cancel/.test(t)) f.push(['❌','likely lost','bg-stone-200 text-stone-600']);
- else if(/planning crews|ams project|likely awarded|already awarded|\bwon\b/.test(t)) f.push(['🏆','likely won','bg-emerald-100 text-emerald-800']);
- if(/on hold|hold till|holding pattern/.test(t)) f.push(['⏸','on hold','bg-amber-100 text-amber-800']);
- if(/sent follow-up|emailed follow-up/.test(t)) f.push(['✉','sent','bg-stone-100 text-stone-500']);
+ const na=String(p.nextAction||''); const open=OPEN_STATUSES.includes(p.status); const f=[];
+ if(emailIsBad(p)) f.push(['🚩','bad email','bg-rose-100 text-rose-800']);
+ if(/reply received|\breplied\b/i.test(na)) f.push(['💬','reply','bg-sky-100 text-sky-800']);
+ if(open&&/not awarded|awarded to another|another gc|went with|going with|went to mes|\blost\b|cancel/i.test(na)) f.push(['❌','likely lost','bg-stone-200 text-stone-600']);
+ else if(open&&/planning crews|ams project|likely awarded|already awarded|notice to proceed|\bwon\b/i.test(na)) f.push(['🏆','likely won','bg-emerald-100 text-emerald-800']);
+ if(open&&/on hold|hold till|holding pattern|revisit/i.test(na)) f.push(['⏸','on hold','bg-amber-100 text-amber-800']);
+ if(isRealContact(p)&&p.lastTouched&&daysSince(p.lastTouched)<=30) f.push(['✉','sent','bg-stone-100 text-stone-500']);
  return f;
 };
 const expValue=(p)=>Math.round((p.bidAmount||0)*(p._gcWR!=null?p._gcWR:0.30));
@@ -5508,7 +5521,18 @@ const ProjectDrawer=({proposal,lineItems,onClose,onSave,onDelete,onRenumber,onIm
  // [STALE-DRAFT FIX 2026-06-08] Read the LATEST draft via the functional updater, not the closure
  // copy. Without this, a header-sync that just ran (setDraft) hadn't applied to this closure yet,
  // so the master Save persisted the pre-edit proposal and wiped the synced header fields.
- const save=()=>{setDraft(d=>{onSave(d);return d;});setEdit(false);};
+ // [EMAIL-CORRECTED CLEARS THE QUEUE 2026-06-24 — Paul: "I fixed the bad email, but this STILL stays in the que!!!"]
+ // bidFlags already reads current truth (the 🚩 clears the instant the on-file email differs from the bounced one).
+ // This also retires the stale call-to-action so the row stops INSTRUCTING him to chase an address he just fixed,
+ // and logs the correction to the dated notes trail (same prepend convention as markContacted/addNote).
+ const save=()=>{setDraft(d=>{ let out=d;
+   const oldE=String(proposal.email||'').trim().toLowerCase(), newE=String((d&&d.email)||'').trim().toLowerCase();
+   if(newE&&newE!==oldE&&emailIsBad(proposal)&&!emailIsBad(d)){
+    const entry=`[${todayStr()}] ✉ Email corrected → ${d.email} (was bounced: ${oldE||'—'})`;
+    out={...d, nextAction:isBounceAction(d.nextAction)?null:d.nextAction, notes:d.notes?`${entry}\n${d.notes}`:entry};
+   }
+   onSave(out);return out;
+  });setEdit(false);};
  const pendingCount=Object.keys(pendingEdits).length;
  const anyDirty=edit||pendingCount>0;
  const _famVers=(familyRolled&&familyRolled._versions)||[];
