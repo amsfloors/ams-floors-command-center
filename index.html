@@ -2682,15 +2682,50 @@ const computeBidBook=(proposals,settings,recentSent)=>{
  const book=[...open,...won,...lost];
  const sum=(rows)=>rows.reduce((s,p)=>s+bidValue(p),0);
  const settled=won.length+lost.length;
+ // Execution-job counts (Awarded/Active/Completed) grouped by projectNumber — the ONE canonical
+ // source both the Jobs workspace segment badges and the Dashboard "Awarded to start" card read.
+ const jobCount=(ss)=>new Set(inYear.filter(p=>ss.includes(p.status)).map(p=>String(p.projectNumber||p.id))).size;
  // Overdue is measured on the FULL set (not year-filtered) so it always equals the nav badge / call queue.
  const overdue=all.filter(p=>isOverdueBid(p,settings,recentSent,today));
  return Object.freeze({
   today, yearFilter:yf, all, book, open, won, lost,
   counts:{records:inYear.length, distinct:book.length, open:open.length, won:won.length, lost:lost.length, dnc:open.filter(p=>isDNC(p.gc)).length},
+  jobs:{awarded:jobCount(['Awarded']), active:jobCount(['Active']), completed:jobCount(['Completed','Complete'])},
   value:{open:sum(open), won:sum(won), lost:sum(lost), overdue:sum(overdue)},
   winRate: settled>0? won.length/settled : null,
   overdue, overdueCount:overdue.length
  });
+};
+// ── ONE SET OF BOOKS · MONEY EDITION (2026-06-23) ─────────────────────────────────
+// A job's COST and MARGIN, derived ONE way for every screen. Rule: hand-entered summary
+// cost (estMaterial+estLabor+estOther) wins; else derive cost from the bidsheet LINE
+// ITEMS; if NEITHER exists there is no cost basis, so margin is null. We NEVER compute
+// (contract−cost)/contract when cost is missing — that fabricated the "−59% / −177%"
+// nonsense. Hand-entered margin (estMargin) always overrides. Every view calls jobCost()
+// so the tabs can never disagree and missing data shows "needs cost", not a fake percent.
+const buildCostIndex=(estimateItems,estimates)=>{
+ const map={};
+ (estimateItems||[]).forEach(it=>{
+  if(it.isAlternate||it.isVeAlternative) return;
+  const pid=String(it.proposalId);
+  if(!map[pid]) map[pid]={total:0,markup:0,n:0};
+  const est=(estimates||[]).find(e=>String(e.proposalId)===pid);
+  const c=calcEstimateItem(it,(est&&est.taxRate!=null?est.taxRate:0.07),(est&&est.markupRate!=null?est.markupRate:0.20));
+  map[pid].total+=c.total; map[pid].markup+=c.markup; map[pid].n++;
+ });
+ return map;
+};
+const jobCost=(p,costIndex)=>{
+ const storedEc=((p&&p.estMaterial)||0)+((p&&p.estLabor)||0)+((p&&p.estOther)||0);
+ const d=costIndex&&p&&costIndex[String(p.id)];
+ const canDerive=storedEc===0 && d && d.total>0;
+ const ec= storedEc>0 ? storedEc : (canDerive ? d.total-d.markup : 0);
+ const basis= storedEc>0 ? 'summary' : (canDerive ? 'derived' : 'none');
+ const contract=bidValue(p);
+ const hand=estMargin(p);
+ const em = (hand!==null&&hand!==undefined) ? hand
+          : (basis!=='none' && ec>0 && contract>0 ? (contract-ec)/contract : null);
+ return {ec, contract, basis, em};
 };
 const PATHS = {
  phone:'M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.62 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z',
@@ -2786,7 +2821,7 @@ const Empty=({icon='alertCirc',title,body})=>(
 const TH=({children,className=''})=>(
  <th className={`text-left text-[10px] uppercase tracking-widest font-semibold text-stone-500 px-3 py-2 border-b border-stone-200 ${className}`}>{children}</th>
 );
-const DashboardView=({proposals,settings,gcStats,bidBook,estimateItems,recentSent,onSelectProposal,onSelectGC,onNavigate})=>{
+const DashboardView=({proposals,settings,gcStats,bidBook,estimateItems,estimates,recentSent,onSelectProposal,onSelectGC,onNavigate})=>{
  const filtered=useMemo(()=>proposals.filter(p=>matchesYearFilter(p,settings.yearFilter)),[proposals,settings.yearFilter]);
  const kpis=useMemo(()=>{
   // [ONE SET OF BOOKS 2026-06-23] Read the canonical buckets/values from bidBook — do NOT re-derive here.
@@ -2796,14 +2831,20 @@ const DashboardView=({proposals,settings,gcStats,bidBook,estimateItems,recentSen
   const avgMargin=wonWithMargin.length?wonWithMargin.reduce((s,p)=>{const c=bidValue(p);const cost=(p.estMaterial||0)+(p.estLabor||0);return s+(c>0?(c-cost)/c:0);},0)/wonWithMargin.length:null;
   return{openCount:counts.open,openValue:value.open,awardedValue:value.won,awardedCount:counts.won,winRate,overdueCount,overdueValue:value.overdue,nextActionDue:nextActionDue.length,avgMargin};
  },[bidBook]);
- const margins=useMemo(()=>{
-  const cost=new Map();
-  (estimateItems||[]).forEach(it=>{const k=String(it.proposalId);const m=cost.get(k)||{mc:0,mb:0};m.mc+=(Number(it.orderQty)||0)*(Number(it.unitCost)||0)+(Number(it.freight)||0);m.mb+=(Number(it.materialActual)||0);cost.set(k,m);});
-  const losers=[];let sum=0,n=0;
-  filtered.forEach(p=>{const m=cost.get(String(p.id));if(m&&m.mb>0){const mm=(m.mb-m.mc)/m.mb;sum+=mm;n++;if(mm<0.15)losers.push({id:p.id,mm,bid:p.bidAmount||0});}});
-  losers.sort((a,b)=>a.mm-b.mm);
-  return{avg:n?sum/n:null,covered:n,losers};
- },[filtered,estimateItems]);
+ // [DECISIONS 2026-06-23] What needs action now — computed the SAME way as the screens these cards
+ // route to, so the counts reconcile exactly (Today's wins/replies, Jobs awarded badge, call queue).
+ const decisions=useMemo(()=>({
+  wins:proposals.filter(p=>isWinToBook(p)).length,
+  replies:proposals.filter(p=>isTodayReply(p,recentSent)).length,
+  awardedToStart:bidBook.jobs.awarded,
+ }),[proposals,recentSent,bidBook]);
+ const costIndex=useMemo(()=>buildCostIndex(estimateItems,estimates),[estimateItems,estimates]);
+ // [2026-06-23] Margin / "money-loser" alarm intentionally OMITTED until real cost data exists.
+ // Tested against live data: today NEITHER the hand-entered summary cost fields NOR the
+ // bidsheet-derived costs are trustworthy — they flag ~90% of jobs as losing money, which is a
+ // data artifact, not reality. An alarm built on that destroys trust. Per-job margin still shows
+ // on the Jobs tab (marked "derived"/"needs cost") where Paul enters & adjusts material+labor;
+ // jobCost()/costIndex stay the single source so the alarm can return the moment the data is real.
  const topFollowUps=useMemo(()=>{
   const gcWR=new Map(gcStats.map(g=>[g.key,g.winRate]));
   return filtered.filter(p=>OPEN_STATUSES.includes(p.status)).map(p=>({...p,_od:overdueDays(p,settings)||0,_naOD:p.nextActionDate&&p.nextActionDate<=todayStr()?1:0,_score:followUpScore(p,settings,gcWR.get(canonicalGC(p.gc)))})).sort((a,b)=>b._score-a._score).slice(0,8);
@@ -2816,24 +2857,32 @@ const DashboardView=({proposals,settings,gcStats,bidBook,estimateItems,recentSen
   if(hwr) out.push({severity:'opp',icon:'target',title:`${hwr.gc} — ${pct(hwr.winRate)} WR, ${money(hwr.openValue,true)} open`,body:`High win-rate GC with open bids. Push these hard.`,action:'View scorecard',onAction:()=>onSelectGC(hwr.gc)});
   const leak=gcStats.filter(g=>g.winRate!==null&&g.winRate===0&&(g.won+g.lost)>=3&&g.openValue>50000).sort((a,b)=>b.openValue-a.openValue)[0];
   if(leak) out.push({severity:'warn',icon:'trendDown',title:`${leak.gc} — 0% win rate, ${money(leak.openValue,true)} still open`,body:`0 wins from ${leak.won+leak.lost} bids. Question whether to keep pursuing.`,action:'View scorecard',onAction:()=>onSelectGC(leak.gc)});
-  const wonNoCost=filtered.filter(p=>WON_STATUSES.includes(p.status)&&!p.estMaterial&&!p.estLabor);
-  if(wonNoCost.length) out.push({severity:'warn',icon:'alertTri',title:`${wonNoCost.length} awarded job${wonNoCost.length>1?'s':''} · no cost data`,body:`Import Peter's bidsheet or enter estimates to enable margin tracking.`,action:'View Active Jobs',onAction:()=>onNavigate('active')});
-  if(margins.losers.length) out.push({severity:'warn',icon:'trendDown',title:`${margins.losers.length} bid${margins.losers.length>1?'s':''} under 15% material margin`,body:`Thinnest: ${margins.losers.slice(0,3).map(r=>'#'+r.id+' '+pct(r.mm,0)).join(' · ')}. Possible money-losers — review pricing.${margins.avg!=null?` Avg material margin ${pct(margins.avg,0)} across ${margins.covered} priced bids.`:''}`,action:'View Pipeline',onAction:()=>onNavigate('pipeline')});
+  const wonNoCost=dedupeByProject(filtered.filter(p=>WON_STATUSES.includes(p.status))).filter(p=>jobCost(p,costIndex).basis==='none');
+  if(wonNoCost.length) out.push({severity:'warn',icon:'alertTri',title:`${wonNoCost.length} won job${wonNoCost.length>1?'s':''} · no cost data yet`,body:`Margin can't be shown until material + labor are entered. Add them on the job, or import the bidsheet.`,action:'View Jobs',onAction:()=>onNavigate('active')});
+  // (money-loser margin alarm deferred until real cost data exists — see note where margins was)
   return out;
- },[filtered,gcStats,kpis,margins,settings,onNavigate,onSelectGC]);
+ },[filtered,gcStats,kpis,costIndex,settings,onNavigate,onSelectGC]);
  return (
   <div className="space-y-6">
    {/* [PHASE 1 2026-06-22 — Ben] Purpose header; clarifies these are open-bid figures. */}
    <div>
     <h1 className="font-serif text-2xl text-stone-900">Dashboard</h1>
-    <p className="text-sm text-stone-500 mt-0.5">Your numbers at a glance{settings.yearFilter!=='All'?` (filtered to ${settings.yearFilter})`:''} — <strong>open</strong> pipeline value, what you've won, what's overdue, and your win rate. Click any card to jump to the detail.</p>
+    <p className="text-sm text-stone-500 mt-0.5">Your decisions for today{settings.yearFilter!=='All'?` (filtered to ${settings.yearFilter})`:''} — each card opens the work. The book totals sit just below.</p>
    </div>
-   {/* KPI row — 4 cards, all clickable */}
+   {/* DECISIONS row — what needs action now; each card opens the work */}
    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-    <KPICard label="Open Pipeline" value={money(kpis.openValue,true)} sublabel={`${kpis.openCount} open bids`} accent="bronze" icon="flame" onClick={()=>onNavigate('pipeline')}/>
-    <KPICard label="Awarded Value" value={money(kpis.awardedValue,true)} sublabel={`${kpis.awardedCount} projects`} accent="green" icon="check2" onClick={()=>onNavigate('active')}/>
-    <KPICard label={kpis.overdueCount>0?`${kpis.overdueCount} Overdue`:'Follow-Ups'} value={kpis.overdueCount>0?money(kpis.overdueValue,true):kpis.nextActionDue>0?`${kpis.nextActionDue} due today`:'All clear'} sublabel={kpis.overdueCount>0?'past SLA — act now':kpis.nextActionDue>0?'next actions today':'no overdue follow-ups'} accent={kpis.overdueCount>0?'rose':kpis.nextActionDue>0?'amber':'green'} icon="phone" onClick={()=>onNavigate('followups')}/>
-    <KPICard label="Win Rate" value={kpis.winRate!==null?pct(kpis.winRate):'—'} sublabel={kpis.avgMargin!==null?`avg margin ${pct(kpis.avgMargin,0)}`:'of settled bids'} accent="blue" icon="trendUp" onClick={()=>onNavigate('gcs')}/>
+    <KPICard label="Wins to confirm" value={decisions.wins} sublabel={decisions.wins>0?'mark won & book it':'none waiting'} accent={decisions.wins>0?'green':'default'} icon="check2" onClick={()=>onNavigate('today')}/>
+    <KPICard label="Replies to answer" value={decisions.replies} sublabel={decisions.replies>0?'a GC wrote back':'inbox is clear'} accent={decisions.replies>0?'amber':'default'} icon="inbox" onClick={()=>onNavigate('today')}/>
+    <KPICard label="Overdue follow-ups" value={kpis.overdueCount} sublabel={kpis.overdueCount>0?'past SLA — call now':'all caught up'} accent={kpis.overdueCount>0?'rose':'green'} icon="phone" onClick={()=>onNavigate('followups')}/>
+    <KPICard label="Awarded to start" value={decisions.awardedToStart} sublabel={decisions.awardedToStart>0?'won — get it moving':'none pending'} accent={decisions.awardedToStart>0?'bronze':'default'} icon="flame" onClick={()=>onNavigate('active')}/>
+   </div>
+   {/* Book at a glance — the real totals, kept available but secondary */}
+   <div className="flex flex-wrap items-center text-sm text-stone-500 -mt-2" style={{columnGap:'1.5rem',rowGap:'0.25rem'}}>
+    <button onClick={()=>onNavigate('pipeline')} className="hover:text-stone-900"><span className="font-mono font-semibold text-stone-800">{money(kpis.openValue,true)}</span> open · {kpis.openCount} bids</button>
+    <span className="text-stone-300" aria-hidden="true">|</span>
+    <button onClick={()=>onNavigate('active')} className="hover:text-stone-900"><span className="font-mono font-semibold text-stone-800">{money(kpis.awardedValue,true)}</span> won · {kpis.awardedCount} projects</button>
+    <span className="text-stone-300" aria-hidden="true">|</span>
+    <button onClick={()=>onNavigate('gcs')} className="hover:text-stone-900">Win rate <span className="font-mono font-semibold text-stone-800">{kpis.winRate!==null?pct(kpis.winRate):'—'}</span> <span className="text-stone-400">of {kpis.awardedCount+bidBook.counts.lost} settled</span></button>
    </div>
    {/* Insights — only appear when something needs attention */}
    {insights.length>0&&<div><h2 className="font-serif text-lg text-stone-800 mb-2 flex items-center gap-2"><Ico n="zap" size={16} className="text-orange-700"/>What needs your attention</h2><div className="grid md:grid-cols-2 gap-3">{insights.map((ins,i)=><InsightCard key={i} {...ins}/>)}</div></div>}
@@ -4098,16 +4147,14 @@ const GCDetailView=({gc,proposals,gcStats,onBack,onSelectProposal,settings})=>{
   </div>
  );
 };
-const ActiveJobsView=({proposals,estimateItems,estimates,onSelectProposal,onSelectGC,settings,onSaveProposal})=>{
+const ActiveJobsView=({proposals,estimateItems,estimates,bidBook,onSelectProposal,onSelectGC,settings,onSaveProposal})=>{
  const [editingActual,setEditingActual]=useState(null);
  const [editVal,setEditVal]=useState('');
  // Segmented "Jobs" workspace: Awarded (won, not started) / Active (executing) / Completed (done).
  const SEG_STATUS={awarded:['Awarded'],active:['Active'],completed:['Completed','Complete']};
- const segCounts=useMemo(()=>{
-  const inY=proposals.filter(x=>matchesYearFilter(x,settings.yearFilter));
-  const cnt=ss=>new Set(inY.filter(x=>ss.includes(x.status)).map(x=>String(x.projectNumber||x.id))).size;
-  return {awarded:cnt(SEG_STATUS.awarded),active:cnt(SEG_STATUS.active),completed:cnt(SEG_STATUS.completed)};
- },[proposals,settings.yearFilter]);
+ // Counts come straight from the canonical bid book so the Jobs badges, the Dashboard
+ // "Awarded to start" card, and the consistency guard can never disagree (one set of books).
+ const segCounts=bidBook.jobs;
  const [segment,setSegment]=useState(()=>{
   const inY=proposals.filter(x=>matchesYearFilter(x,settings.yearFilter));
   const has=ss=>inY.some(x=>ss.includes(x.status));
@@ -7118,7 +7165,7 @@ function App() {
    </header>
    {}
    <main className="px-5 py-5" style={{maxWidth:'1600px',margin:'0 auto'}}>
-    {view==='dashboard'&&<DashboardView proposals={proposals} settings={settings} gcStats={gcStats} bidBook={bidBook} estimateItems={estimateItems} recentSent={recentSent} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
+    {view==='dashboard'&&<DashboardView proposals={proposals} settings={settings} gcStats={gcStats} bidBook={bidBook} estimateItems={estimateItems} estimates={estimates} recentSent={recentSent} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
     {view==='pipeline'&&<PipelineView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
     {/* [PHASE 2] The Follow-Ups route now renders Today in Call list mode (combined slot below). */}
     {(view==='gcs'||view==='intelligence')&&!selectedGC&&(
@@ -7133,7 +7180,7 @@ function App() {
      </div>
     )}
     {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
-    {view==='active'&&<ActiveJobsView proposals={proposals} estimateItems={estimateItems} estimates={estimates} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
+    {view==='active'&&<ActiveJobsView proposals={proposals} estimateItems={estimateItems} estimates={estimates} bidBook={bidBook} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
     {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal} sb={sb} estimateItems={estimateItems} onImported={reloadData}/>}
     {/* [PHASE 2] The Intelligence route now renders inside GC Intel as the Deep dive sub-tab (above). */}
     {(view==='today'||view==='followups')&&<TodayView proposals={proposals} settings={settings} gcStats={gcStats} bidBook={bidBook} recentSent={recentSent} onSelectProposal={setSelectedId} onSaveProposal={saveProposal} onCloneToWinner={cloneToWinner} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted} mode={view==='followups'?'calls':'decisions'}/>}
