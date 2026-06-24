@@ -2592,7 +2592,14 @@ const overdueDays=(p,s)=>{
  // [FOLLOW-UP 2026-06-10 — Ben] SLA staleness applies to every pre-award working status.
  // (nextAction/nextActionDate overdue applies to ALL statuses — handled by the queue itself.)
  if(!['Lead','Bidding','Submitted','Negotiating','Hold'].includes(p.status)) return null;
- const since=daysSince(lastActivity(p));
+ // [OVERDUE FIX 2026-06-24 — Paul: "overdue is empty — we haven't contacted all 400!"] The follow-up clock
+ // must run from the last REAL outreach, falling back to the submission date — never from a bare import/
+ // review stamp. The June reconcile wrote lastTouched onto ~300 bids it merely REVIEWED, which made every
+ // bid look freshly handled and emptied the queue. A review stamp is not a contact (same rule as the
+ // contact count), so it must not reset the clock. Now: contacted recently -> not nagged; submitted long
+ // ago with no genuine outreach since -> correctly surfaces as overdue.
+ const anchor=(isRealContact(p)?p.lastTouched:null)||p.submitted;
+ const since=daysSince(anchor);
  if(since===null) return null;
  const sla=p.status==='Submitted'?s.slaSubmitted:s.slaNegotiating;
  return Math.max(0,since-sla);
@@ -5918,21 +5925,21 @@ const NewProjectModal=({onClose,onSave,allGCs,proposals})=>{
     <div className="p-5 space-y-4">
      {dupWarn&&<div className="bg-amber-50 border border-amber-300 text-amber-900 px-3 py-2 text-sm flex items-start gap-2"><Ico n="alertTri" size={15} className="mt-0.5 flex-shrink-0"/>{dupWarn}</div>}
      <div className="grid grid-cols-2 gap-3">
-      <div className="col-span-2"><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Project Name</label><input value={draft.project} onChange={e=>set('project',e.target.value)} placeholder="e.g. Factory Town Apartments" className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
+      <div className="col-span-2"><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Project Name</label><input value={draft.project} onChange={e=>set('project',e.target.value)} autoComplete="off" placeholder="e.g. Factory Town Apartments" className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
       <div className="col-span-2 relative"><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">GC / Client</label>
-       <input value={gcQuery||draft.gc} onChange={e=>{setGcQuery(e.target.value);set('gc',e.target.value);setShowList(true);}} onFocus={()=>setShowList(true)} onBlur={()=>setTimeout(()=>setShowList(false),150)} placeholder="Start typing GC name…" className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/>
+       <input value={gcQuery||draft.gc} onChange={e=>{setGcQuery(e.target.value);set('gc',e.target.value);setShowList(true);}} onFocus={()=>setShowList(true)} onBlur={()=>setTimeout(()=>setShowList(false),150)} autoComplete="off" placeholder="Start typing GC name…" className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/>
        {showList&&filteredGCs.length>0&&<div className="absolute z-10 top-full left-0 right-0 bg-white border border-stone-300 shadow-lg max-h-48 overflow-y-auto">
         {filteredGCs.map(g=><button key={g} onMouseDown={()=>{set('gc',g);setGcQuery('');setShowList(false);}} className="w-full text-left px-3 py-2 text-sm hover:bg-stone-100 border-b border-stone-100 last:border-0">{g}</button>)}
         {gcQuery.trim()&&!allGCs.includes(gcQuery.trim())&&<button onMouseDown={()=>{set('gc',gcQuery.trim());setShowList(false);}} className="w-full text-left px-3 py-2 text-sm bg-stone-50 text-stone-600 hover:bg-stone-100 italic">+ Add new: "{gcQuery.trim()}"</button>}
        </div>}
       </div>
       <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Status</label><select value={draft.status} onChange={e=>set('status',e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600">{ALL_STATUSES.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
-      <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Bid Amount</label><input value={draft.bidAmount} onChange={e=>set('bidAmount',e.target.value)} placeholder="0" className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
-      <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Location</label><input value={draft.location} onChange={e=>set('location',e.target.value)} placeholder="City, State" className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
+      <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Bid Amount</label><input value={draft.bidAmount} onChange={e=>set('bidAmount',e.target.value)} autoComplete="off" placeholder="0" className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
+      <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Location</label><input value={draft.location} onChange={e=>set('location',e.target.value)} autoComplete="off" placeholder="City, State" className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
       <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Date</label><input type="date" value={draft.submitted} onChange={e=>set('submitted',e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
-      <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Contact Name</label><input value={draft.contact} onChange={e=>set('contact',e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
-      <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Phone</label><input value={draft.phone} onChange={e=>set('phone',e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
-      <div className="col-span-2"><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Email</label><input value={draft.email} onChange={e=>set('email',e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
+      <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Contact Name</label><input value={draft.contact} onChange={e=>set('contact',e.target.value)} autoComplete="off" className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
+      <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Phone</label><input value={draft.phone} onChange={e=>set('phone',e.target.value)} autoComplete="off" className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
+      <div className="col-span-2"><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Email</label><input value={draft.email} onChange={e=>set('email',e.target.value)} autoComplete="off" className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600"/></div>
       <div className="col-span-2"><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Notes</label><textarea value={draft.notes} onChange={e=>set('notes',e.target.value)} rows={2} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600 resize-none"/></div>
       <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">Estimator</label><select value={draft.estimator} onChange={e=>set('estimator',e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600">{['Peter','Paul','David','Other'].map(o=><option key={o}>{o}</option>)}</select></div>
       <div><label className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold block mb-1">BD Owner</label><select value={draft.bdOwner} onChange={e=>set('bdOwner',e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-sm focus:outline-none focus:border-stone-600">{['Paul','Peter','David','Other'].map(o=><option key={o}>{o}</option>)}</select></div>
@@ -5960,7 +5967,10 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,bidBook,onSele
   const q=gcSearch.trim().toLowerCase();
   let out=[...gcStats].filter(g=>g.gc);
   if(q) out=out.filter(g=>g.gc.toLowerCase().includes(q));
-  else out=out.filter(g=>(g.won+g.lost)>=1);
+  // [GC COUNT FIX 2026-06-24 — Paul: "Intel says 151 GCs but shows only 37!"]
+  // The settled-bid filter is a curation for the default top-30 view ONLY.
+  // When Paul clicks "All N GCs" we must show every GC so the count matches the label.
+  else if(!gcShowAll) out=out.filter(g=>(g.won+g.lost)>=1);
   out.sort((a,b)=>b.totalVolume-a.totalVolume);
   if(!q&&!gcShowAll) out=out.slice(0,30);
   return out;
