@@ -5824,12 +5824,21 @@ const NewProjectModal=({onClose,onSave,allGCs,proposals})=>{
 const IntelligenceView=({proposals,gcStats,estimateItems,settings,bidBook,onSelectGC,onNavigate,onSaveProposal})=>{
  const [tab,setTab]=useState('gcs');
  const today=new Date();
+ // [PHASE 2c 2026-06-24 — Paul: "Deep dive handles everything except the search window"] The GC search
+ // that used to live on the separate Scorecards tab now lives right here. Empty search = top 30 settled
+ // GCs (or all, via the toggle); a query searches EVERY GC by name. Click any row for the full scorecard.
+ const [gcSearch,setGcSearch]=useState('');
+ const [gcShowAll,setGcShowAll]=useState(false);
+ const gcTotal=useMemo(()=>gcStats.filter(g=>g.gc).length,[gcStats]);
  const gcRows=useMemo(()=>{
-  return [...gcStats]
-   .filter(g=>g.gc&&(g.won+g.lost)>=1)
-   .sort((a,b)=>b.totalVolume-a.totalVolume)
-   .slice(0,30);
- },[gcStats]);
+  const q=gcSearch.trim().toLowerCase();
+  let out=[...gcStats].filter(g=>g.gc);
+  if(q) out=out.filter(g=>g.gc.toLowerCase().includes(q));
+  else out=out.filter(g=>(g.won+g.lost)>=1);
+  out.sort((a,b)=>b.totalVolume-a.totalVolume);
+  if(!q&&!gcShowAll) out=out.slice(0,30);
+  return out;
+ },[gcStats,gcSearch,gcShowAll]);
  const mfrRows=useMemo(()=>{
   const map=new Map();
   estimateItems.forEach(it=>{
@@ -5897,11 +5906,17 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,bidBook,onSele
    {/* GC Performance */}
    {tab==='gcs'&&(
     <div className="bg-white border border-stone-200">
-     <div className="px-4 py-3 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
-      <h3 className="font-serif text-base text-stone-800">GC Performance — by lifetime volume</h3>
-      <div className="flex items-center gap-3">
-       <span className="text-xs text-stone-500">{gcRows.length} GCs with settled bids · Click any row to open full detail</span>
-       <button onClick={()=>onNavigate('gcs')} className="text-xs text-stone-600 hover:text-orange-800 inline-flex items-center gap-1 border border-stone-300 px-2 py-1 rounded hover:border-orange-400">All 158 GCs <Ico n="chevRight" size={11}/></button>
+     <div className="px-4 py-3 border-b border-stone-200 bg-stone-50 flex items-center justify-between gap-3 flex-wrap">
+      <div>
+       <h3 className="font-serif text-base text-stone-800">GC Performance{gcSearch.trim()?` — ${gcRows.length} match${gcRows.length===1?'':'es'}`:gcShowAll?` — all ${gcTotal} GCs`:' — top 30 by lifetime volume'}</h3>
+       <div className="text-[11px] text-stone-500 mt-0.5">Click any row to open the full scorecard.</div>
+      </div>
+      <div className="flex items-center gap-2">
+       <div className="relative" style={{minWidth:'200px'}}>
+        <Ico n="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400"/>
+        <input type="text" value={gcSearch} onChange={e=>setGcSearch(e.target.value)} placeholder="Search any GC…" className="w-full pl-8 pr-3 py-1.5 text-sm border border-stone-200 bg-white focus:outline-none focus:border-stone-400 rounded-sm"/>
+       </div>
+       {!gcSearch.trim()&&<button onClick={()=>setGcShowAll(s=>!s)} className="text-xs text-stone-600 hover:text-orange-800 inline-flex items-center gap-1 border border-stone-300 px-2 py-1 rounded hover:border-orange-400 whitespace-nowrap">{gcShowAll?'Top 30':`All ${gcTotal} GCs`} <Ico n="chevRight" size={11}/></button>}
       </div>
      </div>
      <div className="overflow-x-auto">
@@ -7226,8 +7241,8 @@ function App() {
      </div>
      <nav className="flex items-center gap-1 flex-1 flex-wrap">
       {navItems.map(item=>{
-       // [PHASE 2] keep Today lit while in its Call list mode, and GC Intel lit while in Deep dive.
-       const active=view===item.id||(item.id==='today'&&view==='followups')||(item.id==='gcs'&&view==='intelligence');
+       // [PHASE 2] keep Today lit while in its Call list mode (Follow-Ups route).
+       const active=view===item.id||(item.id==='today'&&view==='followups');
        return <button key={item.id} onClick={()=>{setView(item.id);setSelectedGC(null);}} className={`text-sm px-3 py-1.5 rounded-sm inline-flex items-center gap-1.5 transition-colors ${active?'bg-stone-900 text-white':'text-stone-700 hover:bg-stone-100'}`}><Ico n={item.icon} size={13}/>{item.label}{item.badge>0&&<span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${active?'bg-rose-300 text-rose-900':'bg-rose-100 text-rose-700'}`}>{item.badge}</span>}</button>;
       })}
      </nav>
@@ -7249,21 +7264,11 @@ function App() {
     {view==='dashboard'&&<DashboardView proposals={proposals} settings={settings} gcStats={gcStats} bidBook={bidBook} estimateItems={estimateItems} estimates={estimates} recentSent={recentSent} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
     {view==='pipeline'&&<PipelineView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
     {/* [PHASE 2] The Follow-Ups route now renders Today in Call list mode (combined slot below). */}
-    {(view==='gcs'||view==='intelligence')&&!selectedGC&&(
-     <div className="space-y-4">
-      {/* [PHASE 2 2026-06-22 — Ben] GC Intel sub-tabs: Scorecards (was GC Intel) + Deep dive (was the separate Intelligence tab). */}
-      <div className="inline-flex items-center gap-1 bg-stone-100 border border-stone-200 rounded-sm p-0.5">
-       <button onClick={()=>{setView('gcs');setSelectedGC(null);}} className={`text-sm px-3 py-1.5 rounded-sm font-medium inline-flex items-center gap-1.5 ${view==='gcs'?'bg-white shadow-sm text-stone-900':'text-stone-600 hover:text-stone-900'}`}><Ico n="building2" size={13}/>GC Scorecards</button>
-       <button onClick={()=>{setView('intelligence');setSelectedGC(null);}} className={`text-sm px-3 py-1.5 rounded-sm font-medium inline-flex items-center gap-1.5 ${view==='intelligence'?'bg-white shadow-sm text-stone-900':'text-stone-600 hover:text-stone-900'}`}><Ico n="zap" size={13}/>Deep dive</button>
-      </div>
-      {view==='gcs'&&<GCIntelView gcStats={gcStats} proposals={proposals} onSelectGC={setSelectedGC} settings={settings}/>}
-      {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} bidBook={bidBook} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSaveProposal={saveProposal}/>}
-     </div>
-    )}
+    {/* [PHASE 2c 2026-06-24 — Paul: "Deep dive actually handles everything so there is no need for a scorecard tab, except for the search window"] The Scorecards sub-tab is gone; Intel opens straight to Deep dive, whose own GC search + table (top 30 by lifetime volume, search any GC, click a row for the full scorecard) absorbs the old Scorecards search window. */}
+    {view==='gcs'&&!selectedGC&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} bidBook={bidBook} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSaveProposal={saveProposal}/>}
     {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
     {view==='active'&&<ActiveJobsView proposals={proposals} estimateItems={estimateItems} estimates={estimates} bidBook={bidBook} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
     {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal} sb={sb} estimateItems={estimateItems} onImported={reloadData}/>}
-    {/* [PHASE 2] The Intelligence route now renders inside GC Intel as the Deep dive sub-tab (above). */}
     {(view==='today'||view==='followups')&&<TodayView proposals={proposals} settings={settings} gcStats={gcStats} bidBook={bidBook} recentSent={recentSent} onSelectProposal={setSelectedId} onSaveProposal={saveProposal} onCloneToWinner={cloneToWinner} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted} mode={view==='followups'?'calls':'decisions'}/>}
    </main>
    {selectedProposal&&<ProjectDrawer
