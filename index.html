@@ -5730,7 +5730,7 @@ const NewProjectModal=({onClose,onSave,allGCs,proposals})=>{
   </>
  );
 };
-const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onNavigate,onSaveProposal})=>{
+const IntelligenceView=({proposals,gcStats,estimateItems,settings,bidBook,onSelectGC,onNavigate,onSaveProposal})=>{
  const [tab,setTab]=useState('gcs');
  const today=new Date();
  const gcRows=useMemo(()=>{
@@ -5876,15 +5876,18 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
      </div>
      <div className="grid grid-cols-3 gap-4">
       {(()=>{
-       const won=funnel.find(s=>s.label.startsWith('Awarded'));
-       const lost=funnel.find(s=>s.label.startsWith('Lost'));
-       const total=(won?.count||0)+(lost?.count||0);
-       const wr=total>0?((won?.count||0)/total):null;
-       const sub=funnel.find(s=>s.label==='Submitted');
+       // [ONE SET OF BOOKS 2026-06-23] Read headline stats from the canonical, year-filtered bidBook so
+       // they always match the Dashboard and respect the year filter. (Previously they were recomputed
+       // from funnel stages: Win Rate silently excluded Completed jobs, Open Pipeline showed only the
+       // Submitted stage value mislabelled "submitted + negotiating", and Avg Bid Size ignored the filter.)
+       const wr=bidBook.winRate;
+       const settled=bidBook.counts.won+bidBook.counts.lost;
+       const avgPool=bidBook.book.filter(p=>bidValue(p)>0);
+       const avg=avgPool.length?avgPool.reduce((s,p)=>s+bidValue(p),0)/avgPool.length:null;
        return[
-        {label:'Win Rate',val:wr!==null?pct(wr):'—',sub:`${won?.count||0} won / ${total} settled`,c:wr>=0.4?'text-emerald-700':'text-rose-600'},
-        {label:'Open Pipeline',val:money((funnel.find(s=>s.label==='Submitted')?.value||0)+(funnel.find(s=>s.label.startsWith('Negot'))?.value||0),true),sub:'submitted + negotiating',c:'text-amber-700'},
-        {label:'Avg Bid Size',val:proposals.filter(p=>p.bidAmount>0).length?money(proposals.filter(p=>p.bidAmount>0).reduce((s,p)=>s+(p.bidAmount||0),0)/proposals.filter(p=>p.bidAmount>0).length,true):'—',sub:'across all bids',c:'text-stone-700'},
+        {label:'Win Rate',val:wr!==null?pct(wr):'—',sub:`${bidBook.counts.won} won / ${settled} settled`,c:wr!==null&&wr>=0.4?'text-emerald-700':'text-rose-600'},
+        {label:'Open Pipeline',val:money(bidBook.value.open,true),sub:`${bidBook.counts.open} open bid${bidBook.counts.open!==1?'s':''}`,c:'text-amber-700'},
+        {label:'Avg Bid Size',val:avg!==null?money(avg,true):'—',sub:'open + settled, this filter',c:'text-stone-700'},
        ].map(card=>(
         <div key={card.label} className="bg-white border border-stone-200 p-4">
          <div className="text-[10px] uppercase tracking-widest text-stone-500 font-semibold">{card.label}</div>
@@ -7163,7 +7166,7 @@ function App() {
        <button onClick={()=>{setView('intelligence');setSelectedGC(null);}} className={`text-sm px-3 py-1.5 rounded-sm font-medium inline-flex items-center gap-1.5 ${view==='intelligence'?'bg-white shadow-sm text-stone-900':'text-stone-600 hover:text-stone-900'}`}><Ico n="zap" size={13}/>Deep dive</button>
       </div>
       {view==='gcs'&&<GCIntelView gcStats={gcStats} proposals={proposals} onSelectGC={setSelectedGC} settings={settings}/>}
-      {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSaveProposal={saveProposal}/>}
+      {view==='intelligence'&&<IntelligenceView proposals={proposals} gcStats={gcStats} estimateItems={estimateItems} settings={settings} bidBook={bidBook} onSelectGC={g=>{setSelectedGC(g);setView('gcs');}} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSaveProposal={saveProposal}/>}
      </div>
     )}
     {view==='gcs'&&selectedGC&&<GCDetailView gc={selectedGC} proposals={proposals} gcStats={gcStats} onBack={()=>setSelectedGC(null)} onSelectProposal={setSelectedId} settings={settings}/>}
