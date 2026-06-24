@@ -7397,6 +7397,11 @@ function App() {
    </header>
    {}
    <main className="px-5 py-5" style={{maxWidth:'1600px',margin:'0 auto'}}>
+    {/* [DUP CONFIRM 2026-06-24 — Paul: "tons of duplicates on projects ... NEVER auto-merge, surface for my one-click confirm"]
+        Surfaces same-builder + same-job-number families whose project NAMES don't match (the only ambiguous case the
+        roll-up won't auto-merge). Paul decides: "Same project" merges them everywhere; "Keep separate" leaves them split.
+        Either choice is remembered in settings.confirmedMerges and the banner hides itself once nothing is left to review. */}
+    <PendingMergesBanner groups={bidBook.pendingMerges} onConfirm={(key,val)=>saveSettings({...settings,confirmedMerges:{...(settings.confirmedMerges||{}),[key]:val}})}/>
     {view==='dashboard'&&<DashboardView proposals={proposals} settings={settings} gcStats={gcStats} bidBook={bidBook} estimateItems={estimateItems} estimates={estimates} recentSent={recentSent} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onNavigate={v=>{setView(v);setSelectedGC(null);}}/>}
     {view==='pipeline'&&<PipelineView proposals={proposals} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
     {/* [PHASE 2] The Follow-Ups route now renders Today in Call list mode (combined slot below). */}
