@@ -3027,6 +3027,49 @@ const LostReasonStrip=({proposal,onSave})=>{
   </div>
  );
 };
+// [PHASE 2 2026-06-24 — Paul] "It's much simpler — the flow is the statuses." The Pipeline is organized
+// around the 8 canonical statuses in their natural order (STATUS_CONFIG.order): Lead → Bidding →
+// Submitted → Awarded → Active → Completed, with Dead/Lost as a terminal off-ramp. The strip below IS
+// the status filter — click a stage to focus the table on it. One picture = the whole trade flow, and
+// no invented stage names (the statuses Paul already uses ARE the stages).
+const StageFlow=({stats,active,onPick,total,totalValue})=>{
+ const stages=ALL_STATUSES.slice().sort((a,b)=>(STATUS_CONFIG[a].order||0)-(STATUS_CONFIG[b].order||0));
+ const main=stages.filter(s=>STATUS_CONFIG[s].pipeline!=='lost'); // Lead..Completed (the forward flow)
+ const term=stages.filter(s=>STATUS_CONFIG[s].pipeline==='lost'); // Dead, Lost (terminal off-ramp)
+ const Chip=({status,count,value})=>{
+  const cfg=STATUS_CONFIG[status]||{};
+  const on=active===status;
+  return (
+   <button onClick={()=>onPick(on?'all':status)} title={`${status} — ${count} bid${count===1?'':'s'} · ${money(value,true)}. Click to ${on?'clear and show all':'focus the list on this stage'}.`}
+    className={`flex flex-col items-start px-2.5 py-1.5 rounded-sm border transition-all leading-tight shrink-0 ${on?cfg.color+' ring-1 ring-inset ring-black/10 shadow-sm border-transparent':'bg-white border-stone-200 text-stone-700 hover:bg-stone-50 hover:border-stone-300'}`} style={{minWidth:'80px'}}>
+    <span className="flex items-center gap-1.5 text-[11px] font-medium whitespace-nowrap"><span className={`w-1.5 h-1.5 rounded-full ${cfg.dot||'bg-stone-400'}`}/>{status}</span>
+    <span className="font-mono tabular-nums text-lg font-semibold mt-0.5 leading-none">{count}</span>
+    <span className="font-mono text-[10px] opacity-70 mt-0.5">{value?money(value,true):'—'}</span>
+   </button>
+  );
+ };
+ return (
+  <div className="bg-white border border-stone-200 px-3 py-2.5">
+   <div className="flex items-center gap-1.5 overflow-x-auto">
+    <button onClick={()=>onPick('all')} title="Show every bid in the book, all statuses"
+     className={`flex flex-col items-start px-2.5 py-1.5 rounded-sm border transition-all leading-tight shrink-0 ${active==='all'?'bg-stone-800 text-white border-stone-800 shadow-sm':'bg-white border-stone-200 text-stone-700 hover:bg-stone-50 hover:border-stone-300'}`} style={{minWidth:'76px'}}>
+     <span className="text-[11px] font-medium whitespace-nowrap">All bids</span>
+     <span className="font-mono tabular-nums text-lg font-semibold mt-0.5 leading-none">{total}</span>
+     <span className="font-mono text-[10px] opacity-70 mt-0.5">{money(totalValue,true)}</span>
+    </button>
+    <div className="w-px self-stretch bg-stone-200 mx-0.5 shrink-0"/>
+    {main.map((s,i)=>(
+     <React.Fragment key={s}>
+      {i>0&&<Ico n="chevRight" size={14} className="text-stone-300 shrink-0"/>}
+      <Chip status={s} count={(stats[s]&&stats[s].count)||0} value={(stats[s]&&stats[s].value)||0}/>
+     </React.Fragment>
+    ))}
+    {term.length>0&&<div className="w-px self-stretch bg-stone-200 mx-0.5 shrink-0" title="Closed-out branches"/>}
+    {term.map(s=>(<Chip key={s} status={s} count={(stats[s]&&stats[s].count)||0} value={(stats[s]&&stats[s].value)||0}/>))}
+   </div>
+  </div>
+ );
+};
 const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSaveProposal})=>{
  const [search,setSearch]=useState('');
  const [statusF,setStatusF]=useState('all');
@@ -3034,18 +3077,27 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
  const [roleF,setRoleF]=useState('all');
  const [sortBy,setSortBy]=useState('submitted_desc');
  const allGCs=useMemo(()=>Array.from(new Set(proposals.map(p=>p.gc).filter(Boolean))).sort(),[proposals]);
- const filtered=useMemo(()=>{
-  let out=proposals;
-  out=out.filter(p=>matchesYearFilter(p,settings.yearFilter));
-  if(statusF==='open') out=out.filter(p=>OPEN_STATUSES.includes(p.status));
-  else if(statusF==='awarded') out=out.filter(p=>WON_STATUSES.includes(p.status));
-  else if(statusF==='lost') out=out.filter(p=>LOST_STATUSES.includes(p.status));
-  else if(statusF!=='all') out=out.filter(p=>p.status===statusF);
+ // [PHASE 2 2026-06-24 — Paul] baseFiltered = everything EXCEPT the status filter. The stage-flow strip
+ // reads from this so each stage always shows its true count/value within the current GC/person/search
+ // context, and those numbers don't shift as you click between stages. The strip IS the status filter
+ // now, so the old "All statuses" dropdown is gone (Paul: "the flow is the statuses").
+ const baseFiltered=useMemo(()=>{
+  let out=proposals.filter(p=>matchesYearFilter(p,settings.yearFilter));
   if(gcF!=='all') out=out.filter(p=>p.gc===gcF);
   if(roleF==='Peter') out=out.filter(p=>(p.estimator||p.owner)==='Peter');
   else if(roleF==='Paul') out=out.filter(p=>(p.bdOwner||p.owner)==='Paul');
   else if(roleF==='David') out=out.filter(p=>p.pm==='David');
   if(search.trim()){const q=search.toLowerCase();out=out.filter(p=>(p.project||'').toLowerCase().includes(q)||(p.gc||'').toLowerCase().includes(q)||(p.location||'').toLowerCase().includes(q)||(p.contact||'').toLowerCase().includes(q)||String(p.id).includes(q));}
+  return out;
+ },[proposals,search,gcF,roleF,settings.yearFilter]);
+ const stageStats=useMemo(()=>{
+  const m={}; ALL_STATUSES.forEach(s=>{m[s]={count:0,value:0};});
+  baseFiltered.forEach(p=>{ if(m[p.status]){m[p.status].count++; m[p.status].value+=bidValue(p);} });
+  return m;
+ },[baseFiltered]);
+ const baseTotalValue=useMemo(()=>baseFiltered.reduce((s,p)=>s+bidValue(p),0),[baseFiltered]);
+ const filtered=useMemo(()=>{
+  let out= statusF==='all' ? baseFiltered : baseFiltered.filter(p=>p.status===statusF);
   const sorted=[...out];
   if(sortBy==='submitted_desc') sorted.sort((a,b)=>(b.submitted||'').localeCompare(a.submitted||''));
   else if(sortBy==='submitted_asc') sorted.sort((a,b)=>(a.submitted||'').localeCompare(b.submitted||''));
@@ -3054,24 +3106,24 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
   else if(sortBy==='gc') sorted.sort((a,b)=>(a.gc||'').localeCompare(b.gc||''));
   else if(sortBy==='status') sorted.sort((a,b)=>(STATUS_CONFIG[a.status]?.order||99)-(STATUS_CONFIG[b.status]?.order||99));
   return sorted;
- },[proposals,search,statusF,gcF,roleF,sortBy,settings.yearFilter]);
+ },[baseFiltered,statusF,sortBy]);
  return (
   <div className="space-y-3">
    {/* [PHASE 1 2026-06-22 — Ben] Purpose + scope header so it's clear this is the whole bid book. */}
    <div>
     <h1 className="font-serif text-2xl text-stone-900">Pipeline</h1>
-    <p className="text-sm text-stone-500 mt-0.5">Your whole bid book — <strong>every bid, every status</strong>. The total on the right is all bids (not just open ones), which is why it's bigger than the Today and Follow-Ups numbers. Search or filter, then click any row to view or edit a bid.</p>
+    <p className="text-sm text-stone-500 mt-0.5">Your whole bid book, laid out by the stage each bid is in — left to right, the way work actually moves. Click a stage to focus the list; click any row to open a bid.</p>
    </div>
+   <StageFlow stats={stageStats} active={statusF} onPick={setStatusF} total={baseFiltered.length} totalValue={baseTotalValue}/>
    <div className="bg-white border border-stone-200 px-3 py-2 flex flex-wrap items-center gap-2">
     <div className="relative" style={{minWidth:'200px',flex:1}}>
      <Ico n="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400"/>
      <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project, GC, location, contact, ID…" className="w-full pl-8 pr-3 py-1.5 text-sm border border-stone-200 bg-stone-50 focus:bg-white focus:outline-none focus:border-stone-400 rounded-sm"/>
     </div>
-    <select value={statusF} onChange={e=>setStatusF(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none"><option value="all">All statuses</option>{ALL_STATUSES.map(s=><option key={s} value={s}>{s}</option>)}</select>
     <select value={gcF} onChange={e=>setGcF(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none" style={{maxWidth:'180px'}}><option value="all">All GCs</option>{allGCs.map(g=><option key={g} value={g}>{g}</option>)}</select>
     <select value={roleF} onChange={e=>setRoleF(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none"><option value="all">All people</option><option value="Peter">Peter (Est.)</option><option value="Paul">Paul (BD)</option><option value="David">David (PM)</option></select>
     <select value={sortBy} onChange={e=>setSortBy(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none"><option value="submitted_desc">Newest first</option><option value="submitted_asc">Oldest first</option><option value="amount_desc">$ high→low</option><option value="amount_asc">$ low→high</option><option value="gc">GC A→Z</option><option value="status">Status</option></select>
-    <div className="text-xs text-stone-600 ml-auto whitespace-nowrap" title="Count and total value of every bid matching the filters above — your whole bid book, not just open bids."><span className="font-mono font-semibold">{filtered.length}</span> bids · <span className="font-mono font-semibold">{money(filtered.reduce((s,p)=>s+bidValue(p),0),true)}</span> total</div>
+    <div className="text-xs text-stone-600 ml-auto whitespace-nowrap" title={statusF==='all'?'Count and total value of every bid matching the filters above — your whole bid book.':`Count and total value of bids in the "${statusF}" stage (within the filters above).`}><span className="font-mono font-semibold">{filtered.length}</span> {statusF==='all'?'bids':statusF.toLowerCase()} · <span className="font-mono font-semibold">{money(filtered.reduce((s,p)=>s+bidValue(p),0),true)}</span></div>
    </div>
    <div className="bg-white border border-stone-200 overflow-auto" style={{maxHeight:'calc(100vh - 230px)'}}>
     <table style={{tableLayout:'fixed',width:'100%'}} className="text-sm">
