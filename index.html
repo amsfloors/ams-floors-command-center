@@ -2860,10 +2860,27 @@ const DashboardView=({proposals,settings,gcStats,bidBook,estimateItems,estimates
  // (≈ the 20% markup); the handful whose recorded cost exceeds the contract are surfaced below as
  // "cost data needs review", not as a fabricated loss. A money-LOSER alarm fires only on ACTUAL
  // margin (David's entered costs) — slotted in once those exist. jobCost()/costIndex stay the one source.
- const topFollowUps=useMemo(()=>{
-  const gcWR=new Map(gcStats.map(g=>[g.key,g.winRate]));
-  return filtered.filter(p=>OPEN_STATUSES.includes(p.status)).map(p=>({...p,_od:overdueDays(p,settings)||0,_naOD:p.nextActionDate&&p.nextActionDate<=todayStr()?1:0,_score:followUpScore(p,settings,gcWR.get(canonicalGC(p.gc)))})).sort((a,b)=>b._score-a._score).slice(0,8);
- },[filtered,settings,gcStats]);
+ // [PHASE 2c 2026-06-24 — Paul: "repurpose the Dashboard into a true owner's cockpit"] The old dashboard
+ // just re-listed the Follow-Up queue (no added value). The cockpit now leads with the BUSINESS: money in
+ // play, win-rate trend, and the whole book drawn as the SAME status flow used on Pipeline (house style).
+ // Stage stats come from the CANONICAL deduped book (bidBook.open/won/lost) so the flow reconciles EXACTLY
+ // with the money tiles and the consistency guard: Lead+Bidding+Submitted = open, Awarded+Active+Completed
+ // = won — no double-counted documents. (Pipeline still draws the flow per-document until its consolidation.)
+ const stageStats=useMemo(()=>{
+  const m={}; ALL_STATUSES.forEach(s=>{m[s]={count:0,value:0};});
+  [...bidBook.open,...bidBook.won,...bidBook.lost].forEach(p=>{ if(m[p.status]){m[p.status].count++; m[p.status].value+=bidValue(p);} });
+  return m;
+ },[bidBook]);
+ // Win-rate TREND — real settled bids only (won vs lost, deduped by project), grouped by bid year.
+ const wrTrend=useMemo(()=>{
+  const years=Array.from(new Set(proposals.map(bidYear).filter(Boolean))).sort();
+  return years.map(y=>{
+   const won=dedupeByProject(proposals.filter(p=>WON_STATUSES.includes(p.status)&&bidYear(p)===y)).length;
+   const lost=dedupeByProject(proposals.filter(p=>LOST_STATUSES.includes(p.status)&&bidYear(p)===y)).length;
+   const settled=won+lost;
+   return {year:y, wr:settled>0?won/settled:null, settled};
+  }).filter(d=>d.settled>0);
+ },[proposals]);
  const insights=useMemo(()=>{
   const out=[];
   if(kpis.overdueCount>0) out.push({severity:'critical',icon:'phone',title:`${kpis.overdueCount} follow-up${kpis.overdueCount>1?'s':''} overdue · ${money(kpis.overdueValue,true)} at stake`,body:`Bids past SLA with no logged contact. Sorted by $ × days × win-rate.`,action:'Open Call Queue',onAction:()=>onNavigate('followups')});
@@ -2881,53 +2898,50 @@ const DashboardView=({proposals,settings,gcStats,bidBook,estimateItems,estimates
  },[filtered,gcStats,kpis,costIndex,settings,onNavigate,onSelectGC]);
  return (
   <div className="space-y-6">
-   {/* [PHASE 1 2026-06-22 — Ben] Purpose header; clarifies these are open-bid figures. */}
+   {/* [PHASE 2c 2026-06-24 — Paul] Owner's cockpit: lead with the BUSINESS (money in play, win-rate trend,
+       the whole book as the house-style status flow) — not a re-list of the Follow-Up queue. */}
    <div>
-    <h1 className="font-serif text-2xl text-stone-900">Dashboard</h1>
-    <p className="text-sm text-stone-500 mt-0.5">Your decisions for today{settings.yearFilter!=='All'?` (filtered to ${settings.yearFilter})`:''} — each card opens the work. The book totals sit just below.</p>
+    <h1 className="font-serif text-2xl text-stone-900">Command center</h1>
+    <p className="text-sm text-stone-500 mt-0.5">Your business at a glance{settings.yearFilter!=='All'?` (${settings.yearFilter})`:''} — money in play, what you're winning, and what needs you next. Click anything to open the work.</p>
    </div>
-   {/* DECISIONS row — what needs action now; each card opens the work */}
-   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-    <KPICard label="Wins to confirm" value={decisions.wins} sublabel={decisions.wins>0?'mark won & book it':'none waiting'} accent={decisions.wins>0?'green':'default'} icon="check2" onClick={()=>onNavigate('today')}/>
-    <KPICard label="Replies to answer" value={decisions.replies} sublabel={decisions.replies>0?'a GC wrote back':'inbox is clear'} accent={decisions.replies>0?'amber':'default'} icon="inbox" onClick={()=>onNavigate('today')}/>
-    <KPICard label="Overdue follow-ups" value={kpis.overdueCount} sublabel={kpis.overdueCount>0?'past SLA — call now':'all caught up'} accent={kpis.overdueCount>0?'rose':'green'} icon="phone" onClick={()=>onNavigate('followups')}/>
-    <KPICard label="Awarded to start" value={decisions.awardedToStart} sublabel={decisions.awardedToStart>0?'won — get it moving':'none pending'} accent={decisions.awardedToStart>0?'bronze':'default'} icon="flame" onClick={()=>onNavigate('active')}/>
+   {/* MONEY — the headline numbers, big and bold */}
+   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+    <button onClick={()=>onNavigate('pipeline')} className="group text-left rounded-lg border border-sky-200 bg-sky-50 text-sky-950 p-5 transition-all hover:shadow-md hover:-translate-y-0.5">
+     <div className="flex items-center justify-between"><span className="text-[11px] uppercase tracking-widest font-semibold text-sky-700">Open pipeline</span><Ico n="listFilter" size={18} className="text-sky-600"/></div>
+     <div className="font-serif text-4xl tracking-tight leading-none mt-3">{money(kpis.openValue,true)}</div>
+     <div className="text-xs text-sky-800 mt-2">{kpis.openCount} open bid{kpis.openCount===1?'':'s'} in play</div>
+    </button>
+    <button onClick={()=>onNavigate('active')} className="group text-left rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-950 p-5 transition-all hover:shadow-md hover:-translate-y-0.5">
+     <div className="flex items-center justify-between"><span className="text-[11px] uppercase tracking-widest font-semibold text-emerald-700">Won &amp; booked</span><Ico n="flame" size={18} className="text-emerald-600"/></div>
+     <div className="font-serif text-4xl tracking-tight leading-none mt-3">{money(kpis.awardedValue,true)}</div>
+     <div className="text-xs text-emerald-800 mt-2">{kpis.awardedCount} project{kpis.awardedCount===1?'':'s'} won{settings.yearFilter!=='All'?` in ${settings.yearFilter}`:''}</div>
+    </button>
+    <button onClick={()=>onNavigate('gcs')} className="group text-left rounded-lg border border-amber-200 bg-amber-50 text-amber-950 p-5 transition-all hover:shadow-md hover:-translate-y-0.5">
+     <div className="flex items-center justify-between"><span className="text-[11px] uppercase tracking-widest font-semibold text-amber-700">Win rate</span><Ico n="target" size={18} className="text-amber-600"/></div>
+     <div className="flex items-end justify-between gap-3">
+      <div className="font-serif text-4xl tracking-tight leading-none mt-3">{kpis.winRate!==null?pct(kpis.winRate):'—'}</div>
+      {wrTrend.length>1&&<div className="flex items-end gap-1 h-9 pb-0.5">{wrTrend.slice(-4).map(d=>(<div key={d.year} className="flex flex-col items-center gap-0.5" title={`${d.year}: ${d.wr!==null?pct(d.wr):'—'} · ${d.settled} settled`}><div className="w-4 rounded-sm bg-amber-400" style={{height:`${Math.max(3,Math.round((d.wr||0)*30))}px`}}/><span className="text-[8px] font-mono text-amber-700">{String(d.year).slice(2)}</span></div>))}</div>}
+     </div>
+     <div className="text-xs text-amber-800 mt-2">of {kpis.awardedCount+bidBook.counts.lost} settled{wrTrend.length>1?' · recent-year trend →':''}</div>
+    </button>
    </div>
-   {/* Book at a glance — the real totals, kept available but secondary */}
-   <div className="flex flex-wrap items-center text-sm text-stone-500 -mt-2" style={{columnGap:'1.5rem',rowGap:'0.25rem'}}>
-    <button onClick={()=>onNavigate('pipeline')} className="hover:text-stone-900"><span className="font-mono font-semibold text-stone-800">{money(kpis.openValue,true)}</span> open · {kpis.openCount} bids</button>
-    <span className="text-stone-300" aria-hidden="true">|</span>
-    <button onClick={()=>onNavigate('active')} className="hover:text-stone-900"><span className="font-mono font-semibold text-stone-800">{money(kpis.awardedValue,true)}</span> won · {kpis.awardedCount} projects</button>
-    <span className="text-stone-300" aria-hidden="true">|</span>
-    <button onClick={()=>onNavigate('gcs')} className="hover:text-stone-900">Win rate <span className="font-mono font-semibold text-stone-800">{kpis.winRate!==null?pct(kpis.winRate):'—'}</span> <span className="text-stone-400">of {kpis.awardedCount+bidBook.counts.lost} settled</span></button>
+   {/* THE BOOK — house-style status flow; click a stage to dive into the Pipeline */}
+   <div className="space-y-2">
+    <div className="flex items-baseline justify-between"><h2 className="font-serif text-lg text-stone-800">Where your book sits</h2><span className="text-xs text-stone-400">click a stage to open it in Pipeline</span></div>
+    <StageFlow stats={stageStats} active={'all'} onPick={()=>onNavigate('pipeline')} total={filtered.length} totalValue={kpis.openValue}/>
+   </div>
+   {/* DECISIONS — what needs action now; each card opens the work */}
+   <div>
+    <h2 className="font-serif text-lg text-stone-800 mb-2">What needs you today</h2>
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+     <KPICard label="Wins to confirm" value={decisions.wins} sublabel={decisions.wins>0?'mark won & book it':'none waiting'} accent={decisions.wins>0?'green':'default'} icon="check2" onClick={()=>onNavigate('today')}/>
+     <KPICard label="Replies to answer" value={decisions.replies} sublabel={decisions.replies>0?'a GC wrote back':'inbox is clear'} accent={decisions.replies>0?'amber':'default'} icon="inbox" onClick={()=>onNavigate('today')}/>
+     <KPICard label="Overdue follow-ups" value={kpis.overdueCount} sublabel={kpis.overdueCount>0?'past SLA — call now':'all caught up'} accent={kpis.overdueCount>0?'rose':'green'} icon="phone" onClick={()=>onNavigate('followups')}/>
+     <KPICard label="Awarded to start" value={decisions.awardedToStart} sublabel={decisions.awardedToStart>0?'won — get it moving':'none pending'} accent={decisions.awardedToStart>0?'bronze':'default'} icon="flame" onClick={()=>onNavigate('active')}/>
+    </div>
    </div>
    {/* Insights — only appear when something needs attention */}
    {insights.length>0&&<div><h2 className="font-serif text-lg text-stone-800 mb-2 flex items-center gap-2"><Ico n="zap" size={16} className="text-orange-700"/>What needs your attention</h2><div className="grid md:grid-cols-2 gap-3">{insights.map((ins,i)=><InsightCard key={i} {...ins}/>)}</div></div>}
-   {/* Follow-up queue — main operational surface */}
-   <div className="bg-white border border-stone-200">
-    <div className="flex items-center justify-between px-4 py-3 border-b border-stone-200">
-     <h3 className="font-serif text-lg text-stone-800">Priority Follow-Up Queue</h3>
-     <button onClick={()=>onNavigate('followups')} className="text-xs text-stone-500 hover:text-stone-900 inline-flex items-center gap-1">Full queue <Ico n="chevRight" size={12}/></button>
-    </div>
-    <table className="w-full text-sm">
-     <thead><tr className="bg-stone-50"><TH>Project</TH><TH>GC</TH><TH className="text-right">Bid</TH><TH>Status</TH><TH>Next Action</TH><TH className="text-right">Age</TH></tr></thead>
-     <tbody>
-      {topFollowUps.length===0&&<tr><td colSpan={6}><Empty icon="check2" title="Nothing overdue" body="All follow-ups are within SLA."/></td></tr>}
-      {topFollowUps.map(p=>(
-       <tr key={p.id} className="border-b border-stone-100 hover:bg-stone-50 cursor-pointer" onClick={()=>onSelectProposal(p.id)}>
-        <td className="px-3 py-2.5"><div className="font-medium text-stone-900 truncate max-w-[160px]">{p.project||'—'}</div><div className="text-xs text-stone-500 truncate">#{p.id}·{p.location||'—'}</div></td>
-        <td className="px-3 py-2.5"><button onClick={e=>{e.stopPropagation();onSelectGC(p.gc);}} className="text-stone-700 hover:text-orange-800 hover:underline truncate block max-w-[140px]">{p.gc||'—'}</button></td>
-        <td className="px-3 py-2.5 text-right whitespace-nowrap"><MoneyCell amount={p.bidAmount} compact/></td>
-        <td className="px-3 py-2.5"><StatusPill status={p.status} size="xs"/></td>
-        <td className="px-3 py-2.5">
-         {p.nextAction?<div><div className={`text-xs font-medium truncate max-w-[130px] ${p._naOD?'text-rose-700':'text-sky-700'}`}>{p.nextAction}</div>{p.nextActionDate&&<div className={`text-[10px] font-mono ${p._naOD?'text-rose-600':'text-stone-400'}`}>{p._naOD?'overdue':p.nextActionDate===todayStr()?'Today':''}</div>}</div>:<span className="text-[10px] text-stone-300 italic">—</span>}
-        </td>
-        <td className="px-3 py-2.5 text-right">{p._od>0?<span className="font-mono text-rose-700 font-semibold text-xs">+{p._od}d</span>:<span className="font-mono text-stone-400 text-xs">{daysSince(p.submitted)||0}d</span>}</td>
-       </tr>
-      ))}
-     </tbody>
-    </table>
-   </div>
   </div>
  );
 };
