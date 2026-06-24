@@ -2624,7 +2624,13 @@ const followUpScore=(p,s,wr)=>{
 const GC_SUFFIX=/(?:incorporated|inc|llc|lllp|llp|ltd|corporation|corp|company|group|the)$/;
 const canonicalGC=(gc)=>{ let g=(gc||'').toLowerCase().replace(/constrcution/g,'construction'); g=g.replace(/[^a-z0-9]/g,''); let prev=null; while(prev!==g){prev=g; g=g.replace(GC_SUFFIX,'');} return g; };
 const baseProjectId=(id)=>{ let s=(id==null?'':String(id)).trim(); s=s.replace(/\s*[-_\s]pr-?\d+$/i,''); s=s.replace(/\s*rev\.?\s*\d+$/i,''); return s.trim().toLowerCase(); };
-const dedupeByProject=(rows)=>{ const fam=new Map(); (rows||[]).forEach(p=>{ const k=baseProjectId(p.id)||('row:'+p.id); const v=(p.contractAmount||p.bidAmount||0); const cur=fam.get(k); if(!cur||v>(cur.contractAmount||cur.bidAmount||0)) fam.set(k,p); }); return Array.from(fam.values()); };
+// [ONE TRUE SOURCE 2026-06-24 — Paul: "it's not feeding from the same one true source!"] This used to be a
+// SEPARATE, weaker de-dupe: it keyed on the project number alone, ignored which GC the bid belonged to, and
+// kept only the single highest-dollar document (dropping change orders). That is exactly why the Dashboard,
+// Intel funnel, GC scorecards and win-rate trend drifted away from Pipeline & Jobs. It is now a thin alias
+// for the bid-book roll-up (rollUpAllBuckets) — same family rule, same change-order math, same GC-aware key —
+// so every legacy caller now agrees with the book to the dollar. `confirmed` carries human merge decisions.
+const dedupeByProject=(rows,confirmed)=>rollUpAllBuckets(rows,confirmed);
 // [YEAR FILTER FIX 2026-06-23 — Paul: "25 awarded but only 7 by year"] 66 of 74 won bids carry NO submitted
 // date, and their createdAt/updatedAt are just the June-2026 import date — so filtering on submitted-year
 // silently hid booked work. Rule: a bid WITH a submitted date matches on that year; a bid with NO submitted
@@ -2647,20 +2653,20 @@ const isChangeOrder=(id)=> /-co-|-pr-|-rp-|rev/i.test(String(id||''));
 const normName=(s)=> String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
 const namesCompatible=(rows)=>{ const ns=rows.map(r=>normName(r.project)); if(ns.some(n=>!n)) return false; const short=ns.slice().sort((a,b)=>a.length-b.length)[0]; return ns.every(n=>n.startsWith(short)); };
 const findDuplicateGroups=(rows)=>{ const m=new Map(); (rows||[]).forEach(p=>{ const id=String(p.id==null?'':p.id); if(isChangeOrder(id)) return; if(LOST_STATUSES.includes(p.status)) return; const k=canonicalGC(p.gc)+'#'+numericRoot(id); if(!m.has(k)) m.set(k,[]); m.get(k).push(p); }); const out=[]; m.forEach((g,k)=>{ if(g.length>1 && namesCompatible(g)) out.push({key:k,rows:g}); }); return out.sort((a,b)=> String(a.rows[0].id)<String(b.rows[0].id)?-1:1); };
-const computeGCStats=proposals=>{
+const computeGCStats=(proposals,confirmed)=>{
  const map=new Map();
- dedupeByProject(proposals).forEach(p=>{
+ rollUpAllBuckets(proposals,confirmed).forEach(p=>{
   if(!p.gc) return;
   const key=canonicalGC(p.gc); if(!key) return;
   if(!map.has(key)) map.set(key,{key,gc:p.gc,_names:{},proposals:0,totalVolume:0,won:0,lost:0,open:0,wonValue:0,lostValue:0,openValue:0,contacts:new Set(),firstSubmit:null,lastSubmit:null,projects:[]});
   const s=map.get(key);
   s._names[p.gc]=(s._names[p.gc]||0)+1;
-  s.proposals++; s.totalVolume+=(p.bidAmount||0); s.projects.push(p);
+  s.proposals++; s.totalVolume+=projectValue(p); s.projects.push(p);
   if(p.contact) s.contacts.add(p.contact);
   if(p.submitted){if(!s.firstSubmit||p.submitted<s.firstSubmit)s.firstSubmit=p.submitted;if(!s.lastSubmit||p.submitted>s.lastSubmit)s.lastSubmit=p.submitted;}
-  if(WON_STATUSES.includes(p.status)){s.won++;s.wonValue+=(p.contractAmount||p.bidAmount||0);}
-  else if(LOST_STATUSES.includes(p.status)){s.lost++;s.lostValue+=(p.bidAmount||0);}
-  else{s.open++;s.openValue+=(p.bidAmount||0);}
+  if(WON_STATUSES.includes(p.status)){s.won++;s.wonValue+=projectValue(p);}
+  else if(LOST_STATUSES.includes(p.status)){s.lost++;s.lostValue+=projectValue(p);}
+  else{s.open++;s.openValue+=projectValue(p);}
  });
  return Array.from(map.values()).map(s=>{const disp=Object.keys(s._names).sort((a,b)=>(s._names[b]-s._names[a])||(b.length-a.length))[0]||s.gc;const{_names,...rest}=s;return{...rest,gc:disp,contacts:Array.from(s.contacts),winRate:(s.won+s.lost)>0?s.won/(s.won+s.lost):null,avgBid:s.proposals?s.totalVolume/s.proposals:0};});
 };
@@ -2705,6 +2711,21 @@ const rollUpProjects=(rows,confirmed)=>{
  return out;
 };
 const projectValue=(p)=> (p&&p._value!=null)? p._value : bidValue(p);
+// [ONE TRUE SOURCE 2026-06-24] Collapse ANY mixed set of proposal rows to ONE row per real project, using
+// the exact same family roll-up as the bid book — bucketed by status FIRST so a live bid is never merged
+// with a dead one (re-bids collapse to the latest version, change orders fold into the contract, the GC is
+// part of the key, and human decisions in `confirmed` win). Any row whose status falls outside the three
+// buckets is still rolled up and returned, so no real record is ever silently dropped.
+const rollUpAllBuckets=(rows,confirmed)=>{
+ const list=Array.isArray(rows)?rows:[];
+ const known=(p)=>OPEN_STATUSES.includes(p.status)||WON_STATUSES.includes(p.status)||LOST_STATUSES.includes(p.status);
+ return [
+  ...rollUpProjects(list.filter(p=>OPEN_STATUSES.includes(p.status)),confirmed),
+  ...rollUpProjects(list.filter(p=>WON_STATUSES.includes(p.status)),confirmed),
+  ...rollUpProjects(list.filter(p=>LOST_STATUSES.includes(p.status)),confirmed),
+  ...rollUpProjects(list.filter(p=>!known(p)),confirmed),
+ ];
+};
 // Families that LOOK like one job (same builder + job-number) but have incompatible names — surfaced for
 // one-click human confirm, NEVER auto-merged. Skips families the human has already decided on.
 const pendingMergeGroups=(rows,confirmed)=>{
@@ -2917,19 +2938,19 @@ const DashboardView=({proposals,settings,gcStats,bidBook,estimateItems,estimates
  // = won — no double-counted documents. (Pipeline still draws the flow per-document until its consolidation.)
  const stageStats=useMemo(()=>{
   const m={}; ALL_STATUSES.forEach(s=>{m[s]={count:0,value:0};});
-  [...bidBook.open,...bidBook.won,...bidBook.lost].forEach(p=>{ if(m[p.status]){m[p.status].count++; m[p.status].value+=bidValue(p);} });
+  [...bidBook.open,...bidBook.won,...bidBook.lost].forEach(p=>{ if(m[p.status]){m[p.status].count++; m[p.status].value+=projectValue(p);} });
   return m;
  },[bidBook]);
  // Win-rate TREND — real settled bids only (won vs lost, deduped by project), grouped by bid year.
  const wrTrend=useMemo(()=>{
   const years=Array.from(new Set(proposals.map(bidYear).filter(Boolean))).sort();
   return years.map(y=>{
-   const won=dedupeByProject(proposals.filter(p=>WON_STATUSES.includes(p.status)&&bidYear(p)===y)).length;
-   const lost=dedupeByProject(proposals.filter(p=>LOST_STATUSES.includes(p.status)&&bidYear(p)===y)).length;
+   const won=rollUpProjects(proposals.filter(p=>WON_STATUSES.includes(p.status)&&bidYear(p)===y),settings.confirmedMerges).length;
+   const lost=rollUpProjects(proposals.filter(p=>LOST_STATUSES.includes(p.status)&&bidYear(p)===y),settings.confirmedMerges).length;
    const settled=won+lost;
    return {year:y, wr:settled>0?won/settled:null, settled};
   }).filter(d=>d.settled>0);
- },[proposals]);
+ },[proposals,settings.confirmedMerges]);
  const insights=useMemo(()=>{
   const out=[];
   if(kpis.overdueCount>0) out.push({severity:'critical',icon:'phone',title:`${kpis.overdueCount} follow-up${kpis.overdueCount>1?'s':''} overdue · ${money(kpis.overdueValue,true)} at stake`,body:`Bids past SLA with no logged contact. Sorted by $ × days × win-rate.`,action:'Open Call Queue',onAction:()=>onNavigate('followups')});
@@ -2938,13 +2959,13 @@ const DashboardView=({proposals,settings,gcStats,bidBook,estimateItems,estimates
   if(hwr) out.push({severity:'opp',icon:'target',title:`${hwr.gc} — ${pct(hwr.winRate)} WR, ${money(hwr.openValue,true)} open`,body:`High win-rate GC with open bids. Push these hard.`,action:'View scorecard',onAction:()=>onSelectGC(hwr.gc)});
   const leak=gcStats.filter(g=>g.winRate!==null&&g.winRate===0&&(g.won+g.lost)>=3&&g.openValue>50000).sort((a,b)=>b.openValue-a.openValue)[0];
   if(leak) out.push({severity:'warn',icon:'trendDown',title:`${leak.gc} — 0% win rate, ${money(leak.openValue,true)} still open`,body:`0 wins from ${leak.won+leak.lost} bids. Question whether to keep pursuing.`,action:'View scorecard',onAction:()=>onSelectGC(leak.gc)});
-  const needReview=dedupeByProject(filtered.filter(p=>WON_STATUSES.includes(p.status))).filter(p=>jobCost(p,costIndex).needsReview);
+  const needReview=bidBook.won.filter(p=>jobCost(p,costIndex).needsReview);
   if(needReview.length) out.push({severity:'warn',icon:'alertTri',title:`${needReview.length} won job${needReview.length>1?'s':''} · cost data needs review`,body:`Recorded cost exceeds the contract on these — the bidsheet figures look off (often a units typo on one line). A quick check restores a real margin.`,action:'View Jobs',onAction:()=>onNavigate('active')});
-  const wonNoCost=dedupeByProject(filtered.filter(p=>WON_STATUSES.includes(p.status))).filter(p=>jobCost(p,costIndex).basis==='none');
+  const wonNoCost=bidBook.won.filter(p=>jobCost(p,costIndex).basis==='none');
   if(wonNoCost.length) out.push({severity:'warn',icon:'alertTri',title:`${wonNoCost.length} won job${wonNoCost.length>1?'s':''} · no cost data yet`,body:`Margin can't be shown until material + labor are entered. Add them on the job, or import the bidsheet.`,action:'View Jobs',onAction:()=>onNavigate('active')});
   // (a money-LOSER alarm on ACTUAL margins can slot in here once David's costs are entered)
   return out;
- },[filtered,gcStats,kpis,costIndex,settings,onNavigate,onSelectGC]);
+ },[filtered,gcStats,kpis,bidBook,costIndex,settings,onNavigate,onSelectGC]);
  return (
   <div className="space-y-6">
    {/* [PHASE 2c 2026-06-24 — Paul] Owner's cockpit: lead with the BUSINESS (money in play, win-rate trend,
@@ -2961,9 +2982,9 @@ const DashboardView=({proposals,settings,gcStats,bidBook,estimateItems,estimates
      <div className="text-xs text-sky-800 mt-2">{kpis.openCount} open bid{kpis.openCount===1?'':'s'} in play</div>
     </button>
     <button onClick={()=>onNavigate('active')} className="group text-left rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-950 p-5 transition-all hover:shadow-md hover:-translate-y-0.5">
-     <div className="flex items-center justify-between"><span className="text-[11px] uppercase tracking-widest font-semibold text-emerald-700">Won &amp; booked</span><Ico n="flame" size={18} className="text-emerald-600"/></div>
+     <div className="flex items-center justify-between"><span className="text-[11px] uppercase tracking-widest font-semibold text-emerald-700">Booked work</span><Ico n="flame" size={18} className="text-emerald-600"/></div>
      <div className="font-serif text-4xl tracking-tight leading-none mt-3">{money(kpis.awardedValue,true)}</div>
-     <div className="text-xs text-emerald-800 mt-2">{kpis.awardedCount} project{kpis.awardedCount===1?'':'s'} won{settings.yearFilter!=='All'?` in ${settings.yearFilter}`:''}</div>
+     <div className="text-xs text-emerald-800 mt-2">{bidBook.jobs.awarded} awarded · {bidBook.jobs.active} active · {bidBook.jobs.completed} completed</div>
     </button>
     <button onClick={()=>onNavigate('gcs')} className="group text-left rounded-lg border border-amber-200 bg-amber-50 text-amber-950 p-5 transition-all hover:shadow-md hover:-translate-y-0.5">
      <div className="flex items-center justify-between"><span className="text-[11px] uppercase tracking-widest font-semibold text-amber-700">Win rate</span><Ico n="target" size={18} className="text-amber-600"/></div>
@@ -3152,6 +3173,38 @@ const StageFlow=({stats,active,onPick,total,totalValue})=>{
      })}
     </div>
     {active!=='all'&&<button onClick={()=>onPick('all')} className="text-[11px] text-stone-500 hover:text-stone-900 underline decoration-dotted whitespace-nowrap">Show all stages</button>}
+   </div>
+  </div>
+ );
+};
+// [CONFIRM-MERGE 2026-06-24 — Paul: "surface for one-click human confirm, NEVER auto-merge"] Families that
+// look like one job (same builder + job-number core) but whose project NAMES don't agree are quarantined
+// here instead of being merged. Paul decides with one click: "Same project" folds them together (and sums
+// the COs); "Keep separate" leaves them as distinct rows. The choice writes to settings.confirmedMerges and
+// the canonical bid book re-rolls instantly. Obviously-clean families never reach this banner — they auto-merge.
+const PendingMergesBanner=({groups,onConfirm})=>{
+ if(!groups||!groups.length) return null;
+ return (
+  <div className="mb-3 bg-amber-50 border border-amber-300 rounded-sm">
+   <div className="px-4 py-2 border-b border-amber-200 flex items-center gap-2 flex-wrap">
+    <Ico n="alertTri" size={15} className="text-amber-700"/>
+    <span className="text-sm font-semibold text-amber-900">{groups.length} possible duplicate project{groups.length!==1?'s':''} to review</span>
+    <span className="text-xs text-amber-700">— same builder &amp; job number, but the names don't match. Your call:</span>
+   </div>
+   <div className="divide-y divide-amber-100">
+    {groups.map(g=>(
+     <div key={g.key} className="px-4 py-2.5 flex items-start gap-3">
+      <div className="min-w-0 flex-1 space-y-0.5">
+       {g.rows.map(r=>(
+        <div key={r.id} className="text-xs text-stone-700 truncate"><span className="font-mono text-stone-400 mr-1.5">#{r.id}</span>{r.project||'Untitled'}<span className="text-stone-400"> · {money(bidValue(r),true)}</span></div>
+       ))}
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
+       <button onClick={()=>onConfirm(g.key,true)} className="text-xs px-2.5 py-1 rounded-sm bg-emerald-700 text-white hover:bg-emerald-800">Same project</button>
+       <button onClick={()=>onConfirm(g.key,false)} className="text-xs px-2.5 py-1 rounded-sm border border-stone-300 bg-white text-stone-700 hover:bg-stone-50">Keep separate</button>
+      </div>
+     </div>
+    ))}
    </div>
   </div>
  );
@@ -5929,7 +5982,7 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,bidBook,onSele
    .map(m=>({...m,proposals:m.proposals.size}));
  },[estimateItems]);
  const funnel=useMemo(()=>{
-  const yr=dedupeByProject(proposals.filter(p=>matchesYearFilter(p,settings.yearFilter)));
+  const yr=[...bidBook.open,...bidBook.won,...bidBook.lost];
   const stages=[
    {label:'Lead',statuses:['Lead','Qualified'],color:'bg-stone-200 text-stone-700'},
    {label:'Bidding',statuses:['Bidding','Hold'],color:'bg-sky-100 text-sky-800'},
@@ -5940,20 +5993,20 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,bidBook,onSele
   ];
   return stages.map(s=>{
    const ps=yr.filter(p=>s.statuses.includes(p.status));
-   return{...s,count:ps.length,value:ps.reduce((a,p)=>a+bidValue(p),0)};
+   return{...s,count:ps.length,value:ps.reduce((a,p)=>a+projectValue(p),0)};
   });
- },[proposals,settings.yearFilter]);
+ },[bidBook]);
  const lostBreakdown=useMemo(()=>{
-  const lost=dedupeByProject(proposals.filter(p=>LOST_STATUSES.includes(p.status)&&matchesYearFilter(p,settings.yearFilter)));
+  const lost=bidBook.lost;
   const map=new Map();
   lost.forEach(p=>{
    const r=p.lostReason||'Not recorded';
    if(!map.has(r)) map.set(r,{reason:r,count:0,value:0});
    const m=map.get(r);
-   m.count++;m.value+=bidValue(p);
+   m.count++;m.value+=projectValue(p);
   });
   return [...map.values()].sort((a,b)=>b.count-a.count);
- },[proposals,settings.yearFilter]);
+ },[bidBook]);
  const tabs=[
   {id:'gcs',label:'GC Performance'},
   {id:'funnel',label:'Pipeline Funnel'},
@@ -6994,7 +7047,7 @@ function App() {
  useEffect(()=>{ setThreadPreviewHandler((p)=>startFollowUp(p)); return ()=>setThreadPreviewHandler(null); },[]);
  // Pull recent Outlook Sent mail so the queue can hide bids already emailed (#1).
  useEffect(()=>{ if(!msAccount){ setRecentSent(null); return; } let off=false; (async()=>{ try{ const token=await getGraphToken(); const map=await fetchRecentSentMap(token); if(!off) setRecentSent(map); }catch(e){ console.warn('sent-items sync failed',e); } })(); return ()=>{off=true;}; },[msAccount]);
- const gcStats=useMemo(()=>computeGCStats(proposals),[proposals]);
+ const gcStats=useMemo(()=>computeGCStats(proposals,settings.confirmedMerges),[proposals,settings.confirmedMerges]);
  // [ONE SET OF BOOKS 2026-06-23] Derive the canonical book once here; every view reads from this prop.
  const bidBook=useMemo(()=>computeBidBook(proposals,settings,recentSent),[proposals,settings,recentSent]);
  // [CONSISTENCY GUARD 2026-06-23 — Paul: "reliable to the last decimal"] If the book's own invariants ever
