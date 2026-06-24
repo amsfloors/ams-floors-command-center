@@ -3027,45 +3027,68 @@ const LostReasonStrip=({proposal,onSave})=>{
   </div>
  );
 };
-// [PHASE 2 2026-06-24 — Paul] "It's much simpler — the flow is the statuses." The Pipeline is organized
-// around the 8 canonical statuses in their natural order (STATUS_CONFIG.order): Lead → Bidding →
-// Submitted → Awarded → Active → Completed, with Dead/Lost as a terminal off-ramp. The strip below IS
-// the status filter — click a stage to focus the table on it. One picture = the whole trade flow, and
-// no invented stage names (the statuses Paul already uses ARE the stages).
+// [PHASE 2b 2026-06-24 — Paul] BOLD, FULL-WIDTH status flow. Paul on v1: "crammed to a corner... plain
+// and vanilla, puts the user to sleep." This fills the ENTIRE width as one flowing pipeline of big
+// chevron segments — Lead → Bidding → Submitted → Awarded → Active → Completed — colored by status.
+// Click a segment to focus the list; click again (or "Show all stages") to clear. Dead/Lost ride a slim
+// "Closed out" rail beneath so they never clutter the forward flow. Intended as the house style.
+const FLOW_SEG={
+ 'Lead':      {bold:'bg-stone-500',   soft:'bg-stone-100 text-stone-600 hover:bg-stone-200'},
+ 'Bidding':   {bold:'bg-sky-500',     soft:'bg-sky-100 text-sky-800 hover:bg-sky-200'},
+ 'Submitted': {bold:'bg-amber-500',   soft:'bg-amber-100 text-amber-800 hover:bg-amber-200'},
+ 'Awarded':   {bold:'bg-emerald-500', soft:'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'},
+ 'Active':    {bold:'bg-emerald-600', soft:'bg-emerald-50 text-emerald-900 hover:bg-emerald-100'},
+ 'Completed': {bold:'bg-teal-700',    soft:'bg-teal-100 text-teal-800 hover:bg-teal-200'},
+ 'Dead':      {bold:'bg-stone-600',   soft:'bg-stone-200 text-stone-700 hover:bg-stone-300'},
+ 'Lost':      {bold:'bg-rose-500',    soft:'bg-rose-100 text-rose-700 hover:bg-rose-200'},
+};
 const StageFlow=({stats,active,onPick,total,totalValue})=>{
  const stages=ALL_STATUSES.slice().sort((a,b)=>(STATUS_CONFIG[a].order||0)-(STATUS_CONFIG[b].order||0));
  const main=stages.filter(s=>STATUS_CONFIG[s].pipeline!=='lost'); // Lead..Completed (the forward flow)
  const term=stages.filter(s=>STATUS_CONFIG[s].pipeline==='lost'); // Dead, Lost (terminal off-ramp)
- const Chip=({status,count,value})=>{
-  const cfg=STATUS_CONFIG[status]||{};
+ const N=20; // chevron point/notch depth (px)
+ const Seg=({status,count,value,i,n})=>{
+  const seg=FLOW_SEG[status]||{bold:'bg-stone-500',soft:'bg-stone-100 text-stone-700 hover:bg-stone-200'};
   const on=active===status;
+  const first=i===0, last=i===n-1;
+  const clip=first
+   ? `polygon(0 0, calc(100% - ${N}px) 0, 100% 50%, calc(100% - ${N}px) 100%, 0 100%)`
+   : last
+   ? `polygon(0 0, 100% 0, 100% 100%, 0 100%, ${N}px 50%)`
+   : `polygon(0 0, calc(100% - ${N}px) 0, 100% 50%, calc(100% - ${N}px) 100%, 0 100%, ${N}px 50%)`;
   return (
-   <button onClick={()=>onPick(on?'all':status)} title={`${status} — ${count} bid${count===1?'':'s'} · ${money(value,true)}. Click to ${on?'clear and show all':'focus the list on this stage'}.`}
-    className={`flex flex-col items-start px-2.5 py-1.5 rounded-sm border transition-all leading-tight shrink-0 ${on?cfg.color+' ring-1 ring-inset ring-black/10 shadow-sm border-transparent':'bg-white border-stone-200 text-stone-700 hover:bg-stone-50 hover:border-stone-300'}`} style={{minWidth:'80px'}}>
-    <span className="flex items-center gap-1.5 text-[11px] font-medium whitespace-nowrap"><span className={`w-1.5 h-1.5 rounded-full ${cfg.dot||'bg-stone-400'}`}/>{status}</span>
-    <span className="font-mono tabular-nums text-lg font-semibold mt-0.5 leading-none">{count}</span>
-    <span className="font-mono text-[10px] opacity-70 mt-0.5">{value?money(value,true):'—'}</span>
+   <button onClick={()=>onPick(on?'all':status)}
+    title={`${status} — ${count} bid${count===1?'':'s'} · ${money(value,true)}. Click to ${on?'clear and show all stages':'focus the list on this stage'}.`}
+    className={`relative flex-1 flex flex-col items-center justify-center text-center transition-all duration-150 ${on?seg.bold+' text-white shadow-lg z-10':seg.soft}`}
+    style={{clipPath:clip,WebkitClipPath:clip,marginLeft:first?0:`-${N}px`,paddingLeft:(first?14:14+N)+'px',paddingRight:(N+8)+'px',minHeight:'80px'}}>
+    <span className="text-[10px] font-semibold uppercase tracking-wider leading-none opacity-90">{status}</span>
+    <span className="font-mono tabular-nums text-2xl font-bold leading-none mt-1.5">{count}</span>
+    <span className="font-mono text-[10px] mt-1 opacity-80">{value?money(value,true):'—'}</span>
    </button>
   );
  };
  return (
-  <div className="bg-white border border-stone-200 px-3 py-2.5">
-   <div className="flex items-center gap-1.5 overflow-x-auto">
-    <button onClick={()=>onPick('all')} title="Show every bid in the book, all statuses"
-     className={`flex flex-col items-start px-2.5 py-1.5 rounded-sm border transition-all leading-tight shrink-0 ${active==='all'?'bg-stone-800 text-white border-stone-800 shadow-sm':'bg-white border-stone-200 text-stone-700 hover:bg-stone-50 hover:border-stone-300'}`} style={{minWidth:'76px'}}>
-     <span className="text-[11px] font-medium whitespace-nowrap">All bids</span>
-     <span className="font-mono tabular-nums text-lg font-semibold mt-0.5 leading-none">{total}</span>
-     <span className="font-mono text-[10px] opacity-70 mt-0.5">{money(totalValue,true)}</span>
-    </button>
-    <div className="w-px self-stretch bg-stone-200 mx-0.5 shrink-0"/>
-    {main.map((s,i)=>(
-     <React.Fragment key={s}>
-      {i>0&&<Ico n="chevRight" size={14} className="text-stone-300 shrink-0"/>}
-      <Chip status={s} count={(stats[s]&&stats[s].count)||0} value={(stats[s]&&stats[s].value)||0}/>
-     </React.Fragment>
-    ))}
-    {term.length>0&&<div className="w-px self-stretch bg-stone-200 mx-0.5 shrink-0" title="Closed-out branches"/>}
-    {term.map(s=>(<Chip key={s} status={s} count={(stats[s]&&stats[s].count)||0} value={(stats[s]&&stats[s].value)||0}/>))}
+  <div className="space-y-2">
+   <div className="flex items-stretch w-full rounded-md overflow-hidden shadow-sm">
+    {main.map((s,i)=>(<Seg key={s} status={s} i={i} n={main.length} count={(stats[s]&&stats[s].count)||0} value={(stats[s]&&stats[s].value)||0}/>))}
+   </div>
+   <div className="flex items-center justify-between gap-3 pl-0.5">
+    <div className="flex items-center gap-2 text-[11px] text-stone-500 flex-wrap">
+     <span className="uppercase tracking-wider font-semibold text-stone-400">Closed out</span>
+     {term.map(s=>{
+      const seg=FLOW_SEG[s]||{}; const on=active===s; const c=(stats[s]&&stats[s].count)||0; const v=(stats[s]&&stats[s].value)||0;
+      return (
+       <button key={s} onClick={()=>onPick(on?'all':s)} title={`${s} — ${c} bid${c===1?'':'s'} · ${money(v,true)}. Click to ${on?'clear':'focus the list'}.`}
+        className={`inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border transition-all ${on?seg.bold+' text-white border-transparent shadow-sm':'bg-white '+(seg.soft||'text-stone-600')+' border-stone-200'}`}>
+        <span className={`w-1.5 h-1.5 rounded-full ${(STATUS_CONFIG[s]&&STATUS_CONFIG[s].dot)||'bg-stone-400'}`}/>
+        <span className="font-medium">{s}</span>
+        <span className="font-mono tabular-nums font-bold">{c}</span>
+        {v>0&&<span className="font-mono opacity-70">{money(v,true)}</span>}
+       </button>
+      );
+     })}
+    </div>
+    {active!=='all'&&<button onClick={()=>onPick('all')} className="text-[11px] text-stone-500 hover:text-stone-900 underline decoration-dotted whitespace-nowrap">Show all stages</button>}
    </div>
   </div>
  );
@@ -3143,11 +3166,7 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
          <td className="px-3 py-2 overflow-hidden"><button onClick={e=>{e.stopPropagation();onSelectGC(p.gc);}} className="text-stone-700 hover:text-orange-800 hover:underline truncate block w-full text-left">{p.gc||'—'}</button></td>
          <td className="px-3 py-2 overflow-hidden">
           <div className="text-stone-600 truncate text-sm">{p.contact||'—'}</div>
-          <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-           {(p.estimator||p.owner)&&<span title="Estimator" className="text-[9px] px-1.5 py-0 bg-sky-50 text-sky-700 border border-sky-100 rounded-full font-medium">{(p.estimator||p.owner)[0]}est</span>}
-           {(p.bdOwner||p.owner)&&<span title="BD Owner" className="text-[9px] px-1.5 py-0 bg-amber-50 text-amber-700 border border-amber-100 rounded-full font-medium">{(p.bdOwner||p.owner)[0]}bd</span>}
-           {p.pm&&<span title="Project Manager" className="text-[9px] px-1.5 py-0 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-full font-medium">{p.pm[0]}pm</span>}
-          </div>
+          {/* [PHASE 2b 2026-06-24 — Paul] Removed Pest/Pbd/Dpm role badges — 3-person team, everyone knows who does what; pure noise. */}
          </td>
          <td className="px-3 py-2 text-stone-600 whitespace-nowrap text-xs">{formatDate(p.submitted)}</td>
          <td className="px-3 py-2 text-right whitespace-nowrap"><MoneyCell amount={p.bidAmount}/></td>
@@ -7176,7 +7195,7 @@ function App() {
  // [PHASE 2 2026-06-22 — Ben] 8 tabs → 6. Follow-Ups now lives inside Today (Call list mode);
  // Intelligence now lives inside GC Intel (Deep dive sub-tab). Order: Dashboard, Today, Pipeline,
  // Active Jobs, GC Intel, Settings.
- const navItems=[{id:'dashboard',label:'Dashboard',icon:'barChart'},{id:'today',label:'Today',icon:'inbox',badge:todayCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Jobs',icon:'flame'},{id:'gcs',label:'GC Intel',icon:'building2'},{id:'settings',label:'Settings',icon:'settings'}];
+ const navItems=[{id:'dashboard',label:'Dashboard',icon:'barChart'},{id:'today',label:'Today',icon:'inbox',badge:todayCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Jobs',icon:'flame'},{id:'gcs',label:'Intel',icon:'building2'},{id:'settings',label:'Settings',icon:'settings'}];
  if(!loaded) return (
   <div className="min-h-screen flex items-center justify-center bg-stone-100">
    <div className="text-center"><Ico n="loader" size={32} className="mx-auto mb-3 text-stone-400 animate-spin"/><p className="text-sm text-stone-600">Loading AMS Floors Command Center…</p>{syncing&&<p className="text-xs text-stone-500 mt-1">Setting up database for first time…</p>}</div>
