@@ -2827,9 +2827,7 @@ const DashboardView=({proposals,settings,gcStats,bidBook,estimateItems,estimates
   // [ONE SET OF BOOKS 2026-06-23] Read the canonical buckets/values from bidBook — do NOT re-derive here.
   const {open,won,counts,value,winRate,overdueCount}=bidBook;
   const nextActionDue=open.filter(p=>p.nextActionDate&&p.nextActionDate<=bidBook.today);
-  const wonWithMargin=won.filter(p=>(p.estMaterial||0)+(p.estLabor||0)>0);
-  const avgMargin=wonWithMargin.length?wonWithMargin.reduce((s,p)=>{const c=bidValue(p);const cost=(p.estMaterial||0)+(p.estLabor||0);return s+(c>0?(c-cost)/c:0);},0)/wonWithMargin.length:null;
-  return{openCount:counts.open,openValue:value.open,awardedValue:value.won,awardedCount:counts.won,winRate,overdueCount,overdueValue:value.overdue,nextActionDue:nextActionDue.length,avgMargin};
+  return{openCount:counts.open,openValue:value.open,awardedValue:value.won,awardedCount:counts.won,winRate,overdueCount,overdueValue:value.overdue,nextActionDue:nextActionDue.length};
  },[bidBook]);
  // [DECISIONS 2026-06-23] What needs action now — computed the SAME way as the screens these cards
  // route to, so the counts reconcile exactly (Today's wins/replies, Jobs awarded badge, call queue).
@@ -5739,16 +5737,7 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
   return [...gcStats]
    .filter(g=>g.gc&&(g.won+g.lost)>=1)
    .sort((a,b)=>b.totalVolume-a.totalVolume)
-   .slice(0,30)
-   .map(g=>{
-    const wonWithCost=g.projects.filter(p=>WON_STATUSES.includes(p.status)&&(p.estMaterial||p.estLabor));
-    const avgMargin=wonWithCost.length?wonWithCost.reduce((s,p)=>{
-     const c=p.contractAmount||p.bidAmount||0;
-     const cost=(p.estMaterial||0)+(p.estLabor||0);
-     return s+(c>0?(c-cost)/c:0);
-    },0)/wonWithCost.length:null;
-    return{...g,avgMargin};
-   });
+   .slice(0,30);
  },[gcStats]);
  const mfrRows=useMemo(()=>{
   const map=new Map();
@@ -5834,7 +5823,6 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
         <TH className="text-right">Won</TH>
         <TH className="text-right">Lost</TH>
         <TH className="text-right">Win Rate</TH>
-        <TH className="text-right">Avg Margin</TH>
         <TH>Verdict</TH>
        </tr></thead>
        <tbody>
@@ -5852,7 +5840,6 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,onSelectGC,onN
            <td className="px-3 py-2.5 text-right text-emerald-700 font-mono">{g.won>0?money(g.wonValue,true):'—'}</td>
            <td className="px-3 py-2.5 text-right text-rose-600 font-mono">{g.lost>0?String(g.lost):'—'}</td>
            <td className="px-3 py-2.5 text-right font-mono font-semibold">{g.winRate!==null?<span className={g.winRate>=0.5?'text-emerald-700':'text-rose-600'}>{pct(g.winRate)}</span>:'—'}</td>
-           <td className="px-3 py-2.5 text-right font-mono text-xs">{g.avgMargin!==null?<span className={g.avgMargin<0.05?'text-rose-600':g.avgMargin>=0.15?'text-emerald-700':'text-amber-700'}>{pct(g.avgMargin,1)}</span>:'—'}</td>
            <td className="px-3 py-2.5"><span className={`text-xs ${verdict.c}`}>{verdict.t}</span></td>
           </tr>
          );
