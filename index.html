@@ -2658,7 +2658,11 @@ const isRealContact=(p)=> !!(p&&p.lastTouched) && OUTREACH_RX.test(String(p.note
 const numericRoot=(id)=>{ const m=String(id==null?'':id).match(/^\d+/); return m? m[0] : String(id||'').toLowerCase(); };
 const isChangeOrder=(id)=> /-co-|-pr-|-rp-|rev/i.test(String(id||''));
 const normName=(s)=> String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
-const namesCompatible=(rows)=>{ const ns=rows.map(r=>normName(r.project)); if(ns.some(n=>!n)) return false; const short=ns.slice().sort((a,b)=>a.length-b.length)[0]; return ns.every(n=>n.startsWith(short)); };
+// [TASK 1 FIX 2026-06-24 — Paul: #1573 false-positive] A change order (-CO-N) is allowed its OWN scope name
+// (e.g. #1573-B "Building B - History Center" + #1573-B-CO-2 "Port Charlotte Beach Pool Bldg"), so name-
+// compatibility is judged on the base + version rows ONLY — CO docs are excluded from the prefix test. If a
+// family is ALL change orders we fall back to checking every row (no base name to anchor on).
+const namesCompatible=(rows)=>{ const all=rows||[]; const base=all.filter(r=>!isCO(r.id)); const chk=base.length?base:all; const ns=chk.map(r=>normName(r.project)); if(!ns.length||ns.some(n=>!n)) return false; const short=ns.slice().sort((a,b)=>a.length-b.length)[0]; return ns.every(n=>n.startsWith(short)); };
 const findDuplicateGroups=(rows)=>{ const m=new Map(); (rows||[]).forEach(p=>{ const id=String(p.id==null?'':p.id); if(isChangeOrder(id)) return; if(LOST_STATUSES.includes(p.status)) return; const k=canonicalGC(p.gc)+'#'+numericRoot(id); if(!m.has(k)) m.set(k,[]); m.get(k).push(p); }); const out=[]; m.forEach((g,k)=>{ if(g.length>1 && namesCompatible(g)) out.push({key:k,rows:g}); }); return out.sort((a,b)=> String(a.rows[0].id)<String(b.rows[0].id)?-1:1); };
 const computeGCStats=(proposals,confirmed)=>{
  const map=new Map();
@@ -2699,7 +2703,13 @@ const coreId=(id)=>{ let s=(id==null?'':String(id)).trim(); s=s.replace(/[-_\s]c
 const isCO=(id)=> /[-_\s]co-?\d+/i.test(String(id||''));
 const versionRank=(id)=>{ const m=String(id||'').match(/(?:\.|rev\.?\s*|[-_\s]pr-?)(\d+)\s*$/i); return m?parseInt(m[1],10):0; };
 const familyKey=(p)=> canonicalGC(p.gc)+'#'+(coreId(p.id)||('row:'+p.id));
-const latestVersion=(docs)=> docs.slice().sort((a,b)=>{ const da=a.submitted||'',db=b.submitted||''; if(da!==db) return db.localeCompare(da); const ra=versionRank(a.id),rb=versionRank(b.id); if(ra!==rb) return rb-ra; return bidValue(b)-bidValue(a); })[0];
+// [VALUE-PICKER FIX 2026-06-24 — Paul: "in some cases nonsense"] Pick the doc that REPRESENTS the family's
+// value. Date still wins when we have one. But ~166 bids carry NO submitted date, and the old fallback ranked
+// by VERSION NUMBER — so a stray $1,125 "PR-06" outranked the real $253,690 base of #1573-B (Building B rolled
+// up at $49,910 instead of $302,475), and a null-value ".2" beat a real $26,360 base on #1778. Fix: when there
+// is no date to order revisions, the largest bid version represents the job (then change orders add on top);
+// version number is only the last-resort tiebreak. A junk/partial revision can no longer erase the real bid.
+const latestVersion=(docs)=> docs.slice().sort((a,b)=>{ const da=a.submitted||'',db=b.submitted||''; if(da!==db) return db.localeCompare(da); const va=bidValue(a),vb=bidValue(b); if(va!==vb) return vb-va; return versionRank(b.id)-versionRank(a.id); })[0];
 const rollUpProjects=(rows,confirmed)=>{
  const fam=new Map();
  (rows||[]).forEach(p=>{ const k=familyKey(p); if(!fam.has(k)) fam.set(k,[]); fam.get(k).push(p); });
