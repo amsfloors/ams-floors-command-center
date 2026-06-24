@@ -2671,25 +2671,74 @@ const computeGCStats=proposals=>{
 // revisions to a single row; the year filter and the open/won/lost split happen here and nowhere else.
 // Views READ these numbers — they must not recompute them.
 const bidValue=(p)=> (p&&(p.contractAmount||p.bidAmount))||0;
+// [PROJECT ROLL-UP 2026-06-24 — Paul: "build it confirm-based, auto-merge the obviously-clean now"]
+// A project FAMILY = same builder (canonicalGC) + same job-number core. coreId KEEPS the building tag
+// (-A/-B) but strips change-order / revision / decimal suffixes, so Building A and Building B stay two
+// jobs while 1734.1 + 1734.3 are one. Inside a family: change-order docs (-CO-N) ADD to the contract
+// (Paul: "Base + all COs"); the rest are successive VERSIONS — we display ONLY the latest (by submitted
+// date, then version number) and keep the others as on-demand history. A family AUTO-merges ONLY when
+// every doc's project name is compatible (shortest is a prefix of the rest); that quarantines mis-keyed
+// docs (e.g. a CO typed with the wrong project name) into a CONFIRM list for one-click human review —
+// we NEVER silently merge an incompatible family. settings.confirmedMerges (familyKey -> true|false)
+// records a human's decision and overrides the auto rule. Nothing is mutated: rollUpProjects returns ONE
+// synthetic record per project carrying _value / _versions / _changeOrders for the drawer to expand.
+const coreId=(id)=>{ let s=(id==null?'':String(id)).trim(); s=s.replace(/[-_\s]co-?\d+.*$/i,''); s=s.replace(/[-_\s]pr-?\d+.*$/i,''); s=s.replace(/[-_\s]rp-?\d+.*$/i,''); s=s.replace(/\s*rev\.?\s*\d+$/i,''); s=s.replace(/\.\d+$/,''); return s.trim().toLowerCase(); };
+const isCO=(id)=> /[-_\s]co-?\d+/i.test(String(id||''));
+const versionRank=(id)=>{ const m=String(id||'').match(/(?:\.|rev\.?\s*|[-_\s]pr-?)(\d+)\s*$/i); return m?parseInt(m[1],10):0; };
+const familyKey=(p)=> canonicalGC(p.gc)+'#'+(coreId(p.id)||('row:'+p.id));
+const latestVersion=(docs)=> docs.slice().sort((a,b)=>{ const da=a.submitted||'',db=b.submitted||''; if(da!==db) return db.localeCompare(da); const ra=versionRank(a.id),rb=versionRank(b.id); if(ra!==rb) return rb-ra; return bidValue(b)-bidValue(a); })[0];
+const rollUpProjects=(rows,confirmed)=>{
+ const fam=new Map();
+ (rows||[]).forEach(p=>{ const k=familyKey(p); if(!fam.has(k)) fam.set(k,[]); fam.get(k).push(p); });
+ const out=[];
+ fam.forEach((docs,k)=>{
+  if(docs.length===1){ out.push(docs[0]); return; }
+  const decided=confirmed&&Object.prototype.hasOwnProperty.call(confirmed,k)?confirmed[k]:null;
+  const merge = decided===true || (decided!==false && namesCompatible(docs));
+  if(!merge){ docs.forEach(d=>out.push(d)); return; }
+  const cos=docs.filter(d=>isCO(d.id));
+  const vers=docs.filter(d=>!isCO(d.id));
+  const base=latestVersion(vers.length?vers:docs);
+  const coSum=cos.reduce((s,d)=>s+bidValue(d),0);
+  out.push(Object.assign({},base,{ _value:bidValue(base)+coSum, _baseValue:bidValue(base), _coSum:coSum, _versions:vers, _changeOrders:cos, _familyDocs:docs, _familyKey:k, _familySize:docs.length }));
+ });
+ return out;
+};
+const projectValue=(p)=> (p&&p._value!=null)? p._value : bidValue(p);
+// Families that LOOK like one job (same builder + job-number) but have incompatible names — surfaced for
+// one-click human confirm, NEVER auto-merged. Skips families the human has already decided on.
+const pendingMergeGroups=(rows,confirmed)=>{
+ const fam=new Map();
+ (rows||[]).forEach(p=>{ const k=familyKey(p); if(!fam.has(k)) fam.set(k,[]); fam.get(k).push(p); });
+ const out=[];
+ fam.forEach((docs,k)=>{ if(docs.length>1 && !namesCompatible(docs) && !(confirmed&&Object.prototype.hasOwnProperty.call(confirmed,k))) out.push({key:k, rows:docs}); });
+ return out;
+};
 const computeBidBook=(proposals,settings,recentSent)=>{
  const today=todayStr();
  const yf=(settings&&settings.yearFilter)||'All';
  const all=Array.isArray(proposals)?proposals:[];
  const inYear=all.filter(p=>matchesYearFilter(p,yf));
- const open=dedupeByProject(inYear.filter(p=>OPEN_STATUSES.includes(p.status)));
- const won =dedupeByProject(inYear.filter(p=>WON_STATUSES.includes(p.status)));
- const lost=dedupeByProject(inYear.filter(p=>LOST_STATUSES.includes(p.status)));
+ // [PROJECT ROLL-UP 2026-06-24] open/won/lost are now ONE row per real project: re-bids & revisions
+ // collapse to the latest version, change orders fold into the contract value. confirmedMerges carries
+ // any human decisions on the ambiguous (mis-keyed) families; everything else uses the safe auto rule.
+ const cm=(settings&&settings.confirmedMerges)||null;
+ const open=rollUpProjects(inYear.filter(p=>OPEN_STATUSES.includes(p.status)),cm);
+ const won =rollUpProjects(inYear.filter(p=>WON_STATUSES.includes(p.status)),cm);
+ const lost=rollUpProjects(inYear.filter(p=>LOST_STATUSES.includes(p.status)),cm);
  const book=[...open,...won,...lost];
- const sum=(rows)=>rows.reduce((s,p)=>s+bidValue(p),0);
+ const sum=(rows)=>rows.reduce((s,p)=>s+projectValue(p),0);
  const settled=won.length+lost.length;
- // Execution-job counts (Awarded/Active/Completed) grouped by projectNumber — the ONE canonical
- // source both the Jobs workspace segment badges and the Dashboard "Awarded to start" card read.
- const jobCount=(ss)=>new Set(inYear.filter(p=>ss.includes(p.status)).map(p=>String(p.projectNumber||p.id))).size;
+ // Execution-job counts (Awarded/Active/Completed) read straight off the rolled-up WON book — one entry
+ // per real project — so the Jobs badges, the flow, and the money tiles can never disagree again.
+ const jobCount=(ss)=>won.filter(p=>ss.includes(p.status)).length;
  // Overdue is measured on the FULL set (not year-filtered) so it always equals the nav badge / call queue.
  const overdue=all.filter(p=>isOverdueBid(p,settings,recentSent,today));
+ // Same-job families with incompatible names, awaiting one-click human confirm (never auto-merged).
+ const pendingMerges=pendingMergeGroups(inYear,cm);
  return Object.freeze({
-  today, yearFilter:yf, all, book, open, won, lost,
-  counts:{records:inYear.length, distinct:book.length, open:open.length, won:won.length, lost:lost.length, dnc:open.filter(p=>isDNC(p.gc)).length},
+  today, yearFilter:yf, all, book, open, won, lost, pendingMerges,
+  counts:{records:inYear.length, distinct:book.length, open:open.length, won:won.length, lost:lost.length, dnc:open.filter(p=>isDNC(p.gc)).length, pendingMerges:pendingMerges.length},
   jobs:{awarded:jobCount(['Awarded']), active:jobCount(['Active']), completed:jobCount(['Completed','Complete'])},
   value:{open:sum(open), won:sum(won), lost:sum(lost), overdue:sum(overdue)},
   winRate: settled>0? won.length/settled : null,
@@ -3127,23 +3176,38 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
   if(search.trim()){const q=search.toLowerCase();out=out.filter(p=>(p.project||'').toLowerCase().includes(q)||(p.gc||'').toLowerCase().includes(q)||(p.location||'').toLowerCase().includes(q)||(p.contact||'').toLowerCase().includes(q)||String(p.id).includes(q));}
   return out;
  },[proposals,search,gcF,roleF,settings.yearFilter]);
+ // [PHASE 3 2026-06-24 — Paul: "prioritize the dedup"] Roll the raw documents up into real PROJECTS before
+ // we count or value anything: change-orders fold into their parent contract (Base + all COs), and decimal/Rev
+ // version-families collapse to their latest doc. So every number on this page is per-project, matching the
+ // canonical bid book — no more Home2-style double entry, no more dropped change-order dollars.
+ // Roll per pipeline bucket (open / won / lost) exactly like the canonical computeBidBook does, then concat.
+ // This guarantees Pipeline's per-stage counts and totals reconcile 1:1 with the bid book — a family is never
+ // merged ACROSS buckets, so "all projects" here always equals the book's distinct count for the same filters.
+ const rolled=useMemo(()=>{
+  const cm=settings.confirmedMerges;
+  return [
+   ...rollUpProjects(baseFiltered.filter(p=>OPEN_STATUSES.includes(p.status)),cm),
+   ...rollUpProjects(baseFiltered.filter(p=>WON_STATUSES.includes(p.status)),cm),
+   ...rollUpProjects(baseFiltered.filter(p=>LOST_STATUSES.includes(p.status)),cm),
+  ];
+ },[baseFiltered,settings.confirmedMerges]);
  const stageStats=useMemo(()=>{
   const m={}; ALL_STATUSES.forEach(s=>{m[s]={count:0,value:0};});
-  baseFiltered.forEach(p=>{ if(m[p.status]){m[p.status].count++; m[p.status].value+=bidValue(p);} });
+  rolled.forEach(p=>{ if(m[p.status]){m[p.status].count++; m[p.status].value+=projectValue(p);} });
   return m;
- },[baseFiltered]);
- const baseTotalValue=useMemo(()=>baseFiltered.reduce((s,p)=>s+bidValue(p),0),[baseFiltered]);
+ },[rolled]);
+ const baseTotalValue=useMemo(()=>rolled.reduce((s,p)=>s+projectValue(p),0),[rolled]);
  const filtered=useMemo(()=>{
-  let out= statusF==='all' ? baseFiltered : baseFiltered.filter(p=>p.status===statusF);
+  let out= statusF==='all' ? rolled : rolled.filter(p=>p.status===statusF);
   const sorted=[...out];
   if(sortBy==='submitted_desc') sorted.sort((a,b)=>(b.submitted||'').localeCompare(a.submitted||''));
   else if(sortBy==='submitted_asc') sorted.sort((a,b)=>(a.submitted||'').localeCompare(b.submitted||''));
-  else if(sortBy==='amount_desc') sorted.sort((a,b)=>(b.bidAmount||0)-(a.bidAmount||0));
-  else if(sortBy==='amount_asc') sorted.sort((a,b)=>(a.bidAmount||0)-(b.bidAmount||0));
+  else if(sortBy==='amount_desc') sorted.sort((a,b)=>projectValue(b)-projectValue(a));
+  else if(sortBy==='amount_asc') sorted.sort((a,b)=>projectValue(a)-projectValue(b));
   else if(sortBy==='gc') sorted.sort((a,b)=>(a.gc||'').localeCompare(b.gc||''));
   else if(sortBy==='status') sorted.sort((a,b)=>(STATUS_CONFIG[a.status]?.order||99)-(STATUS_CONFIG[b.status]?.order||99));
   return sorted;
- },[baseFiltered,statusF,sortBy]);
+ },[rolled,statusF,sortBy]);
  return (
   <div className="space-y-3">
    {/* [PHASE 1 2026-06-22 — Ben] Purpose + scope header so it's clear this is the whole bid book. */}
@@ -3151,7 +3215,7 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
     <h1 className="font-serif text-2xl text-stone-900">Pipeline</h1>
     <p className="text-sm text-stone-500 mt-0.5">Your whole bid book, laid out by the stage each bid is in — left to right, the way work actually moves. Click a stage to focus the list; click any row to open a bid.</p>
    </div>
-   <StageFlow stats={stageStats} active={statusF} onPick={setStatusF} total={baseFiltered.length} totalValue={baseTotalValue}/>
+   <StageFlow stats={stageStats} active={statusF} onPick={setStatusF} total={rolled.length} totalValue={baseTotalValue}/>
    <div className="bg-white border border-stone-200 px-3 py-2 flex flex-wrap items-center gap-2">
     <div className="relative" style={{minWidth:'200px',flex:1}}>
      <Ico n="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400"/>
@@ -3160,7 +3224,7 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
     <select value={gcF} onChange={e=>setGcF(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none" style={{maxWidth:'180px'}}><option value="all">All GCs</option>{allGCs.map(g=><option key={g} value={g}>{g}</option>)}</select>
     <select value={roleF} onChange={e=>setRoleF(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none"><option value="all">All people</option><option value="Peter">Peter (Est.)</option><option value="Paul">Paul (BD)</option><option value="David">David (PM)</option></select>
     <select value={sortBy} onChange={e=>setSortBy(e.target.value)} className="text-sm border border-stone-200 bg-stone-50 px-2 py-1.5 rounded-sm focus:outline-none"><option value="submitted_desc">Newest first</option><option value="submitted_asc">Oldest first</option><option value="amount_desc">$ high→low</option><option value="amount_asc">$ low→high</option><option value="gc">GC A→Z</option><option value="status">Status</option></select>
-    <div className="text-xs text-stone-600 ml-auto whitespace-nowrap" title={statusF==='all'?'Count and total value of every bid matching the filters above — your whole bid book.':`Count and total value of bids in the "${statusF}" stage (within the filters above).`}><span className="font-mono font-semibold">{filtered.length}</span> {statusF==='all'?'bids':statusF.toLowerCase()} · <span className="font-mono font-semibold">{money(filtered.reduce((s,p)=>s+bidValue(p),0),true)}</span></div>
+    <div className="text-xs text-stone-600 ml-auto whitespace-nowrap" title={statusF==='all'?'Count and total value of every bid matching the filters above — your whole bid book.':`Count and total value of bids in the "${statusF}" stage (within the filters above).`}><span className="font-mono font-semibold">{filtered.length}</span> {statusF==='all'?'projects':statusF.toLowerCase()} · <span className="font-mono font-semibold">{money(filtered.reduce((s,p)=>s+projectValue(p),0),true)}</span></div>
    </div>
    <div className="bg-white border border-stone-200 overflow-auto" style={{maxHeight:'calc(100vh - 230px)'}}>
     <table style={{tableLayout:'fixed',width:'100%'}} className="text-sm">
@@ -3183,7 +3247,7 @@ const PipelineView=({proposals,onSelectProposal,onSelectGC,settings,onSavePropos
           {/* [PHASE 2b 2026-06-24 — Paul] Removed Pest/Pbd/Dpm role badges — 3-person team, everyone knows who does what; pure noise. */}
          </td>
          <td className="px-3 py-2 text-stone-600 whitespace-nowrap text-xs">{formatDate(p.submitted)}</td>
-         <td className="px-3 py-2 text-right whitespace-nowrap"><MoneyCell amount={p.bidAmount}/></td>
+         <td className="px-3 py-2 text-right whitespace-nowrap"><MoneyCell amount={projectValue(p)}/>{p._familySize>1&&<div className="text-[9px] text-stone-400 leading-tight">{p._changeOrders&&p._changeOrders.length?`base + ${p._changeOrders.length} CO`:`latest of ${p._familySize}`}</div>}</td>
          <td className="px-3 py-2"><StatusPill status={p.status} size="xs"/></td>
          <td className="px-3 py-2 relative" style={{minWidth:'100px'}}><NextActionCell proposal={p} onSave={onSaveProposal}/></td>
          <td className="px-3 py-2 text-right font-mono text-[10px] whitespace-nowrap">
@@ -4271,35 +4335,44 @@ const ActiveJobsView=({proposals,estimateItems,estimates,bidBook,onSelectProposa
  // projectNumber, e.g. 1573 = 6 docs). Group by projectNumber and show project-level totals;
  // each document stays its own row (clickable, actuals editable).
  const groups=useMemo(()=>{
-  // [STATUS FLOW 2026-06-23] Segmented Jobs workspace — the toggle selects which statuses show:
-  // Awarded (won, not started) / Active (executing) / Completed (done).
-  let p=proposals.filter(x=>SEG_STATUS[segment].includes(x.status));
-  p=p.filter(x=>matchesYearFilter(x,settings.yearFilter));
-  const docs=p.map(x=>{
+  // [PROJECT ROLL-UP 2026-06-24 — Paul: "prioritize the dedup"] Roll the FULL won set (Awarded+Active+
+  // Completed) into real projects the SAME way the canonical bid book does — successive VERSIONS collapse
+  // to the latest, change-orders fold in as their own rows — THEN bucket each project into a segment by its
+  // base document's status. Superseded versions move to g.legacyVersions (shown on demand in the drawer,
+  // never in this table and never re-summed). This makes the project count + contract totals reconcile 1:1
+  // with the Jobs badges (bidBook.jobs) and the bid book — fixes versions being summed as duplicate contracts.
+  const wonStatuses=[...SEG_STATUS.awarded,...SEG_STATUS.active,...SEG_STATUS.completed];
+  const inY=proposals.filter(x=>wonStatuses.includes(x.status)&&matchesYearFilter(x,settings.yearFilter));
+  const withCost=x=>{
    // Cost & margin from the ONE shared basis (jobCost: bidsheet-first; negative estimate → review).
    const jc=jobCost(x,derivedByDoc);
    return {...x,_em:jc.em,_emDerived:jc.basis==='derived',_needsReview:jc.needsReview,_am:actMargin(x),_contract:jc.contract,_ec:jc.ec,_ecDerived:jc.basis==='derived',_ac:(x.actMaterial||0)+(x.actLabor||0)+(x.actOther||0)};
-  });
-  const byKey={},order=[];
-  docs.forEach(d=>{const k=String(d.projectNumber||d.id);if(!byKey[k]){byKey[k]={key:k,docs:[]};order.push(byKey[k]);}byKey[k].docs.push(d);});
-  order.forEach(g=>{
-   g.docs.sort((a,b)=>String(a.id).length-String(b.id).length||String(a.id).localeCompare(String(b.id))); // base doc first, then COs
-   g.base=g.docs[0];
-   g.contract=g.docs.reduce((s,d)=>s+d._contract,0);   // net of negative COs
-   g.ec=g.docs.reduce((s,d)=>s+d._ec,0);
-   g.ac=g.docs.reduce((s,d)=>s+d._ac,0);
+  };
+  const segOf=s=>SEG_STATUS.awarded.includes(s)?'awarded':SEG_STATUS.completed.includes(s)?'completed':SEG_STATUS.active.includes(s)?'active':null;
+  const order=[];
+  rollUpProjects(inY,settings.confirmedMerges).forEach(rp=>{
+   const base=withCost(rp);                              // rp carries the latest version's identity + fields
+   const cos=(rp._changeOrders||[]).map(withCost);       // change-orders stay their own editable rows
+   const docs=[base,...cos];
+   const legacyVersions=(rp._versions||[]).filter(v=>String(v.id)!==String(rp.id)); // superseded versions → drawer only
+   const g={key:rp._familyKey||String(rp.id), projNo:rp.projectNumber||rp.id, base, docs, legacyVersions, segment:segOf(base.status)};
+   g.contract=docs.reduce((s,d)=>s+d._contract,0);       // net of negative COs
+   g.ec=docs.reduce((s,d)=>s+d._ec,0);
+   g.ac=docs.reduce((s,d)=>s+d._ac,0);
    // FIX (2026-06-11): margin over COSTED documents only. No-cost docs (sell-only COs, placeholders)
    // previously skewed contract without cost — 1573 showed 21.8% when costed docs run ~8.9%.
-   g.costedDocs=g.docs.filter(d=>d._ec>0);
+   g.costedDocs=docs.filter(d=>d._ec>0);
    g.costedContract=g.costedDocs.reduce((s,d)=>s+d._contract,0);
    const _gRaw=(g.ec>0&&g.costedContract>0)?(g.costedContract-g.ec)/g.costedContract:null;
-   g.em=(_gRaw!==null&&_gRaw<0)?null:_gRaw;            // neg estimate → review, never a fake %
+   g.em=(_gRaw!==null&&_gRaw<0)?null:_gRaw;              // neg estimate → review, never a fake %
    g.emNeedsReview=_gRaw!==null&&_gRaw<0;
    g.am=(g.ac>0&&g.contract>0)?(g.contract-g.ac)/g.contract:null;
+   order.push(g);
   });
-  order.sort((a,b)=>b.contract-a.contract);
-  return order;
- },[proposals,settings.yearFilter,derivedByDoc,segment]);
+  const segFiltered=order.filter(g=>g.segment===segment);
+  segFiltered.sort((a,b)=>b.contract-a.contract);
+  return segFiltered;
+ },[proposals,settings.yearFilter,settings.confirmedMerges,derivedByDoc,segment]);
  const jobs=useMemo(()=>groups.flatMap(g=>g.docs),[groups]);
  const startEdit=(jid,field,curVal,e)=>{e.stopPropagation();setEditingActual({id:jid,field});setEditVal(String(curVal||''));};
  const commitEdit=(j)=>{
@@ -4352,7 +4425,7 @@ const ActiveJobsView=({proposals,estimateItems,estimates,bidBook,onSelectProposa
        })();
        const headerRow=multi?(
         <tr key={'proj-'+g.key} className="border-b border-stone-200 bg-stone-100/80 hover:bg-stone-100 cursor-pointer" onClick={()=>onSelectProposal(g.base.id)}>
-         <td className="px-3 py-2.5 overflow-hidden" colSpan={2}><div className="font-semibold text-stone-900 truncate">Project #{g.key} · {g.base.project}</div><div className="text-xs text-stone-500 mt-0.5">{g.docs.length} documents · {g.base.gc}{g.base.location?` · ${g.base.location}`:''}</div></td>
+         <td className="px-3 py-2.5 overflow-hidden" colSpan={2}><div className="font-semibold text-stone-900 truncate">Project #{g.projNo} · {g.base.project}</div><div className="text-xs text-stone-500 mt-0.5">{g.docs.length} document{g.docs.length!==1?'s':''}{g.legacyVersions&&g.legacyVersions.length?` · ${g.legacyVersions.length} earlier version${g.legacyVersions.length!==1?'s':''}`:''} · {g.base.gc}{g.base.location?` · ${g.base.location}`:''}</div></td>
          <td className="px-3 py-2.5 text-right font-bold whitespace-nowrap"><MoneyCell amount={g.contract}/></td>
          <td className="px-3 py-2.5 text-right text-stone-600 whitespace-nowrap">{g.ec?<MoneyCell amount={g.ec}/>:<span className="text-stone-300 text-xs">—</span>}</td>
          <td className="px-3 py-2.5 text-right text-stone-500 text-xs" colSpan={2}>{g.ac>0?money(g.ac)+' actuals':''}</td>
