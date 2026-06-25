@@ -2591,7 +2591,9 @@ const lastActivity=p=>p.lastTouched||p.submitted;
 const overdueDays=(p,s)=>{
  // [FOLLOW-UP 2026-06-10 — Ben] SLA staleness applies to every pre-award working status.
  // (nextAction/nextActionDate overdue applies to ALL statuses — handled by the queue itself.)
- if(!['Lead','Bidding','Submitted','Negotiating','Hold'].includes(p.status)) return null;
+ // [TAXONOMY FIX 2026-06-25] Read the canonical OPEN_STATUSES (derived from STATUS_CONFIG) instead of a
+ // hardcoded list, so the SLA clock can never drift from the pipeline definition in one place but not another.
+ if(!OPEN_STATUSES.includes(p.status)) return null;
  // [OVERDUE FIX 2026-06-24 — Paul: "overdue is empty — we haven't contacted all 400!"] The follow-up clock
  // must run from the last REAL outreach, falling back to the submission date — never from a bare import/
  // review stamp. The June reconcile wrote lastTouched onto ~300 bids it merely REVIEWED, which made every
@@ -3032,7 +3034,7 @@ const DashboardView=({proposals,settings,gcStats,bidBook,estimateItems,estimates
   </div>
  );
 };
-const LOST_STATUSES_SET=new Set(['Lost','Dead','Closed Lost']);
+const LOST_STATUSES_SET=new Set(LOST_STATUSES); // [TAXONOMY FIX 2026-06-25] was hardcoded ['Lost','Dead','Closed Lost'] — 'Closed Lost' is not a real status so it matched nothing; now derives from STATUS_CONFIG so it can never drift.
 const LOST_REASONS=['Price','Relationship','Scope','Timing','Don\'t know'];
 const NextActionCell=({proposal,onSave})=>{
  const [open,setOpen]=useState(false);
@@ -3769,7 +3771,7 @@ const todayActionCount=(proposals,recentSent)=>{const today=todayStr();const hor
 // only blocked "not awarded/lost/went with/going with", so any sentence with the word "awarded" landed in
 // "Wins to book" — including losses. Now we also defer to analyzeReply (the canonical reply-reader, which
 // already tags "awarded to <someone else>" as lost), so a loss can never surface as a bookable win.
-const isWinToBook=(p)=>{if(!OPEN_STATUSES.includes(p.status))return false;const txt=(p.nextAction||'')+' '+(p.notes||'');return /\bawarded\b|\bwe (won|got)\b|likely awarded|notice to proceed/i.test(txt)&&!/not awarded|\blost\b|went with|going with/i.test(txt)&&analyzeReply(txt).state!=='lost';};
+const isWinToBook=(p)=>{if(!OPEN_STATUSES.includes(p.status))return false;const txt=(p.nextAction||'');return /\bawarded\b|\bwe (won|got)\b|likely awarded|notice to proceed/i.test(txt)&&!/not awarded|\blost\b|went with|going with/i.test(txt)&&analyzeReply(txt).state!=='lost';};
 // [LOSSES PILE FIX 2026-06-23 — Ben] Read ONLY the action line (nextAction), not the free-text notes —
 // mirrors how the Replies pile already works. Old free-text scanning swept in 6 false alarms (e.g. #1570-FJ,
 // #1816, #1535.3) whose history notes happened to contain "lost"/"awarded to" but are actually live, awaiting
@@ -3801,7 +3803,7 @@ const TodayView=({proposals,settings,gcStats,bidBook,recentSent,onSelectProposal
  const retireDups=(g)=>{const keepId=String(dupKeep[g.key]||defaultKeep(g).id);const n=g.rows.length-1;if(!window.confirm('Keep #'+keepId+' and retire '+n+' duplicate'+(n===1?'':'s')+'? The other'+(n===1?'':'s')+' will be marked Dead (duplicate of #'+keepId+'). This writes to the database.'))return;g.rows.forEach(r=>{if(String(r.id)===keepId)return;onSaveProposal({...r,status:'Dead',lostReason:'Duplicate of #'+keepId,nextAction:null,nextActionDate:null,lastTouched:today,notes:'['+today+'] 🔁 Duplicate of #'+keepId+' — retired as duplicate (Today)\n'+(r.notes||'')});});};
  const horizon=(()=>{const d=new Date();d.setDate(d.getDate()+14);return d.toISOString().slice(0,10);})();
  const wrOf=(gc)=>{const ck=canonicalGC(gc);const g=(gcStats||[]).find(x=>x.key===ck);return g&&g.winRate!=null?g.winRate:null;};
- const ev=(p)=>{const w=wrOf(p.gc);return Math.round((p.bidAmount||0)*(w!=null?Math.max(w,0.1):0.30));};
+ const ev=(p)=>{const w=wrOf(p.gc);return Math.round((projectValue(p)||0)*(w!=null?Math.max(w,0.1):0.30));};
  // [GRAPH 2026-06-19] Already-handled in Outlook: emailed this contact more recently than our last logged touch → drop from the action lists.
  const handled=(p)=>{const e=(recentSent&&p.email)?recentSent[p.email.trim().toLowerCase()]:null;return !!(e&&e.slice(0,10)>(p.lastTouched||''));};
 
@@ -3830,7 +3832,7 @@ const TodayView=({proposals,settings,gcStats,bidBook,recentSent,onSelectProposal
    .sort((a,b)=>(b.bidAmount||0)-(a.bidAmount||0)),[proposals,winIds,lossIds,replyIds,today]);
  // [COCKPIT 2026-06-22 — Ben] Where I stand stat cards.
  const openPipeline=useMemo(()=>({count:bidBook.counts.open,value:bidBook.value.open}),[bidBook]);
- const liveWinnable=useMemo(()=>{const ps=proposals.filter(p=>p.status==='Bidding'||(isTodayReply(p,recentSent)&&analyzeReply((p.nextAction||'')+' '+(p.notes||'')).state!=='lost'));return ps.reduce((s,p)=>s+(p.bidAmount||0),0);},[proposals,recentSent]);
+ const liveWinnable=useMemo(()=>{const ps=proposals.filter(p=>p.status==='Bidding'||(isTodayReply(p,recentSent)&&analyzeReply(p.nextAction||'').state!=='lost'));return ps.reduce((s,p)=>s+projectValue(p),0);},[proposals,recentSent]);
  const overdueList=useMemo(()=>bidBook.overdue,[bidBook]);
  const leadsToPrice=useMemo(()=>proposals.filter(p=>p.status==='Lead').length,[proposals]);
  // [WHOLE BOOK 2026-06-23 — Ben] Account for EVERY bid (Paul: "what about the other ~140?"). Dollars are
@@ -3898,20 +3900,8 @@ const TodayView=({proposals,settings,gcStats,bidBook,recentSent,onSelectProposal
     <p className="text-xs text-stone-400 mt-1">{formatDate(today)} · {replies.length} repl{replies.length===1?'y':'ies'} to action · {rePitch.length} re-pitch · {newOpps.length} new opportunit{newOpps.length===1?'y':'ies'} · {winsToBook.length} win{winsToBook.length===1?'':'s'} to book · {lossesToClear.length} loss{lossesToClear.length===1?'':'es'} to clear</p>
    </div>
 
-   {/* [WHOLE BOOK 2026-06-23 — Ben] Paul asked "there are ~400 projects — what about the rest?" This
-       strip accounts for ALL of them in one glance, then says exactly how many of the open bids need him. */}
-   <div className="mb-4 bg-white border border-stone-200 rounded-sm px-4 py-3">
-    <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
-     <h2 className="font-serif text-base text-stone-900">The whole book — every bid accounted for</h2>
-     <span className="text-xs text-stone-500">{book.records} bid records · {book.distinct} distinct projects</span>
-    </div>
-    <div className="grid grid-cols-3 gap-2 text-center">
-     <button onClick={()=>onNavigate&&onNavigate('pipeline')} className="rounded-sm bg-sky-50 border border-sky-200 px-2 py-2 hover:shadow-sm transition-all"><div className="text-lg font-bold text-sky-900">{book.open}</div><div className="text-[11px] text-sky-800">Open · {money(book.oVal,true)}</div></button>
-     <button onClick={()=>onNavigate&&onNavigate('active')} className="rounded-sm bg-emerald-50 border border-emerald-200 px-2 py-2 hover:shadow-sm transition-all"><div className="text-lg font-bold text-emerald-900">{book.won}</div><div className="text-[11px] text-emerald-800">Won · {money(book.wVal,true)}</div></button>
-     <button onClick={()=>onNavigate&&onNavigate('pipeline')} className="rounded-sm bg-stone-100 border border-stone-200 px-2 py-2 hover:shadow-sm transition-all"><div className="text-lg font-bold text-stone-700">{book.lost}</div><div className="text-[11px] text-stone-500">Lost / dead</div></button>
-    </div>
-    <p className="text-[11px] text-stone-500 mt-2 leading-relaxed">Of the {book.open} open bids: <b className="text-stone-700">{replies.length}</b> need a reply, <b className="text-stone-700">{winsToBook.length}</b> {winsToBook.length===1?'win is':'wins are'} ready to book, <b className="text-stone-700">{lossesToClear.length}</b> {lossesToClear.length===1?'loss':'losses'} to confirm, <b className="text-stone-700">{overdueList.length}</b> overdue to chase{book.dnc>0?<React.Fragment> · <b className="text-stone-700">{book.dnc}</b> are David&apos;s personal accounts (manual only)</React.Fragment>:''}. The rest are waiting on a GC reply — no action needed yet.</p>
-   </div>
+   {/* [DECLUTTER 2026-06-25] Removed the "whole book" Open/Won/Lost strip from Today — those totals live on
+       Pipeline & Jobs and were pure cross-tab duplication. Today is now strictly the decision list. */}
 
    {/* [DUPLICATE FINDER 2026-06-23 — Ben] Same builder + same job number entered twice. Pick which to
        keep; nothing merges until Paul clicks. Hidden when there's nothing to review. */}
@@ -3949,9 +3939,9 @@ const TodayView=({proposals,settings,gcStats,bidBook,recentSent,onSelectProposal
     {[
      {label:'Open pipeline',value:money(openPipeline.value,true),sub:openPipeline.count+' open bid'+(openPipeline.count===1?'':'s'),tint:'bg-sky-50 border-sky-200 text-sky-900',onClick:()=>onNavigate&&onNavigate('pipeline'),hint:'See all bids →'},
      {label:'Live & winnable',value:money(liveWinnable,true),sub:'bidding + live replies',tint:'bg-emerald-50 border-emerald-200 text-emerald-900',onClick:()=>onNavigate&&onNavigate('pipeline'),hint:'See all bids →'},
-     {label:'Overdue',value:overdueList.length+' bid'+(overdueList.length===1?'':'s'),sub:money(overdueList.reduce((s,p)=>s+(p.bidAmount||0),0),true)+' waiting',tint:overdueList.length>0?'bg-rose-50 border-rose-200 text-rose-900':'bg-stone-50 border-stone-200 text-stone-600',onClick:()=>onNavigate&&onNavigate('followups'),hint:'Open call queue →'},
+     {label:'Overdue',value:overdueList.length+' bid'+(overdueList.length===1?'':'s'),sub:money(overdueList.reduce((s,p)=>s+projectValue(p),0),true)+' waiting',tint:overdueList.length>0?'bg-rose-50 border-rose-200 text-rose-900':'bg-stone-50 border-stone-200 text-stone-600',onClick:()=>onNavigate&&onNavigate('followups'),hint:'Open call queue →'},
      {label:'Replies to answer',value:replies.length,sub:replies.length===1?'reply':'replies',tint:replies.length>0?'bg-amber-50 border-amber-200 text-amber-900':'bg-stone-50 border-stone-200 text-stone-600',onClick:()=>setFocus(focus==='replies'?null:'replies'),active:focus==='replies',hint:focus==='replies'?'Showing — clear':'Focus this'},
-     {label:'Wins to book',value:winsToBook.length,sub:money(winsToBook.reduce((s,p)=>s+(p.bidAmount||0),0),true),tint:winsToBook.length>0?'bg-emerald-50 border-emerald-300 text-emerald-900':'bg-stone-50 border-stone-200 text-stone-600',onClick:()=>setFocus(focus==='wins'?null:'wins'),active:focus==='wins',hint:focus==='wins'?'Showing — clear':'Focus this'},
+     {label:'Wins to book',value:winsToBook.length,sub:money(winsToBook.reduce((s,p)=>s+projectValue(p),0),true),tint:winsToBook.length>0?'bg-emerald-50 border-emerald-300 text-emerald-900':'bg-stone-50 border-stone-200 text-stone-600',onClick:()=>setFocus(focus==='wins'?null:'wins'),active:focus==='wins',hint:focus==='wins'?'Showing — clear':'Focus this'},
      {label:'Leads to price',value:leadsToPrice,sub:'no quote sent yet',tint:'bg-stone-50 border-stone-200 text-stone-700',onClick:()=>onNavigate&&onNavigate('pipeline'),hint:'Price it or drop it →'},
     ].map(c=>(
      <button key={c.label} onClick={c.onClick} title={c.hint}
@@ -7004,7 +6994,7 @@ function App() {
  const [installers, setInstallers] = useState([]);
  const [gcs, setGcs] = useState([]);
  const [settings, setSettings] = useState({slaSubmitted:14,slaNegotiating:7,targetMargin:0.18,riskMarginFloor:0.05,yearFilter:'All'});
- const [view, setView] = useState('dashboard');
+ const [view, setView] = useState('today'); // [DECLUTTER 2026-06-25] land on the decision list, not the Dashboard Christmas tree
  const [selectedId, setSelectedId] = useState(null);
  const [selectedGC, setSelectedGC] = useState(null);
  const [showNewProject, setShowNewProject] = useState(false);
@@ -7427,7 +7417,9 @@ function App() {
  // [PHASE 2 2026-06-22 — Ben] 8 tabs → 6. Follow-Ups now lives inside Today (Call list mode);
  // Intelligence now lives inside GC Intel (Deep dive sub-tab). Order: Dashboard, Today, Pipeline,
  // Active Jobs, GC Intel, Settings.
- const navItems=[{id:'dashboard',label:'Dashboard',icon:'barChart'},{id:'today',label:'Today',icon:'inbox',badge:todayCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Jobs',icon:'flame'},{id:'gcs',label:'Intel',icon:'building2'},{id:'settings',label:'Settings',icon:'settings'}];
+ // [DECLUTTER 2026-06-25] Dashboard removed from the nav — it duplicated Pipeline/Jobs/Intel ("Christmas tree").
+ // Component is kept in code (router still renders view==='dashboard') so it's one-line reversible; just unreachable.
+ const navItems=[{id:'today',label:'Today',icon:'inbox',badge:todayCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Jobs',icon:'flame'},{id:'gcs',label:'Intel',icon:'building2'},{id:'settings',label:'Settings',icon:'settings'}];
  if(!loaded) return (
   <div className="min-h-screen flex items-center justify-center bg-stone-100">
    <div className="text-center"><Ico n="loader" size={32} className="mx-auto mb-3 text-stone-400 animate-spin"/><p className="text-sm text-stone-600">Loading AMS Floors Command Center…</p>{syncing&&<p className="text-xs text-stone-500 mt-1">Setting up database for first time…</p>}</div>
