@@ -2621,7 +2621,7 @@ const actMargin=p=>{
 const followUpScore=(p,s,wr)=>{
  const od=overdueDays(p,s)||0;
  const w=wr!==null&&wr!==undefined?Math.max(wr,0.1):0.3;
- return (p.bidAmount||0)*(1+od/7)*(1+w);
+ return (projectValue(p)||0)*(1+od/7)*(1+w); // [LEAK FIX 2026-06-25] use change-order-aware value, not raw bidAmount, so the call-queue priority can't mis-rank CO'd jobs
 };
 // [DEDUP 2026-06-23 — Ben] Two cleanups Paul asked for: (1) the SAME GC under different spellings
 // ("Webb Construction Group, Inc." vs "Webb Construction" vs the "Constrcution" typo) was splitting one
@@ -3752,7 +3752,7 @@ const bidFlags=(p)=>{
  if(isRealContact(p)&&p.lastTouched&&daysSince(p.lastTouched)<=30) f.push(['✉','sent','bg-stone-100 text-stone-500']);
  return f;
 };
-const expValue=(p)=>Math.round((p.bidAmount||0)*(p._gcWR!=null?p._gcWR:0.30));
+const expValue=(p)=>Math.round((projectValue(p)||0)*(p._gcWR!=null?p._gcWR:0.30)); // [LEAK FIX 2026-06-25] projectValue, not raw bidAmount
 // [📥 TODAY 2026-06-17 — Paul] Action cockpit. Reads `proposals` only (no new table).
 // Three lists: replies needing a response (reconciler sets nextAction "💬 Reply received…"),
 // lost bids whose winner is named (the #1570-FJ re-pitch play), and near-due leads/opps.
@@ -4158,7 +4158,7 @@ const FollowUpsView=({proposals,settings,gcStats,recentSent,onSelectProposal,onS
   <div className="space-y-4">
    <div className="bg-gradient-to-br from-rose-50 to-amber-50 border border-rose-200 px-5 py-4">
     <div className="flex items-start gap-3"><Ico n="phone" size={18} className="text-rose-700 mt-1"/>
-     <div><h2 className="font-serif text-2xl text-stone-900">Today's Call Queue</h2><p className="text-sm text-stone-700 mt-1">{queue.length} {filter==='overdue'?'overdue follow-ups':filter==='done'?'recently contacted (newest first)':'bids'} · <strong>{money(queue.reduce((s,p)=>s+(p.bidAmount||0),0),true)}</strong> on the line.{hiddenHandled>0&&<span className="text-emerald-700 font-medium"> {hiddenHandled} already emailed — hidden.</span>} Sorted by priority: <span className="font-mono text-xs">bid × overdue × win-rate</span>.</p><p className="text-xs text-stone-500 mt-1.5">This is the slice of your pipeline that needs a touch <strong>now</strong> — a subset of all bids, so this total is smaller than the Pipeline and Dashboard figures on purpose.</p></div>
+     <div><h2 className="font-serif text-2xl text-stone-900">Today's Call Queue</h2><p className="text-sm text-stone-700 mt-1">{queue.length} {filter==='overdue'?'overdue follow-ups':filter==='done'?'recently contacted (newest first)':'bids'} · <strong>{money(queue.reduce((s,p)=>s+projectValue(p),0),true)}</strong> on the line.{hiddenHandled>0&&<span className="text-emerald-700 font-medium"> {hiddenHandled} already emailed — hidden.</span>} Sorted by priority: <span className="font-mono text-xs">bid × overdue × win-rate</span>.</p><p className="text-xs text-stone-500 mt-1.5">This is the slice of your pipeline that needs a touch <strong>now</strong> — a subset of all bids, so this total is smaller than the Pipeline and Dashboard figures on purpose.</p></div>
     </div>
    </div>
    {/* [UX 2026-06-11 — Ben] Filter row pins below the sticky nav while the queue scrolls. */}
@@ -6085,7 +6085,7 @@ const IntelligenceView=({proposals,gcStats,estimateItems,settings,bidBook,onSele
   <div className="space-y-5">
    <div className="bg-stone-900 text-white px-5 py-4">
     <h2 className="font-serif text-2xl">Intelligence</h2>
-    <p className="text-sm text-stone-400 mt-1">Weekly strategic review. Not for daily ops — use Follow-Ups and Pipeline for that.</p>
+    <p className="text-sm text-stone-400 mt-1">Your GC relationships and win-rate intelligence — who to invest in to win more work.</p>
    </div>
    {/* Tab bar */}
    <div className="flex items-center gap-1 border-b border-stone-200 px-1">
