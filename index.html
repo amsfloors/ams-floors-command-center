@@ -3145,7 +3145,7 @@ const FLOW_SEG={
  'Dead':      {bold:'bg-stone-600',   soft:'bg-stone-200 text-stone-700 hover:bg-stone-300'},
  'Lost':      {bold:'bg-rose-500',    soft:'bg-rose-100 text-rose-700 hover:bg-rose-200'},
 };
-const StageFlow=({stats,active,onPick,total,totalValue})=>{
+const StageFlow=({stats,active,onPick,total,totalValue,onIntake})=>{
  const stages=ALL_STATUSES.slice().sort((a,b)=>(STATUS_CONFIG[a].order||0)-(STATUS_CONFIG[b].order||0));
  const main=stages.filter(s=>STATUS_CONFIG[s].pipeline!=='lost'); // Lead..Completed (the forward flow)
  const term=stages.filter(s=>STATUS_CONFIG[s].pipeline==='lost'); // Dead, Lost (terminal off-ramp)
@@ -3170,10 +3170,27 @@ const StageFlow=({stats,active,onPick,total,totalValue})=>{
    </button>
   );
  };
+ const hasIntake=!!onIntake;
+ // [SPINE INTAKE 2026-06-25 — Paul: "add-new-project + CSV import should be the very FIRST tab on the spine"]
+ // The pipeline literally starts here: work enters by hand or via a Bluebeam CSV, then flows right through the stages.
+ const IntakeSeg=()=>{
+  const on=active==='intake';
+  const clip=`polygon(0 0, calc(100% - ${N}px) 0, 100% 50%, calc(100% - ${N}px) 100%, 0 100%)`;
+  return (
+   <button onClick={()=>onIntake&&onIntake()} title="Add a project or import a Bluebeam takeoff CSV — the start of the pipeline."
+    className={`relative flex flex-col items-center justify-center text-center transition-all duration-150 ${on?'bg-orange-800 text-white shadow-lg z-10':'bg-orange-100 text-orange-800 hover:bg-orange-200'}`}
+    style={{clipPath:clip,WebkitClipPath:clip,paddingLeft:'16px',paddingRight:(N+10)+'px',minHeight:'80px',flex:'0 0 auto',minWidth:'118px'}}>
+    <Ico n="plus" size={18}/>
+    <span className="text-[10px] font-semibold uppercase tracking-wider leading-none mt-1.5">Add / Import</span>
+    <span className="text-[10px] mt-1 opacity-80">new bid · CSV</span>
+   </button>
+  );
+ };
  return (
   <div className="space-y-2">
    <div className="flex items-stretch w-full rounded-md overflow-hidden shadow-sm">
-    {main.map((s,i)=>(<Seg key={s} status={s} i={i} n={main.length} count={(stats[s]&&stats[s].count)||0} value={(stats[s]&&stats[s].value)||0}/>))}
+    {hasIntake&&<IntakeSeg/>}
+    {main.map((s,i)=>(<Seg key={s} status={s} i={hasIntake?i+1:i} n={hasIntake?main.length+1:main.length} count={(stats[s]&&stats[s].count)||0} value={(stats[s]&&stats[s].value)||0}/>))}
    </div>
    <div className="flex items-center justify-between gap-3 pl-0.5">
     <div className="flex items-center gap-2 text-[11px] text-stone-500 flex-wrap">
@@ -3786,6 +3803,234 @@ const isBigQuiet=(p,today)=>OPEN_STATUSES.includes(p.status)&&(p.bidAmount||0)>=
 // [DNC 2026-06-23 — Ben] Personal-relationship GCs (David handles these himself) never belong on the
 // auto-chase list — keep them out of Overdue so the call queue shows only bids the office should pursue.
 const isOverdueBid=(p,settings,recentSent,today)=>(OPEN_STATUSES.includes(p.status)||!!p.nextAction||!!p.nextActionDate)&&(((overdueDays(p,settings)||0)>0)||(!!p.nextActionDate&&p.nextActionDate<=today))&&!todayHandled(p,recentSent)&&!isDNC(p.gc);
+// [SPINE REDESIGN 2026-06-25 — Paul: "make the bar (spine) the navigation; each status is a self-contained
+//  workspace — bids + what needs you + GC context on ONE page, no jumping between tabs"] The StageFlow strip
+//  IS the navigation. Click a stage and this one page shows: (1) what that stage is FOR, (2) what needs you
+//  right now in it, (3) every bid in it with the builder relationship baked into the row. Same per-bucket
+//  roll-up + projectValue dollars as the canonical bid book, so every count/$ ties out to the penny.
+const STAGE_GUIDE={
+ 'Lead':      {emoji:'🔍', purpose:'New leads. Decide fast — bid it or pass. Qualify the ones worth estimating time.', need:'leads with no next step set'},
+ 'Bidding':   {emoji:'📐', purpose:'Pricing in progress. Finish the estimate and get it out the door.', need:'bids waiting to go out'},
+ 'Submitted': {emoji:'📨', purpose:'Pricing is in — now win it. Follow up, answer replies, push for the award.', need:'follow-ups overdue or replies in'},
+ 'Awarded':   {emoji:'🏆', purpose:'You won it. Lock the contract and turn it into a scheduled job.', need:'awards to convert into jobs'},
+ 'Active':    {emoji:'🔨', purpose:'Jobs in progress. Track them through to completion.', need:'jobs needing a touch'},
+ 'Completed': {emoji:'✅', purpose:'Closed-won and done — your reference book and relationship capital.', need:''},
+ 'Lost':      {emoji:'💔', purpose:'Lost bids. Capture why, and re-pitch when the winning GC needs flooring.', need:'losses missing a reason'},
+ 'Dead':      {emoji:'⚰️', purpose:'Projects that died — canceled or no award. Kept for the record.', need:''},
+};
+const StatusWorkspace=({proposals,settings,gcStats,bidBook,recentSent,onSelectProposal,onSaveProposal,onCloneToWinner,active,onPick,sb,estimateItems,onImported,onNewProject})=>{
+ const today=todayStr();
+ const [search,setSearch]=useState('');
+ // GC relationship lookup (win rate + record) — shown inline so the builder picture lives on THIS page, no Intel-tab jump.
+ const gcMap=useMemo(()=>{const m={};(gcStats||[]).forEach(g=>{if(g&&g.key)m[g.key]=g;});return m;},[gcStats]);
+ const gcOf=(gc)=>gcMap[canonicalGC(gc)]||null;
+ // Same per-bucket roll-up as Pipeline / computeBidBook — change-orders fold in, version families collapse,
+ // so per-stage counts and dollars reconcile 1:1 with the canonical bid book.
+ const baseFiltered=useMemo(()=>{
+  let out=proposals.filter(p=>matchesYearFilter(p,settings.yearFilter));
+  if(search.trim()){const q=search.toLowerCase();out=out.filter(p=>(p.project||'').toLowerCase().includes(q)||(p.gc||'').toLowerCase().includes(q)||(p.location||'').toLowerCase().includes(q)||(p.contact||'').toLowerCase().includes(q)||String(p.id).includes(q));}
+  return out;
+ },[proposals,search,settings.yearFilter]);
+ const rolled=useMemo(()=>{const cm=settings.confirmedMerges;return [
+   ...rollUpProjects(baseFiltered.filter(p=>OPEN_STATUSES.includes(p.status)),cm),
+   ...rollUpProjects(baseFiltered.filter(p=>WON_STATUSES.includes(p.status)),cm),
+   ...rollUpProjects(baseFiltered.filter(p=>LOST_STATUSES.includes(p.status)),cm),
+ ];},[baseFiltered,settings.confirmedMerges]);
+ const stageStats=useMemo(()=>{const m={};ALL_STATUSES.forEach(s=>{m[s]={count:0,value:0};});rolled.forEach(p=>{if(m[p.status]){m[p.status].count++;m[p.status].value+=projectValue(p);}});return m;},[rolled]);
+ const baseTotalValue=useMemo(()=>rolled.reduce((s,p)=>s+projectValue(p),0),[rolled]);
+ const inStage=useMemo(()=>{
+  const list=active==='all'?rolled.slice():rolled.filter(p=>p.status===active);
+  return list.sort((a,b)=>projectValue(b)-projectValue(a));
+ },[rolled,active]);
+
+ // ---- one-write helpers (mirror TodayView's proven upserts; each a single write, no double-write race) ----
+ const advance=(p,to,label)=>onSaveProposal(Object.assign({},p,{status:to,lastTouched:today},(to==='Submitted'&&!p.submitted?{submitted:today}:{}),{notes:`[${today}] ${label} (stage workspace)\n`+(p.notes||'')}));
+ const markContacted=(p)=>{const d=new Date();d.setDate(d.getDate()+14);const fu=d.toISOString().slice(0,10);
+   onSaveProposal({...p,lastTouched:today,nextActionDate:fu,nextAction:`📞 Contacted ${today} — follow up ${fu}`,notes:`[${today}] 📞 Marked contacted, follow-up ${fu} (stage workspace)\n`+(p.notes||'')});};
+ const markHold=(p)=>{const d=new Date();d.setDate(d.getDate()+45);const rv=d.toISOString().slice(0,10);
+   onSaveProposal({...p,nextActionDate:rv,nextAction:`⏸ On hold — revisit ${rv}`,lastTouched:today,notes:`[${today}] ⏸ On hold · revisit ${rv} (stage workspace)\n`+(p.notes||'')});};
+ const markLost=(p)=>onSaveProposal({...p,status:'Lost',nextAction:null,lastTouched:today,notes:`[${today}] ❌ Marked Lost (stage workspace)\n`+(p.notes||'')});
+
+ // ---- what "needs you" in THIS stage, derived from CURRENT fields only (status + nextAction + dates) — no
+ //      append-only-notes keyword scanning, so nothing ratchets ON and gets stuck. ----
+ const needs=useMemo(()=>inStage.map(p=>{
+   if(isDNC(p.gc)) return null; // David's personal GCs — shown in the full list below, but never surfaced as an auto-action (matches the canonical overdue clock)
+   const od=overdueDays(p,settings)||0;
+   // due = the app's ONE canonical "actionable now" test (overdue OR a next-action date that has arrived, not
+   // already handled in Outlook, not a DNC builder). Gating on it makes this band reconcile to the penny with
+   // the Overdue card / Call-queue the rest of the app shows — no parallel definition of "needs attention".
+   const due=isOverdueBid(p,settings,recentSent,today);
+   let why=null,sev=0;
+   if(active==='Submitted'){ if(isTodayReply(p,recentSent)){why='Reply in — answer it';sev=3;} else if(due){why=od>0?(od+'d overdue'):'Follow-up due';sev=od>0?3:2;} }
+   else if(active==='Bidding'){ if(due){why=od>0?(od+'d overdue'):'Action due';sev=od>0?3:2;} else if(!p.nextAction&&!p.nextActionDate){why='No submit step set';sev=1;} }
+   else if(active==='Lead'){ if(due){why=od>0?(od+'d overdue'):'Action due';sev=od>0?3:2;} else if(!p.nextAction&&!p.nextActionDate){why='Untriaged — bid or pass';sev=2;} }
+   else if(active==='Awarded'){ why='Convert to a scheduled job';sev=2; }
+   else if(active==='Active'){ if(due){why=od>0?(od+'d overdue'):'Action due';sev=2;} }
+   else if(active==='Lost'){ if(!p.lostReason){why='No lost reason captured';sev=1;} }
+   return why?{p,why,sev,od}:null;
+ }).filter(Boolean).sort((a,b)=>(b.sev-a.sev)||(projectValue(b.p)-projectValue(a.p))||(b.od-a.od)),[inStage,active,settings,recentSent,today]);
+
+ const guide=STAGE_GUIDE[active]||{emoji:'📋',purpose:'',need:''};
+ const stageValue=active==='all'?baseTotalValue:((stageStats[active]&&stageStats[active].value)||0);
+ const stageCount=active==='all'?rolled.length:((stageStats[active]&&stageStats[active].count)||0);
+
+ const WBtn=({onClick,disabled,title,cls,children})=>(
+   <button onClick={onClick} disabled={disabled} title={title} className={`text-xs px-2.5 py-1 rounded-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${cls}`}>{children}</button>
+ );
+ const GCChip=({gc})=>{const g=gcOf(gc);const wr=g&&g.winRate!=null?Math.round(g.winRate*100):null;
+   const tone=wr==null?'bg-stone-100 text-stone-500':wr>=40?'bg-emerald-100 text-emerald-800':wr>=20?'bg-amber-100 text-amber-800':'bg-rose-100 text-rose-700';
+   return (<span className="inline-flex items-center gap-1.5 min-w-0 align-middle">
+     <span className="text-stone-700 truncate" title={g?`${gc}: ${g.won||0} won of ${g.proposals||0} bids · ${money(g.openValue||0,true)} open`:(gc||'')}>{gc||'—'}</span>
+     {wr!=null&&<span className={`text-[9px] px-1 py-0.5 rounded-sm font-bold whitespace-nowrap ${tone}`} title="Win rate with this builder">{wr}%</span>}
+    </span>);
+ };
+ const Actions=({p})=>{
+   const dnc=isDNC(p.gc);
+   if(active==='Lead') return (<React.Fragment>
+     <WBtn onClick={()=>advance(p,'Bidding','▶ Qualified → Bidding')} cls="bg-sky-600 text-white hover:bg-sky-500">▶ Bid it</WBtn>
+     <WBtn onClick={()=>markContacted(p)} cls="bg-stone-100 text-stone-700 hover:bg-stone-200">📞 Contacted</WBtn>
+     <WBtn onClick={()=>markLost(p)} cls="bg-white border border-stone-200 text-stone-500 hover:bg-stone-50">✕ Pass</WBtn>
+    </React.Fragment>);
+   if(active==='Bidding') return (<React.Fragment>
+     <WBtn onClick={()=>advance(p,'Submitted','📨 Marked Submitted')} cls="bg-amber-500 text-white hover:bg-amber-400">📨 Mark Submitted</WBtn>
+     <WBtn onClick={()=>markContacted(p)} cls="bg-stone-100 text-stone-700 hover:bg-stone-200">📞 Contacted</WBtn>
+     <WBtn onClick={()=>markLost(p)} cls="bg-white border border-stone-200 text-stone-500 hover:bg-stone-50">✕ Drop</WBtn>
+    </React.Fragment>);
+   if(active==='Submitted') return (<React.Fragment>
+     <WBtn onClick={()=>!dnc&&openFollowUpEmail(p)} disabled={dnc} title={dnc?'David relationship — no auto-contact':'Open a ready-to-send draft in Outlook'} cls="bg-stone-900 text-white hover:bg-stone-700">✉ Follow up</WBtn>
+     <WBtn onClick={()=>markContacted(p)} cls="bg-sky-600 text-white hover:bg-sky-500">📞 Contacted</WBtn>
+     <WBtn onClick={()=>advance(p,'Awarded','✅ Booked as Awarded')} cls="bg-emerald-600 text-white hover:bg-emerald-500">✅ Won</WBtn>
+     <WBtn onClick={()=>markHold(p)} cls="bg-amber-100 text-amber-800 hover:bg-amber-200">⏸ Hold</WBtn>
+     <WBtn onClick={()=>markLost(p)} cls="bg-stone-100 text-stone-700 hover:bg-stone-200">❌ Lost</WBtn>
+    </React.Fragment>);
+   if(active==='Awarded') return (<React.Fragment>
+     <WBtn onClick={()=>advance(p,'Active','🔨 Started → Active')} cls="bg-emerald-600 text-white hover:bg-emerald-500">🔨 Start job</WBtn>
+     <WBtn onClick={()=>onSelectProposal(p.id)} cls="bg-stone-100 text-stone-700 hover:bg-stone-200">Open bid</WBtn>
+    </React.Fragment>);
+   if(active==='Active') return (<React.Fragment>
+     <WBtn onClick={()=>advance(p,'Completed','✅ Marked Completed')} cls="bg-teal-600 text-white hover:bg-teal-500">✅ Completed</WBtn>
+     <WBtn onClick={()=>onSelectProposal(p.id)} cls="bg-stone-100 text-stone-700 hover:bg-stone-200">Open bid</WBtn>
+    </React.Fragment>);
+   if(active==='Lost') return (<React.Fragment>
+     {onCloneToWinner&&/^lost to /i.test(p.lostReason||'')&&<WBtn onClick={()=>onCloneToWinner(p)} cls="bg-orange-600 text-white hover:bg-orange-500">↻ Re-pitch winner</WBtn>}
+     <WBtn onClick={()=>onSelectProposal(p.id)} cls="bg-stone-100 text-stone-700 hover:bg-stone-200">Open bid</WBtn>
+    </React.Fragment>);
+   return <WBtn onClick={()=>onSelectProposal(p.id)} cls="bg-stone-100 text-stone-700 hover:bg-stone-200">Open bid</WBtn>;
+ };
+
+ return (
+  <div className="space-y-3">
+   <div className="flex items-end justify-between gap-3 flex-wrap">
+    <div>
+     <h1 className="font-serif text-2xl text-stone-900">Pipeline flow</h1>
+     <p className="text-sm text-stone-500 mt-0.5">Click a stage to work it. Everything for that stage — what needs you, every bid, and the builder behind each — lives right here on one page.</p>
+    </div>
+    <div className="relative" style={{minWidth:'220px'}}>
+     <Ico n="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400"/>
+     <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search any bid — project, GC, location, #…" className="w-full pl-8 pr-3 py-1.5 text-sm border border-stone-200 bg-stone-50 focus:bg-white focus:outline-none focus:border-stone-400 rounded-sm"/>
+    </div>
+   </div>
+   <StageFlow stats={stageStats} active={active} onPick={onPick} total={rolled.length} totalValue={baseTotalValue} onIntake={()=>onPick('intake')}/>
+
+   {active==='intake'&&(
+    <div className="space-y-3">
+     <div className="bg-white border border-stone-200 rounded-sm px-4 py-3 flex items-center gap-2.5">
+      <span className="text-2xl">📥</span>
+      <div>
+       <div className="font-serif text-xl text-stone-900">Add to the pipeline</div>
+       <div className="text-sm text-stone-500">Where work comes in. Start a project by hand, or import a Bluebeam takeoff CSV — new bids land at the front and flow right across the spine.</div>
+      </div>
+     </div>
+     <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',alignItems:'start'}}>
+      <div className="bg-white border border-stone-200 rounded-sm p-4">
+       <div className="flex items-center gap-2 mb-1"><span className="text-lg">✍️</span><h3 className="font-serif text-lg text-stone-900">Add a project by hand</h3></div>
+       <p className="text-sm text-stone-500 mb-3">Quick entry — project, builder (GC), contact, value. Use this when there's no takeoff yet; it lands in the pipeline ready to work.</p>
+       <button onClick={()=>onNewProject&&onNewProject()} className="inline-flex items-center gap-2 bg-stone-900 text-white px-4 py-2 rounded-sm hover:bg-stone-800 text-sm"><Ico n="plus" size={14}/>New project</button>
+      </div>
+      <div className="bg-white border border-stone-200 rounded-sm p-4">
+       <div className="flex items-center gap-2 mb-1"><span className="text-lg">📄</span><h3 className="font-serif text-lg text-stone-900">Import a Bluebeam CSV</h3></div>
+       <p className="text-sm text-stone-500 mb-3">Drop a Bluebeam takeoff export — quantities reconcile and every line is a candidate you confirm before it saves as a new priced project.</p>
+       {sb?<TakeoffIntake sb={sb} estimateItems={estimateItems} proposals={proposals} onImported={onImported}/>:<div className="text-sm text-stone-400">Importer unavailable — no database connection.</div>}
+      </div>
+     </div>
+    </div>
+   )}
+   {active!=='intake'&&(<React.Fragment>
+   <div className="bg-white border border-stone-200 rounded-sm px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+    <div className="flex items-center gap-2.5 min-w-0">
+     <span className="text-2xl">{guide.emoji}</span>
+     <div className="min-w-0">
+      <div className="font-serif text-xl text-stone-900">{active==='all'?'Whole bid book':active}</div>
+      <div className="text-sm text-stone-500">{active==='all'?'Every bid across all stages. Click a stage above to focus.':guide.purpose}</div>
+     </div>
+    </div>
+    <div className="text-right whitespace-nowrap">
+     <div className="font-mono text-2xl font-bold text-stone-900 leading-none">{stageCount}</div>
+     <div className="font-mono text-xs text-stone-500 mt-1">{money(stageValue,true)}</div>
+    </div>
+   </div>
+
+   {needs.length>0&&(
+    <section className="bg-amber-50 border border-amber-200 rounded-sm p-3">
+     <div className="flex items-center gap-2 mb-2 flex-wrap">
+      <span className="text-base">⚡</span>
+      <h2 className="font-serif text-base text-stone-900">Needs you now</h2>
+      <span className="text-xs px-2 py-0.5 rounded-full font-bold bg-amber-200 text-amber-900">{needs.length}</span>
+      <span className="text-xs text-stone-500">{guide.need||'open decisions in this stage'}</span>
+     </div>
+     <div className="space-y-2">
+      {needs.slice(0,30).map(({p,why,sev})=>(
+       /* [WIDTH FIX 2026-06-25 — Paul: "use the whole width, not crammed in one corner"] full-width row:
+          identity stretches left, $value + actions ride the right edge via justify (flex-1 spacer). */
+       <div key={p.id} className="bg-white border border-stone-200 rounded-sm px-3.5 py-2.5 flex items-center gap-4">
+        <button onClick={()=>onSelectProposal(p.id)} className="text-left min-w-0 flex-1 group">
+         <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-medium text-stone-900 group-hover:underline">{p.project||'(untitled)'}</span>
+          <span className="text-xs text-stone-400 font-mono">#{p.id}</span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${sev>=3?'bg-rose-100 text-rose-700':sev>=2?'bg-amber-100 text-amber-800':'bg-stone-100 text-stone-600'}`}>{why}</span>
+         </div>
+         <div className="text-xs text-stone-500 mt-0.5 flex items-center gap-1.5 flex-wrap"><GCChip gc={p.gc}/>{p.contact&&<span className="text-stone-400">· {p.contact}</span>}</div>
+        </button>
+        <div className="text-right shrink-0 whitespace-nowrap"><div className="font-mono text-sm font-semibold text-stone-800">{money(projectValue(p),true)}</div>{p.nextActionDate&&<div className="text-[10px] text-stone-400 font-mono">due {formatDate(p.nextActionDate)}</div>}</div>
+        <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end" style={{maxWidth:'52%'}}><Actions p={p}/></div>
+       </div>
+      ))}
+     </div>
+     {needs.length>30&&<div className="text-xs text-stone-500 mt-2">+ {needs.length-30} more in the full list below.</div>}
+    </section>
+   )}
+   {needs.length===0&&active!=='all'&&(
+    <div className="bg-white border border-dashed border-stone-300 rounded-sm px-5 py-6 text-center">
+     <div className="text-2xl mb-1">{guide.emoji}</div>
+     <div className="font-serif text-lg text-stone-800">Nothing needs you in {active} right now</div>
+     <div className="text-sm text-stone-500 mt-0.5">Every bid in this stage has its next step set. The full list is below.</div>
+    </div>
+   )}
+
+   <div className="bg-white border border-stone-200 overflow-auto" style={{maxHeight:'calc(100vh - 340px)'}}>
+    <table style={{tableLayout:'fixed',width:'100%'}} className="text-sm">
+     <colgroup><col style={{width:'6%'}}/><col style={{width:'27%'}}/><col style={{width:'22%'}}/><col style={{width:'12%'}}/><col style={{width:'12%'}}/><col style={{width:'14%'}}/><col style={{width:'7%'}}/></colgroup>
+     <thead><tr><TH className="sticky top-0 bg-stone-50 z-10">#</TH><TH className="sticky top-0 bg-stone-50 z-10">Project</TH><TH className="sticky top-0 bg-stone-50 z-10">Builder</TH><TH className="sticky top-0 bg-stone-50 z-10 text-right">Value</TH><TH className="sticky top-0 bg-stone-50 z-10">Submitted</TH><TH className="sticky top-0 bg-stone-50 z-10">Next action</TH><TH className="sticky top-0 bg-stone-50 z-10 text-right">Age</TH></tr></thead>
+     <tbody>
+      {inStage.length===0&&<tr><td colSpan={7}><Empty icon="search" title="No bids here" body={active==='all'?'No bids match your search.':('Nothing is sitting in '+active+' right now.')}/></td></tr>}
+      {inStage.map(p=>{const age=daysSince(p.submitted);const od=overdueDays(p,settings)||0;return(
+       <tr key={p.id} className="border-b border-stone-100 hover:bg-stone-50 cursor-pointer" onClick={()=>onSelectProposal(p.id)}>
+        <td className="px-3 py-2 font-mono text-stone-500 text-[10px] overflow-hidden">{p.id}</td>
+        <td className="px-3 py-2 overflow-hidden"><div className="font-medium text-stone-900 truncate">{p.project||'—'}</div><div className="text-xs text-stone-500 truncate">{p.location||'—'}</div></td>
+        <td className="px-3 py-2 overflow-hidden text-xs"><GCChip gc={p.gc}/></td>
+        <td className="px-3 py-2 text-right whitespace-nowrap"><MoneyCell amount={projectValue(p)}/></td>
+        <td className="px-3 py-2 text-stone-600 whitespace-nowrap text-xs">{formatDate(p.submitted)}</td>
+        <td className="px-3 py-2 relative" onClick={e=>e.stopPropagation()}><NextActionCell proposal={p} onSave={onSaveProposal}/></td>
+        <td className="px-3 py-2 text-right font-mono text-[10px] whitespace-nowrap">{age!==null?<div><div className="text-stone-500">{age}d</div>{od>0&&<div className="text-rose-700 font-semibold">{od}d late</div>}</div>:'—'}</td>
+       </tr>
+      );})}
+     </tbody>
+    </table>
+   </div>
+   </React.Fragment>)}
+  </div>
+ );
+};
 const TodayView=({proposals,settings,gcStats,bidBook,recentSent,onSelectProposal,onSaveProposal,onCloneToWinner,onNavigate,onSelectGC,onMarkContacted,mode})=>{
  const today=todayStr();
  // [PHASE 1 2026-06-22 — Ben] focus = the single pile the worklist is zeroed in on (set by the
@@ -6994,7 +7239,8 @@ function App() {
  const [installers, setInstallers] = useState([]);
  const [gcs, setGcs] = useState([]);
  const [settings, setSettings] = useState({slaSubmitted:14,slaNegotiating:7,targetMargin:0.18,riskMarginFloor:0.05,yearFilter:'All'});
- const [view, setView] = useState('today'); // [DECLUTTER 2026-06-25] land on the decision list, not the Dashboard Christmas tree
+ const [view, setView] = useState('flow'); // [SPINE REDESIGN 2026-06-25 — Paul] land on the stage-flow workspace; the bar (spine) IS the navigation
+ const [activeStatus, setActiveStatus] = useState('Submitted'); // which stage the flow workspace is focused on — Submitted is the follow-up goldmine (162 bids / $13.2M)
  const [selectedId, setSelectedId] = useState(null);
  const [selectedGC, setSelectedGC] = useState(null);
  const [showNewProject, setShowNewProject] = useState(false);
@@ -7419,7 +7665,10 @@ function App() {
  // Active Jobs, GC Intel, Settings.
  // [DECLUTTER 2026-06-25] Dashboard removed from the nav — it duplicated Pipeline/Jobs/Intel ("Christmas tree").
  // Component is kept in code (router still renders view==='dashboard') so it's one-line reversible; just unreachable.
- const navItems=[{id:'today',label:'Today',icon:'inbox',badge:todayCount},{id:'pipeline',label:'Pipeline',icon:'listFilter'},{id:'active',label:'Jobs',icon:'flame'},{id:'gcs',label:'Intel',icon:'building2'},{id:'settings',label:'Settings',icon:'settings'}];
+ // [SPINE REDESIGN 2026-06-25 — Paul: "drop Today/Pipeline/Jobs/Intel — the bar IS the navigation"]
+ // The stage-flow workspace ('flow') is the whole app now; the StageFlow strip inside it navigates between
+ // stages. Old views stay in the router below (one-line reversible) but are off the top nav.
+ const navItems=[{id:'flow',label:'Pipeline',icon:'listFilter',badge:todayCount},{id:'settings',label:'Settings',icon:'settings'}];
  if(!loaded) return (
   <div className="min-h-screen flex items-center justify-center bg-stone-100">
    <div className="text-center"><Ico n="loader" size={32} className="mx-auto mb-3 text-stone-400 animate-spin"/><p className="text-sm text-stone-600">Loading AMS Floors Command Center…</p>{syncing&&<p className="text-xs text-stone-500 mt-1">Setting up database for first time…</p>}</div>
@@ -7455,7 +7704,7 @@ function App() {
     </div>
    </header>
    {}
-   <main className="px-5 py-5" style={{maxWidth:'1600px',margin:'0 auto'}}>
+   <main className="px-5 py-5" style={{maxWidth:'1900px',margin:'0 auto'}}>
     {/* [DUP CONFIRM 2026-06-24 — Paul: "tons of duplicates on projects ... NEVER auto-merge, surface for my one-click confirm"]
         Surfaces same-builder + same-job-number families whose project NAMES don't match (the only ambiguous case the
         roll-up won't auto-merge). Paul decides: "Same project" merges them everywhere; "Keep separate" leaves them split.
@@ -7470,6 +7719,8 @@ function App() {
     {view==='active'&&<ActiveJobsView proposals={proposals} estimateItems={estimateItems} estimates={estimates} bidBook={bidBook} onSelectProposal={setSelectedId} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} settings={settings} onSaveProposal={saveProposal}/>}
     {view==='settings'&&<SettingsView proposals={proposals} lineItemsAll={lineItems} settings={settings} onSaveSettings={saveSettings} onExport={handleExport} setShowNewProject={setShowNewProject} onSaveProposal={saveProposal} sb={sb} estimateItems={estimateItems} onImported={reloadData}/>}
     {(view==='today'||view==='followups')&&<TodayView proposals={proposals} settings={settings} gcStats={gcStats} bidBook={bidBook} recentSent={recentSent} onSelectProposal={setSelectedId} onSaveProposal={saveProposal} onCloneToWinner={cloneToWinner} onNavigate={v=>{setView(v);setSelectedGC(null);}} onSelectGC={g=>{setView('gcs');setSelectedGC(g);}} onMarkContacted={markContacted} mode={view==='followups'?'calls':'decisions'}/>}
+    {/* [SPINE REDESIGN 2026-06-25 — Paul] The stage-flow workspace: the bar is the nav; each stage is a self-contained page (bids + what needs you + GC context, no jumping). */}
+    {view==='flow'&&<StatusWorkspace proposals={proposals} settings={settings} gcStats={gcStats} bidBook={bidBook} recentSent={recentSent} onSelectProposal={setSelectedId} onSaveProposal={saveProposal} onCloneToWinner={cloneToWinner} active={activeStatus} onPick={setActiveStatus} sb={sb} estimateItems={estimateItems} onImported={reloadData} onNewProject={()=>setShowNewProject(true)}/>}
    </main>
    {selectedProposal&&<ProjectDrawer
     proposal={selectedProposal}
